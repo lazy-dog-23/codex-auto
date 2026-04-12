@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import {
   DEFAULT_BACKGROUND_WORKTREE_BRANCH,
   detectGitRepository,
+  ensureGitSafeDirectory,
   getBackgroundWorktreePath,
   getRepositoryStatus,
   prepareBackgroundWorktree,
@@ -59,6 +60,8 @@ export async function runPrepareWorktree(options: PrepareWorktreeOptions = {}): 
       backgroundPath: getBackgroundWorktreePath(repo.path),
       branch: DEFAULT_BACKGROUND_WORKTREE_BRANCH,
     });
+    ensureGitSafeDirectory(repo.path, repo.path);
+    ensureGitSafeDirectory(preparation.backgroundPath, repo.path);
 
     return {
       ok: true,

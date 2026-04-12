@@ -4,7 +4,9 @@ import path from "node:path";
 import { Command } from "commander";
 
 import type { BlockersDocument, CommandResult, TasksDocument } from "../contracts/autonomy.js";
+import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
+import { appendJournalEntry } from "../infra/journal.js";
 import { blockersSchema, stateSchema, tasksSchema } from "../schemas/index.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import {
@@ -15,6 +17,7 @@ import {
   getDefaultGoalMarkdown,
   getDefaultJournalMarkdown,
   getEnvironmentTomlTemplate,
+  getReadmeMarkdown,
   getSetupWindowsScriptTemplate,
   getSmokeScriptTemplate,
   getVerifyScriptTemplate,
@@ -67,15 +70,13 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const created: string[] = [];
   const planSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md");
   const workSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-work", "SKILL.md");
+  const readmeFile = path.join(repoRoot, "README.md");
   const tasksSchemaFile = path.join(paths.schemaDir, "tasks.schema.json");
   const stateSchemaFile = path.join(paths.schemaDir, "state.schema.json");
   const blockersSchemaFile = path.join(paths.schemaDir, "blockers.schema.json");
   const cycleLockKeepFile = path.join(paths.locksDir, ".gitkeep");
 
-  const directories = [
-    paths.autonomyDir,
-    paths.schemaDir,
-    paths.locksDir,
+  const repoDirectories = [
     paths.scriptsDir,
     paths.codexDir,
     path.dirname(paths.environmentFile),
@@ -84,43 +85,73 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
     paths.cliDir,
   ];
 
-  for (const directory of directories) {
+  for (const directory of repoDirectories) {
     await fs.mkdir(directory, { recursive: true });
   }
 
-  const textFileEntries: Array<[string, string]> = [
-    [paths.agentsFile, getAgentsMarkdown() + "\n"],
-    [planSkillFile, getAutonomyPlanSkillMarkdown() + "\n"],
-    [workSkillFile, getAutonomyWorkSkillMarkdown() + "\n"],
-    [paths.goalFile, getDefaultGoalMarkdown() + "\n"],
-    [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
-    [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
-    [paths.configFile, getConfigTomlTemplate() + "\n"],
-    [paths.setupScript, getSetupWindowsScriptTemplate()],
-    [paths.verifyScript, getVerifyScriptTemplate()],
-    [paths.smokeScript, getSmokeScriptTemplate()],
-    [cycleLockKeepFile, "\n"],
-  ];
+  const lock = await acquireCycleLock(paths.cycleLockFile, "codex-supervisor bootstrap");
+  try {
+    const now = new Date().toISOString();
+    const autonomyDirectories = [
+      paths.autonomyDir,
+      paths.schemaDir,
+      paths.locksDir,
+    ];
 
-  for (const [filePath, content] of textFileEntries) {
-    if (await ensureTextFile(filePath, content)) {
-      created.push(filePath);
+    for (const directory of autonomyDirectories) {
+      await fs.mkdir(directory, { recursive: true });
     }
-  }
 
-  const jsonFileEntries: Array<[string, unknown]> = [
-    [paths.tasksFile, DEFAULT_TASKS],
-    [paths.stateFile, DEFAULT_STATE],
-    [paths.blockersFile, DEFAULT_BLOCKERS],
-    [tasksSchemaFile, tasksSchema],
-    [stateSchemaFile, stateSchema],
-    [blockersSchemaFile, blockersSchema],
-  ];
+    const textFileEntries: Array<[string, string]> = [
+      [readmeFile, getReadmeMarkdown() + "\n"],
+      [paths.agentsFile, getAgentsMarkdown() + "\n"],
+      [planSkillFile, getAutonomyPlanSkillMarkdown() + "\n"],
+      [workSkillFile, getAutonomyWorkSkillMarkdown() + "\n"],
+      [paths.goalFile, getDefaultGoalMarkdown() + "\n"],
+      [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
+      [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
+      [paths.configFile, getConfigTomlTemplate() + "\n"],
+      [paths.setupScript, getSetupWindowsScriptTemplate()],
+      [paths.verifyScript, getVerifyScriptTemplate()],
+      [paths.smokeScript, getSmokeScriptTemplate()],
+      [cycleLockKeepFile, "\n"],
+    ];
 
-  for (const [filePath, value] of jsonFileEntries) {
-    if (await ensureJsonFile(filePath, value)) {
-      created.push(filePath);
+    for (const [filePath, content] of textFileEntries) {
+      if (await ensureTextFile(filePath, content)) {
+        created.push(filePath);
+      }
     }
+
+    const jsonFileEntries: Array<[string, unknown]> = [
+      [paths.tasksFile, DEFAULT_TASKS],
+      [paths.stateFile, DEFAULT_STATE],
+      [paths.blockersFile, DEFAULT_BLOCKERS],
+      [tasksSchemaFile, tasksSchema],
+      [stateSchemaFile, stateSchema],
+      [blockersSchemaFile, blockersSchema],
+    ];
+
+    for (const [filePath, value] of jsonFileEntries) {
+      if (await ensureJsonFile(filePath, value)) {
+        created.push(filePath);
+      }
+    }
+
+    await appendJournalEntry(paths.journalFile, {
+      timestamp: now,
+      actor: "supervisor",
+      taskId: "bootstrap",
+      result: created.length > 0 ? "passed" : "noop",
+      summary:
+        created.length > 0
+          ? `Bootstrap created ${created.length} missing file(s) or schema artifact(s).`
+          : "Bootstrap found all expected control-plane files already present.",
+      verify: "not run (codex-supervisor bootstrap)",
+      blocker: "none",
+    });
+  } finally {
+    await releaseCycleLock(paths.cycleLockFile, lock);
   }
 
   const isGitRepo = await fs

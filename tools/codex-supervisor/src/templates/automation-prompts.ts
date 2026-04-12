@@ -25,7 +25,10 @@ export function buildPlannerAutomationPrompt(): string {
     "- Never work on more than one task at a time.",
     "- Never change business code.",
     "- If anything is missing, ambiguous, or conflicting, write a blocker and stop.",
+    "- Before any write to `autonomy/*`, acquire `autonomy/locks/cycle.lock`.",
+    "- Write `autonomy/*.json` with atomic temp-file then rename semantics.",
     "- Update only autonomy state files and `autonomy/journal.md`.",
+    "- Append exactly one journal entry for the run; do not rewrite older entries.",
     "- Never commit, push, or deploy.",
     "- If the background worktree is dirty or the run must pause for human review, stop immediately.",
   ]);
@@ -45,7 +48,10 @@ export function buildWorkerAutomationPrompt(): string {
     "- If verify fails once, mark the task `verify_failed` and increment `retry_count`.",
     "- If verify fails again, or the task is genuinely ambiguous, create a blocker and mark the task `blocked`.",
     "- If the background worktree is dirty or the run must pause for human review, stop immediately.",
+    "- Before any write to `autonomy/*`, acquire `autonomy/locks/cycle.lock`.",
+    "- Write `autonomy/*.json` with atomic temp-file then rename semantics.",
     "- Update only the task state, blockers, state summary, and `autonomy/journal.md`.",
+    "- Append exactly one journal entry for the run; do not rewrite older entries.",
     "- Never commit, push, or deploy.",
   ]);
 }

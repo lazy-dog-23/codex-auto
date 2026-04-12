@@ -1,11 +1,12 @@
 import { Command } from "commander";
 
-import type { BlockersDocument, CommandResult, TasksDocument } from "../contracts/autonomy.js";
+import type { AutonomyState, BlockersDocument, CommandResult, TasksDocument } from "../contracts/autonomy.js";
 import { detectGitRepository } from "../infra/git.js";
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { loadJsonFile, writeJsonAtomic } from "../infra/fs.js";
+import { appendJournalEntry } from "../infra/journal.js";
 import {
   areDependenciesSatisfied,
   buildTaskIndex,
@@ -22,6 +23,7 @@ export async function runUnblock(taskId: string, repoRoot = process.cwd()): Prom
   try {
     const blockersDoc = await loadJsonFile<BlockersDocument>(paths.blockersFile);
     const tasksDoc = await loadJsonFile<TasksDocument>(paths.tasksFile);
+    const state = await loadJsonFile<AutonomyState>(paths.stateFile);
 
     const targetTask = tasksDoc.tasks.find((task) => task.id === taskId);
     if (!targetTask) {
@@ -56,14 +58,36 @@ export async function runUnblock(taskId: string, repoRoot = process.cwd()): Prom
       readyCount,
     });
     const recoveredTask = resolveTaskAfterUnblock(targetTask, decision, now).task;
+    const taskChanged =
+      recoveredTask.status !== targetTask.status ||
+      recoveredTask.last_error !== targetTask.last_error;
 
     const updatedTasks: TasksDocument = {
       ...tasksDoc,
       tasks: tasksDoc.tasks.map((task) => (task.id === taskId ? recoveredTask : task)),
     };
 
+    const openBlockerCount = updatedBlockers.blockers.filter((blocker) => blocker.status === "open").length;
+    const updatedState = buildStateAfterUnblock({
+      state,
+      taskId,
+      openBlockerCount,
+      changed: taskChanged || resolvedCount > 0,
+      now,
+    });
+
     await writeJsonAtomic(paths.blockersFile, updatedBlockers);
     await writeJsonAtomic(paths.tasksFile, updatedTasks);
+    await writeJsonAtomic(paths.stateFile, updatedState);
+    await appendJournalEntry(paths.journalFile, {
+      timestamp: now,
+      actor: "supervisor",
+      taskId,
+      result: updatedState.last_result,
+      summary: buildUnblockSummary(taskId, resolvedCount, recoveredTask.status),
+      verify: "not run (codex-supervisor unblock)",
+      blocker: resolvedCount === 0 ? "none" : `${resolvedCount} resolved`,
+    });
 
     return {
       ok: true,
@@ -75,6 +99,41 @@ export async function runUnblock(taskId: string, repoRoot = process.cwd()): Prom
   } finally {
     await releaseCycleLock(paths.cycleLockFile, lock);
   }
+}
+
+function buildStateAfterUnblock(options: {
+  state: AutonomyState;
+  taskId: string;
+  openBlockerCount: number;
+  changed: boolean;
+  now: string;
+}): AutonomyState {
+  const openBlockersRemain = options.openBlockerCount > 0;
+  const shouldOwnCycleState =
+    options.state.current_task_id === null || options.state.current_task_id === options.taskId;
+
+  const baseState: AutonomyState = {
+    ...options.state,
+    open_blocker_count: options.openBlockerCount,
+    needs_human_review: openBlockersRemain,
+  };
+
+  if (!shouldOwnCycleState) {
+    return baseState;
+  }
+
+  return {
+    ...baseState,
+    current_task_id: null,
+    cycle_status: openBlockersRemain ? "blocked" : "idle",
+    last_result: openBlockersRemain ? "blocked" : (options.changed ? "planned" : "noop"),
+  };
+}
+
+function buildUnblockSummary(taskId: string, resolvedCount: number, nextStatus: string): string {
+  return resolvedCount === 0
+    ? `No open blockers changed for ${taskId}; task remains ${nextStatus}.`
+    : `Resolved ${resolvedCount} blocker(s) for ${taskId}; task moved to ${nextStatus}.`;
 }
 
 export function registerUnblockCommand(program: Command): void {

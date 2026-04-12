@@ -9,6 +9,7 @@ import { runDoctor } from "../src/commands/doctor.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
 import { runStatusCommand } from "../src/commands/status.js";
 import { runUnblock } from "../src/commands/unblock.js";
+import { pathExists } from "../src/infra/json.js";
 import type { BlockersDocument, TasksDocument } from "../src/contracts/autonomy.js";
 
 const tempRoots: string[] = [];
@@ -41,12 +42,14 @@ describe("command integration contracts", () => {
     expect(result.ok).toBe(true);
     expect(result.message).toContain("not a Git repository");
     await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toContain("Repo Control Surface");
+    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toContain("codex-auto");
     await expect(readFile(join(workspace, ".codex", "config.toml"), "utf8")).resolves.toContain(
       'sandbox_mode = "workspace-write"',
     );
     await expect(readFile(join(workspace, "autonomy", "schema", "tasks.schema.json"), "utf8")).resolves.toContain(
       '"queued"',
     );
+    expect(await pathExists(join(workspace, "autonomy", "locks", "cycle.lock"))).toBe(false);
   });
 
   it("doctor reports schema errors before any write path runs", async () => {
@@ -154,6 +157,8 @@ describe("command integration contracts", () => {
     const blockersDoc = JSON.parse(
       await readFile(join(workspace, "autonomy", "blockers.json"), "utf8"),
     ) as BlockersDocument;
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+    const journalText = await readFile(join(workspace, "autonomy", "journal.md"), "utf8");
 
     expect(result.ok).toBe(true);
     expect(result.message).toContain("task-blocked");
@@ -161,5 +166,11 @@ describe("command integration contracts", () => {
     expect(tasksDoc.tasks[0]?.last_error).toBeNull();
     expect(blockersDoc.blockers[0]?.status).toBe("resolved");
     expect(blockersDoc.blockers[0]?.resolution).toContain("codex-supervisor unblock");
+    expect(stateDoc.open_blocker_count).toBe(0);
+    expect(stateDoc.cycle_status).toBe("idle");
+    expect(stateDoc.last_result).toBe("planned");
+    expect(stateDoc.needs_human_review).toBe(false);
+    expect(journalText).toContain("task-blocked");
+    expect(journalText).toContain("result: planned");
   });
 });

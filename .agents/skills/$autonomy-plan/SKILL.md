@@ -12,6 +12,8 @@ Use this skill when you need to plan the next automation cycle for the repo cont
 - Read `autonomy/goal.md`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and any directly relevant source hints.
 - Decide which eligible tasks should be `ready` and which should stay `queued`.
 - Keep at most 5 tasks in `ready`.
+- Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.
+- Write `autonomy/*.json` via atomic temp-file then rename semantics.
 - Update only autonomy state and journal entries.
 
 ## Guardrails

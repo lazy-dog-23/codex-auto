@@ -67,6 +67,37 @@ export async function getRepositoryStatus(repoRoot: string): Promise<string[]> {
     .filter(Boolean);
 }
 
+export function normalizeGitSafeDirectoryPath(targetPath: string): string {
+  return resolve(targetPath).replace(/\\/g, '/');
+}
+
+export function getConfiguredSafeDirectories(cwd = process.cwd()): string[] {
+  const result = runProcess('git', ['config', '--global', '--get-all', 'safe.directory'], { cwd });
+  if (!commandSucceeded(result)) {
+    return [];
+  }
+
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+export function ensureGitSafeDirectory(targetPath: string, cwd = process.cwd()): void {
+  const normalizedPath = normalizeGitSafeDirectoryPath(targetPath);
+  const existing = getConfiguredSafeDirectories(cwd);
+  if (existing.includes(normalizedPath)) {
+    return;
+  }
+
+  const addResult = runProcess('git', ['config', '--global', '--add', 'safe.directory', normalizedPath], { cwd });
+  if (!commandSucceeded(addResult)) {
+    throw new Error(
+      `Failed to add ${normalizedPath} to git safe.directory: ${addResult.stderr || addResult.stdout || addResult.error || 'unknown error'}`,
+    );
+  }
+}
+
 export async function getWorktreeSummary(worktreePath: string): Promise<WorktreeSummary | null> {
   const repoInfo = await detectGitRepository(worktreePath);
   if (!repoInfo) {

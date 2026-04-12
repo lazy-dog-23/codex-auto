@@ -13,6 +13,8 @@ Use this skill when you are executing a single ready task in a dedicated worktre
 - Select exactly one `ready` task.
 - Make the smallest possible change for that task.
 - Run `scripts/verify.ps1`.
+- Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.
+- Write `autonomy/*.json` via atomic temp-file then rename semantics.
 - Update task status and append one journal entry.
 
 ## Guardrails

@@ -72,6 +72,45 @@ describe("status command", () => {
     expect(summary.open_blocker_count).toBe(0);
   });
 
+  it("does not treat verify_failed-only queues as ready for automation", () => {
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [
+          {
+            id: "task-retry",
+            title: "Retry later",
+            status: "verify_failed",
+            priority: "P1",
+            depends_on: [],
+            acceptance: [],
+            file_hints: [],
+            retry_count: 1,
+            last_error: "verify failed",
+            updated_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_task_id: null,
+        cycle_status: "idle",
+        last_planner_run_at: "2026-01-05T00:00:00Z",
+        last_worker_run_at: "2026-01-05T02:00:00Z",
+        last_result: "failed",
+        consecutive_worker_failures: 1,
+        needs_human_review: false,
+        open_blocker_count: 0,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+    );
+
+    expect(summary.ready_for_automation).toBe(false);
+  });
+
   it("can be loaded through the repo-local command helper", async () => {
     const repoRoot = join(testDir, "__status_fixture_repo__");
 

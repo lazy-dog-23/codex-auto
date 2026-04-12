@@ -40,6 +40,10 @@ function buildMessage(summary: StatusSummary): string {
   ].join(" ");
 }
 
+function hasActionableTasks(tasks: TasksDocument["tasks"]): boolean {
+  return tasks.some((task) => task.status === "ready" || task.status === "queued");
+}
+
 export function buildStatusSummary(
   tasksDoc: TasksDocument,
   state: AutonomyState,
@@ -47,9 +51,7 @@ export function buildStatusSummary(
 ): StatusSummary {
   const openBlockerCount = countOpenBlockers(blockersDoc.blockers);
   const tasksByStatus = countTaskStatuses(tasksDoc.tasks);
-  const actionableTasks = tasksDoc.tasks.some((task) =>
-    task.status === "ready" || task.status === "queued" || task.status === "verify_failed",
-  );
+  const actionableTasks = hasActionableTasks(tasksDoc.tasks);
   const readyForAutomation =
     state.cycle_status === "idle" &&
     state.needs_human_review === false &&
@@ -99,6 +101,31 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const summary = buildStatusSummary(tasksDoc, state, blockersDoc);
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
+  const actionableTasks = hasActionableTasks(tasksDoc.tasks);
+
+  if (!actionableTasks) {
+    readyForAutomation = false;
+    warnings.push({
+      code: "no_actionable_tasks",
+      message: "No queued or ready tasks are available.",
+    });
+  }
+
+  if (state.cycle_status !== "idle") {
+    readyForAutomation = false;
+    warnings.push({
+      code: "cycle_not_idle",
+      message: `Current cycle status is ${state.cycle_status}.`,
+    });
+  }
+
+  if (state.needs_human_review) {
+    readyForAutomation = false;
+    warnings.push({
+      code: "needs_human_review",
+      message: "State requires human review before the next automation run.",
+    });
+  }
 
   if (!gitRepo) {
     readyForAutomation = false;
