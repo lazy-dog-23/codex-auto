@@ -62,6 +62,18 @@ describe("command integration contracts", () => {
     expect(report.issues.some((issue) => issue.code === "not_a_git_repo")).toBe(true);
   });
 
+  it("doctor reports invalid repo-scoped Codex config", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+
+    await writeFile(join(workspace, ".codex", "config.toml"), "[windows]\nsandbox = true\n", "utf8");
+
+    const report = await runDoctor({ workspaceRoot: workspace });
+
+    expect(report.ok).toBe(false);
+    expect(report.issues.some((issue) => issue.code === "config_toml_invalid")).toBe(true);
+  });
+
   it("status blocks automation when the workspace is not a git repo", async () => {
     const workspace = await makeTempWorkspace();
     await runBootstrapCommand(workspace);

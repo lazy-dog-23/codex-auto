@@ -2,7 +2,7 @@ import { Command } from "commander";
 
 import type { BlockersDocument, StatusSummary, TasksDocument, AutonomyState, TaskStatus } from "../contracts/autonomy.js";
 import { countOpenBlockers } from "../domain/autonomy.js";
-import { detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
+import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
 import { readJsonFile } from "../infra/json.js";
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess } from "../infra/process.js";
@@ -123,12 +123,38 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
         code: "missing_background_worktree",
         message: `Background worktree is missing at ${backgroundPath}.`,
       });
-    } else if (backgroundWorktree.dirty) {
-      readyForAutomation = false;
-      warnings.push({
-        code: "dirty_background_worktree",
-        message: `Background worktree is dirty at ${backgroundPath}.`,
-      });
+    } else {
+      if (backgroundWorktree.dirty) {
+        readyForAutomation = false;
+        warnings.push({
+          code: "dirty_background_worktree",
+          message: `Background worktree is dirty at ${backgroundPath}.`,
+        });
+      }
+
+      if (backgroundWorktree.repoRoot !== gitRepo.path) {
+        readyForAutomation = false;
+        warnings.push({
+          code: "unexpected_background_repo",
+          message: `Background worktree points at ${backgroundWorktree.repoRoot}, expected ${gitRepo.path}.`,
+        });
+      }
+
+      if (backgroundWorktree.branch !== DEFAULT_BACKGROUND_WORKTREE_BRANCH) {
+        readyForAutomation = false;
+        warnings.push({
+          code: "unexpected_background_branch",
+          message: `Background worktree is on ${backgroundWorktree.branch ?? "detached HEAD"}, expected ${DEFAULT_BACKGROUND_WORKTREE_BRANCH}.`,
+        });
+      }
+
+      if (gitRepo.head && backgroundWorktree.head && backgroundWorktree.head !== gitRepo.head) {
+        readyForAutomation = false;
+        warnings.push({
+          code: "background_worktree_head_mismatch",
+          message: `Background worktree is at ${backgroundWorktree.head}, expected ${gitRepo.head}.`,
+        });
+      }
     }
   }
 
@@ -143,7 +169,13 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
 
   const powershell = discoverPowerShellExecutable();
   const codexProcess = detectCodexProcess(powershell ?? undefined);
-  if (!codexProcess.running) {
+  if (!codexProcess.probeOk) {
+    readyForAutomation = false;
+    warnings.push({
+      code: "codex_process_probe_failed",
+      message: codexProcess.error ?? "Codex process probe failed.",
+    });
+  } else if (!codexProcess.running) {
     readyForAutomation = false;
     warnings.push({
       code: "codex_not_running",

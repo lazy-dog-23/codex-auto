@@ -2,6 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { homedir, hostname as getHostname, userInfo } from 'node:os';
 import type { CommandExecution } from './types.js';
 
+export function buildCodexProcessDetectionScript(): string {
+  return [
+    '$ErrorActionPreference = "Stop"',
+    '$matches = Get-Process | Select-Object -ExpandProperty ProcessName | Where-Object { $_ -match "Codex|OpenAI" } | Sort-Object -Unique',
+    '$matches',
+  ].join('; ');
+}
+
 export function runProcess(
   command: string,
   args: string[],
@@ -52,32 +60,35 @@ export function getPowerShellVersion(executable: string): string | null {
   return version.length > 0 ? version : null;
 }
 
-export function detectCodexProcess(executable?: string): { running: boolean; matches: string[]; executable: string | null } {
+export function detectCodexProcess(executable?: string): {
+  running: boolean;
+  matches: string[];
+  executable: string | null;
+  probeOk: boolean;
+  error?: string;
+} {
   const shell = executable ?? discoverPowerShellExecutable();
   if (!shell) {
-    return { running: false, matches: [], executable: null };
+    return { running: false, matches: [], executable: null, probeOk: false, error: 'PowerShell executable was not found.' };
   }
 
-  const script = [
-    '$ErrorActionPreference = "Stop"',
-    '$matches = Get-Process | Where-Object {',
-    '  ($_.ProcessName -match "Codex|OpenAI\\.Codex|OpenAI") -or',
-    '  ($_.Path -and $_.Path -match "Codex")',
-    '} | Select-Object -ExpandProperty ProcessName',
-    '$matches',
-  ].join(' ');
-
-  const result = runProcess(shell, ['-NoProfile', '-Command', script]);
+  const result = runProcess(shell, ['-NoProfile', '-Command', buildCodexProcessDetectionScript()]);
   if (!commandSucceeded(result)) {
-    return { running: false, matches: [], executable: shell };
+    return {
+      running: false,
+      matches: [],
+      executable: shell,
+      probeOk: false,
+      error: (result.error ?? result.stderr.trim()) || `exit code ${result.exitCode ?? 'unknown'}`,
+    };
   }
 
-  const matches = result.stdout
+  const matches = Array.from(new Set(result.stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)));
 
-  return { running: matches.length > 0, matches, executable: shell };
+  return { running: matches.length > 0, matches, executable: shell, probeOk: true };
 }
 
 export function currentUserName(): string {

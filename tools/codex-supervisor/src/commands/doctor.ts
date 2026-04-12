@@ -12,6 +12,7 @@ import {
 import { inspectCycleLock } from '../infra/lock.js';
 import { readJsonFile } from '../infra/json.js';
 import { discoverPowerShellExecutable, detectCodexProcess, getPowerShellVersion } from '../infra/process.js';
+import { readSimpleTomlFile } from '../infra/toml.js';
 import type { DiagnosticIssue, FileSnapshot, WorktreeSummary } from '../infra/types.js';
 import { blockersSchema, stateSchema, tasksSchema } from '../schemas/index.js';
 import { resolveRepoPaths } from '../shared/paths.js';
@@ -44,6 +45,8 @@ export interface DoctorReport {
   codexProcess: {
     running: boolean;
     matches: string[];
+    probeOk: boolean;
+    error?: string;
   };
   lock: {
     path: string;
@@ -162,7 +165,13 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     });
   }
 
-  if (!codexProcess.running) {
+  if (!codexProcess.probeOk) {
+    issues.push({
+      severity: 'warn',
+      code: 'codex_process_probe_failed',
+      message: codexProcess.error ?? 'Codex process probe failed.',
+    });
+  } else if (!codexProcess.running) {
     issues.push({
       severity: 'warn',
       code: 'codex_not_running',
@@ -196,6 +205,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   }
 
   await validateAutonomyDocuments(repoPaths, issues);
+  await validateCodexConfig(repoPaths.configFile, issues);
 
   return {
     ok: !issues.some((issue) => issue.severity === 'error'),
@@ -219,6 +229,8 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     codexProcess: {
       running: codexProcess.running,
       matches: codexProcess.matches,
+      probeOk: codexProcess.probeOk,
+      error: codexProcess.error,
     },
     lock: {
       path: lockPath,
@@ -237,7 +249,13 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push(`Node: ${report.node.version}`);
   lines.push(`Git repo: ${report.git.repository ? report.git.root ?? '(unknown root)' : 'no'}`);
   lines.push(`PowerShell: ${report.powershell.executable ?? 'missing'}${report.powershell.version ? ` ${report.powershell.version}` : ''}`);
-  lines.push(`Codex process: ${report.codexProcess.running ? report.codexProcess.matches.join(', ') : 'not detected'}`);
+  lines.push(
+    `Codex process: ${
+      report.codexProcess.probeOk
+        ? (report.codexProcess.running ? report.codexProcess.matches.join(', ') : 'not detected')
+        : `probe failed${report.codexProcess.error ? ` (${report.codexProcess.error})` : ''}`
+    }`,
+  );
   lines.push(`Cycle lock: ${report.lock.exists ? (report.lock.stale ? `stale (${report.lock.reason ?? 'unknown reason'})` : 'present') : 'absent'}`);
   lines.push(`Background worktree: ${report.git.backgroundPath ?? 'n/a'}`);
   lines.push(`Status: ${report.ok ? 'ok' : 'attention needed'}`);
@@ -262,6 +280,65 @@ export function registerDoctorCommand(program: Command): void {
       });
       console.log(formatDoctorReport(result));
     });
+}
+
+async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]): Promise<void> {
+  if (!(await existsPath(configPath))) {
+    return;
+  }
+
+  let config: Awaited<ReturnType<typeof readSimpleTomlFile>>;
+  try {
+    config = await readSimpleTomlFile(configPath);
+  } catch (error) {
+    issues.push({
+      severity: 'error',
+      code: 'config_toml_invalid',
+      message: error instanceof Error ? error.message : String(error),
+      path: configPath,
+    });
+    return;
+  }
+
+  const root = config[''] ?? {};
+  const workspaceWrite = config['sandbox_workspace_write'] ?? {};
+  const windows = config['windows'] ?? {};
+
+  if (!['untrusted', 'on-request', 'never'].includes(String(root.approval_policy ?? ''))) {
+    issues.push({
+      severity: 'error',
+      code: 'config_toml_invalid',
+      message: 'config.toml must define a valid top-level approval_policy.',
+      path: configPath,
+    });
+  }
+
+  if (!['read-only', 'workspace-write', 'danger-full-access'].includes(String(root.sandbox_mode ?? ''))) {
+    issues.push({
+      severity: 'error',
+      code: 'config_toml_invalid',
+      message: 'config.toml must define a valid top-level sandbox_mode.',
+      path: configPath,
+    });
+  }
+
+  if (typeof workspaceWrite.network_access !== 'boolean') {
+    issues.push({
+      severity: 'error',
+      code: 'config_toml_invalid',
+      message: 'config.toml must define sandbox_workspace_write.network_access as a boolean.',
+      path: configPath,
+    });
+  }
+
+  if (!['unelevated', 'elevated'].includes(String(windows.sandbox ?? ''))) {
+    issues.push({
+      severity: 'error',
+      code: 'config_toml_invalid',
+      message: 'config.toml must define windows.sandbox as elevated or unelevated.',
+      path: configPath,
+    });
+  }
 }
 
 async function existsPath(filePath: string): Promise<boolean> {

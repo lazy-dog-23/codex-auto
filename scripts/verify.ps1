@@ -91,6 +91,53 @@ function Read-Toml {
     return [pscustomobject]$result
 }
 
+function Read-SimpleTomlMap {
+    param([Parameter(Mandatory)][string]$Path)
+    $lines = Get-Content -LiteralPath $Path
+    $result = [ordered]@{}
+    $currentSection = ''
+
+    foreach ($rawLine in $lines) {
+        $line = $rawLine.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) {
+            continue
+        }
+
+        if ($line -match '^\[(?<name>[^\[\]]+)\]$') {
+            $currentSection = $Matches.name.Trim()
+            continue
+        }
+
+        if ($line -match '^\[\[') {
+            throw "Unsupported TOML array-of-tables in ${Path}: $line"
+        }
+
+        if ($line -notmatch '^(?<key>[A-Za-z0-9_.:-]+)\s*=\s*(?<value>.+)$') {
+            throw "Unsupported TOML line in ${Path}: $line"
+        }
+
+        $key = $Matches.key
+        $rawValue = $Matches.value.Trim()
+
+        if ($rawValue -match '^"(.*)"$') {
+            $value = $Matches[1]
+        } elseif ($rawValue -eq 'true') {
+            $value = $true
+        } elseif ($rawValue -eq 'false') {
+            $value = $false
+        } elseif ($rawValue -match '^-?\d+$') {
+            $value = [int]$rawValue
+        } else {
+            throw "Unsupported TOML value in ${Path}: $line"
+        }
+
+        $fullKey = if ([string]::IsNullOrWhiteSpace($currentSection)) { $key } else { "$currentSection.$key" }
+        $result[$fullKey] = $value
+    }
+
+    return $result
+}
+
 function Test-RequiredText {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -266,6 +313,16 @@ foreach ($requiredAction in @('verify', 'smoke')) {
     Assert-True ($match.command -match "scripts/$requiredAction\.ps1") "Action '$requiredAction' must point to scripts/$requiredAction.ps1."
     Assert-True ($match.platform -eq 'windows') "Action '$requiredAction' must target windows."
 }
+
+$config = Read-SimpleTomlMap -Path (Join-Path $repoRoot '.codex/config.toml')
+Assert-True ($config.Contains('approval_policy')) 'config.toml must define a top-level approval_policy.'
+Assert-True (@('untrusted', 'on-request', 'never') -contains [string]$config['approval_policy']) 'config.toml approval_policy is invalid.'
+Assert-True ($config.Contains('sandbox_mode')) 'config.toml must define a top-level sandbox_mode.'
+Assert-True (@('read-only', 'workspace-write', 'danger-full-access') -contains [string]$config['sandbox_mode']) 'config.toml sandbox_mode is invalid.'
+Assert-True ($config.Contains('sandbox_workspace_write.network_access')) 'config.toml must define sandbox_workspace_write.network_access.'
+Assert-True ($config['sandbox_workspace_write.network_access'] -is [bool]) 'config.toml sandbox_workspace_write.network_access must be a boolean.'
+Assert-True ($config.Contains('windows.sandbox')) 'config.toml must define windows.sandbox.'
+Assert-True (@('unelevated', 'elevated') -contains [string]$config['windows.sandbox']) 'config.toml windows.sandbox is invalid.'
 
 Test-StateDocument -Path (Join-Path $repoRoot 'autonomy/state.json')
 Test-TaskCollection -Path (Join-Path $repoRoot 'autonomy/tasks.json')

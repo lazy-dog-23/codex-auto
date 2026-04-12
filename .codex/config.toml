@@ -6,14 +6,5 @@ sandbox_mode = "workspace-write"
 [sandbox_workspace_write]
 network_access = true
 
-[permissions.autonomy_default.filesystem.":project_roots"]
-".\\" = "write"
-
-[permissions.autonomy_default.network]
-enabled = true
-mode = "limited"
-
-default_permissions = "autonomy_default"
-
 [windows]
 sandbox = "unelevated"
