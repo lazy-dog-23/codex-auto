@@ -1,4 +1,26 @@
 {
   "version": 1,
-  "tasks": []
+  "tasks": [
+    {
+      "id": "task-security-review",
+      "title": "检查 codex-auto 的高风险安全问题",
+      "status": "queued",
+      "priority": "P1",
+      "depends_on": [],
+      "acceptance": [
+        "检查命令执行、文件写入、Git 操作和 background worktree 的高风险点",
+        "输出明确结论：无问题，或指出一个具体问题",
+        "运行 scripts/verify.ps1 通过"
+      ],
+      "file_hints": [
+        "tools/codex-supervisor/src",
+        "scripts",
+        ".codex",
+        "AGENTS.md"
+      ],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-04-12T13:57:11.6813047Z"
+    }
+  ]
 }
