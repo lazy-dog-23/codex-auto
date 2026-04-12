@@ -1,6 +1,6 @@
 import { basename, dirname, join, resolve } from 'node:path';
 import { runProcess, commandSucceeded } from './process.js';
-import { listDirectoryEntries, pathExists } from './json.js';
+import { assertDirectPathBoundary, listDirectoryEntries, pathExists } from './json.js';
 import type {
   BackgroundWorktreePreparation,
   GitRepositoryInfo,
@@ -99,6 +99,7 @@ export function ensureGitSafeDirectory(targetPath: string, cwd = process.cwd()):
 }
 
 export async function getWorktreeSummary(worktreePath: string): Promise<WorktreeSummary | null> {
+  await assertDirectPathBoundary(worktreePath);
   const repoInfo = await detectGitRepository(worktreePath);
   if (!repoInfo) {
     return null;
@@ -170,6 +171,7 @@ export async function prepareBackgroundWorktree(
   }
   const repoCommonGitDir = repoInfo?.commonGitDir ?? resolve(repoRoot, '.git');
 
+  await assertDirectPathBoundary(backgroundPath);
   const backgroundExists = await pathExists(backgroundPath);
   const backgroundSummary = backgroundExists ? await getWorktreeSummary(backgroundPath) : null;
 

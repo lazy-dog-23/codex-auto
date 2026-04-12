@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
-import { access, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { access, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 
 export async function ensureParentDirectory(filePath: string): Promise<void> {
+  await assertDirectPathBoundary(filePath);
   await mkdir(dirname(filePath), { recursive: true });
 }
 
 export async function readJsonFile<T>(filePath: string): Promise<T> {
+  await assertDirectPathBoundary(filePath);
   const raw = await readFile(filePath, 'utf8');
   try {
     return JSON.parse(raw) as T;
@@ -53,6 +55,7 @@ export async function pathExists(filePath: string): Promise<boolean> {
 }
 
 export async function readTextFile(filePath: string): Promise<string> {
+  await assertDirectPathBoundary(filePath);
   return readFile(filePath, 'utf8');
 }
 
@@ -104,4 +107,45 @@ export async function listDirectoryEntries(filePath: string): Promise<string[]> 
 
 function isMissingFileError(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'ENOENT');
+}
+
+export async function assertDirectPathBoundary(filePath: string): Promise<void> {
+  let current = resolve(filePath);
+  let label = 'target path';
+
+  while (true) {
+    try {
+      await assertExistingPathIsDirect(current, label);
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
+
+    const parent = dirname(current);
+    if (parent === current) {
+      return;
+    }
+
+    current = parent;
+    label = 'ancestor path';
+  }
+}
+
+async function assertExistingPathIsDirect(targetPath: string, label: string): Promise<void> {
+  const stats = await lstat(targetPath);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing redirected ${label}: ${targetPath} is a symbolic link or junction.`);
+  }
+
+  const resolvedTarget = normalizePathForComparison(targetPath);
+  const canonicalTarget = normalizePathForComparison(await realpath(targetPath));
+  if (resolvedTarget !== canonicalTarget) {
+    throw new Error(`Refusing redirected ${label}: ${targetPath} resolves to ${canonicalTarget}.`);
+  }
+}
+
+function normalizePathForComparison(targetPath: string): string {
+  const normalized = resolve(targetPath).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }

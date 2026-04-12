@@ -4,7 +4,7 @@
     {
       "id": "task-security-review",
       "title": "检查 codex-auto 的高风险安全问题",
-      "status": "queued",
+      "status": "done",
       "priority": "P1",
       "depends_on": [],
       "acceptance": [
@@ -20,7 +20,7 @@
       ],
       "retry_count": 0,
       "last_error": null,
-      "updated_at": "2026-04-12T13:57:11.6813047Z"
+      "updated_at": "2026-04-12T16:48:41.6200454Z"
     }
   ]
 }

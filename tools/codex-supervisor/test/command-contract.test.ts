@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,6 +113,25 @@ describe("command integration contracts", () => {
 
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not a Git repository");
+  });
+
+  it("bootstrap rejects redirected autonomy directories", async () => {
+    const workspace = await makeTempWorkspace();
+    const redirectedTarget = await makeTempWorkspace();
+
+    await symlink(redirectedTarget, join(workspace, "autonomy"), "junction");
+
+    await expect(runBootstrapCommand(workspace)).rejects.toThrow(/redirected|symbolic link|junction/i);
+  });
+
+  it("bootstrap rejects dangling redirected autonomy directories", async () => {
+    const workspace = await makeTempWorkspace();
+    const redirectedRoot = await makeTempWorkspace();
+    const missingRedirectTarget = join(redirectedRoot, "missing-autonomy-target");
+
+    await symlink(missingRedirectTarget, join(workspace, "autonomy"), "junction");
+
+    await expect(runBootstrapCommand(workspace)).rejects.toThrow(/redirected|symbolic link|junction/i);
   });
 
   it("unblock resolves blockers and restores the task into ready when capacity allows", async () => {

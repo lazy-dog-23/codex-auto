@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runBootstrapCommand } from "../src/commands/bootstrap.js";
+import { runDoctor } from "../src/commands/doctor.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
 import { runStatusCommand } from "../src/commands/status.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, getBackgroundWorktreePath } from "../src/infra/git.js";
@@ -167,5 +168,96 @@ describe("git/worktree integration", () => {
 
     const alignedHead = runGit(secondPrepare.backgroundPath, ["rev-parse", "HEAD"]);
     expect(alignedHead).toBe(secondHead);
+  });
+
+  it("rejects redirected background worktree paths", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    const redirectedTarget = await makeTempWorkspace();
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+    await runBootstrapCommand(workspace);
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+
+    const backgroundPath = getBackgroundWorktreePath(workspace);
+    await symlink(redirectedTarget, backgroundPath, "junction");
+    tempRoots.push(backgroundPath);
+
+    const result = await runPrepareWorktree({ workspaceRoot: workspace });
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/redirected|symbolic link|junction/i);
+  });
+
+  it("rejects dangling redirected background worktree paths", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    const redirectedRoot = await makeTempWorkspace();
+    const missingRedirectTarget = join(redirectedRoot, "missing-background-target");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+    await runBootstrapCommand(workspace);
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+
+    const backgroundPath = getBackgroundWorktreePath(workspace);
+    await symlink(missingRedirectTarget, backgroundPath, "junction");
+    tempRoots.push(backgroundPath);
+
+    const result = await runPrepareWorktree({ workspaceRoot: workspace });
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/redirected|symbolic link|junction/i);
+  });
+
+  it("status and doctor reject redirected existing background worktree paths", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    const redirectedRoot = await makeTempWorkspace();
+    const redirectedTarget = join(redirectedRoot, "redirected-worktree");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+    await runBootstrapCommand(workspace);
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+
+    runGit(workspace, ["worktree", "add", "-B", "redirected/worktree", redirectedTarget, "HEAD"]);
+
+    const backgroundPath = getBackgroundWorktreePath(workspace);
+    await symlink(redirectedTarget, backgroundPath, "junction");
+    tempRoots.push(backgroundPath);
+
+    const status = await runStatusCommand(workspace);
+    const doctor = await runDoctor({ workspaceRoot: workspace });
+
+    expect(status.ready_for_automation).toBe(false);
+    expect((status.warnings ?? []).some((warning) => warning.code === "unsafe_background_worktree_path")).toBe(true);
+    expect(doctor.ok).toBe(false);
+    expect(doctor.issues.some((issue) => issue.code === "unsafe_background_worktree_path")).toBe(true);
   });
 });

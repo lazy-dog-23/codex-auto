@@ -143,13 +143,25 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     }
 
     const backgroundPath = getBackgroundWorktreePath(gitRepo.path);
-    const backgroundWorktree = await getWorktreeSummary(backgroundPath);
-    if (!backgroundWorktree) {
+    let backgroundWorktree = null;
+    try {
+      backgroundWorktree = await getWorktreeSummary(backgroundPath);
+    } catch (error) {
       readyForAutomation = false;
       warnings.push({
-        code: "missing_background_worktree",
-        message: `Background worktree is missing at ${backgroundPath}.`,
+        code: "unsafe_background_worktree_path",
+        message: error instanceof Error ? error.message : String(error),
       });
+    }
+
+    if (!backgroundWorktree) {
+      if (!warnings.some((warning) => warning.code === "unsafe_background_worktree_path")) {
+        readyForAutomation = false;
+        warnings.push({
+          code: "missing_background_worktree",
+          message: `Background worktree is missing at ${backgroundPath}.`,
+        });
+      }
     } else {
       if (backgroundWorktree.dirty) {
         readyForAutomation = false;

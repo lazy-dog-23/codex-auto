@@ -132,14 +132,26 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
 
   let backgroundWorktree: WorktreeSummary | null = null;
   if (gitRepo && backgroundPath) {
-    backgroundWorktree = await getWorktreeSummary(backgroundPath);
-    if (!backgroundWorktree) {
+    try {
+      backgroundWorktree = await getWorktreeSummary(backgroundPath);
+    } catch (error) {
       issues.push({
-        severity: 'warn',
-        code: 'missing_background_worktree',
-        message: `Background worktree does not exist at ${backgroundPath}.`,
+        severity: 'error',
+        code: 'unsafe_background_worktree_path',
+        message: error instanceof Error ? error.message : String(error),
         path: backgroundPath,
       });
+    }
+
+    if (!backgroundWorktree) {
+      if (!issues.some((issue) => issue.code === 'unsafe_background_worktree_path')) {
+        issues.push({
+          severity: 'warn',
+          code: 'missing_background_worktree',
+          message: `Background worktree does not exist at ${backgroundPath}.`,
+          path: backgroundPath,
+        });
+      }
     } else if (backgroundWorktree.dirty) {
       issues.push({
         severity: 'error',
