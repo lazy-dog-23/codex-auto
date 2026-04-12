@@ -1,9 +1,9 @@
 import { Command } from "commander";
 
-import type { AutomationPromptsResult } from "../contracts/autonomy.js";
+import type { ExtendedAutomationPromptsResult } from "../templates/automation-prompts.js";
 import { buildAutomationPromptsResult, formatAutomationPromptsResult } from "../templates/automation-prompts.js";
 
-export async function runEmitAutomationPromptsCommand(): Promise<AutomationPromptsResult> {
+export async function runEmitAutomationPromptsCommand(): Promise<ExtendedAutomationPromptsResult> {
   return buildAutomationPromptsResult();
 }
 

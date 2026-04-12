@@ -14,9 +14,25 @@ import { readJsonFile } from '../infra/json.js';
 import { discoverPowerShellExecutable, detectCodexProcess, getPowerShellVersion } from '../infra/process.js';
 import { readSimpleTomlFile } from '../infra/toml.js';
 import type { DiagnosticIssue, FileSnapshot, WorktreeSummary } from '../infra/types.js';
-import { blockersSchema, stateSchema, tasksSchema } from '../schemas/index.js';
+import {
+  blockersSchema,
+  goalsSchema,
+  proposalsSchema,
+  resultsSchema,
+  settingsSchema,
+  stateSchema,
+  tasksSchema,
+} from '../schemas/index.js';
 import { resolveRepoPaths } from '../shared/paths.js';
-import type { AutonomyState, BlockersDocument, TasksDocument } from '../contracts/autonomy.js';
+import type {
+  AutonomyResults,
+  AutonomySettings,
+  AutonomyState,
+  BlockersDocument,
+  GoalsDocument,
+  ProposalsDocument,
+  TasksDocument,
+} from '../contracts/autonomy.js';
 
 export interface DoctorOptions {
   workspaceRoot?: string;
@@ -66,16 +82,29 @@ const REQUIRED_PATHS: Array<{ path: string; kind: 'file' | 'directory'; required
   { path: 'scripts/setup.windows.ps1', kind: 'file', required: true },
   { path: 'scripts/verify.ps1', kind: 'file', required: true },
   { path: 'scripts/smoke.ps1', kind: 'file', required: true },
+  { path: 'scripts/review.ps1', kind: 'file', required: true },
   { path: '.agents/skills/$autonomy-plan/SKILL.md', kind: 'file', required: true },
   { path: '.agents/skills/$autonomy-work/SKILL.md', kind: 'file', required: true },
+  { path: '.agents/skills/$autonomy-intake/SKILL.md', kind: 'file', required: true },
+  { path: '.agents/skills/$autonomy-review/SKILL.md', kind: 'file', required: true },
+  { path: '.agents/skills/$autonomy-report/SKILL.md', kind: 'file', required: true },
+  { path: '.agents/skills/$autonomy-sprint/SKILL.md', kind: 'file', required: true },
   { path: 'autonomy/goal.md', kind: 'file', required: true },
   { path: 'autonomy/journal.md', kind: 'file', required: true },
+  { path: 'autonomy/goals.json', kind: 'file', required: true },
+  { path: 'autonomy/proposals.json', kind: 'file', required: true },
   { path: 'autonomy/tasks.json', kind: 'file', required: true },
   { path: 'autonomy/state.json', kind: 'file', required: true },
+  { path: 'autonomy/settings.json', kind: 'file', required: true },
+  { path: 'autonomy/results.json', kind: 'file', required: true },
   { path: 'autonomy/blockers.json', kind: 'file', required: true },
   { path: 'autonomy/schema', kind: 'directory', required: true },
+  { path: 'autonomy/schema/goals.schema.json', kind: 'file', required: true },
+  { path: 'autonomy/schema/proposals.schema.json', kind: 'file', required: true },
   { path: 'autonomy/schema/tasks.schema.json', kind: 'file', required: true },
   { path: 'autonomy/schema/state.schema.json', kind: 'file', required: true },
+  { path: 'autonomy/schema/settings.schema.json', kind: 'file', required: true },
+  { path: 'autonomy/schema/results.schema.json', kind: 'file', required: true },
   { path: 'autonomy/schema/blockers.schema.json', kind: 'file', required: true },
 ];
 
@@ -388,6 +417,18 @@ async function validateAutonomyDocuments(
     load: () => Promise<unknown>;
   }> = [
     {
+      path: repoPaths.goalsFile,
+      code: 'goals_schema_invalid',
+      schema: goalsSchema,
+      load: () => readJsonFile<GoalsDocument>(repoPaths.goalsFile),
+    },
+    {
+      path: repoPaths.proposalsFile,
+      code: 'proposals_schema_invalid',
+      schema: proposalsSchema,
+      load: () => readJsonFile<ProposalsDocument>(repoPaths.proposalsFile),
+    },
+    {
       path: repoPaths.tasksFile,
       code: 'tasks_schema_invalid',
       schema: tasksSchema,
@@ -398,6 +439,18 @@ async function validateAutonomyDocuments(
       code: 'state_schema_invalid',
       schema: stateSchema,
       load: () => readJsonFile<AutonomyState>(repoPaths.stateFile),
+    },
+    {
+      path: repoPaths.settingsFile,
+      code: 'settings_schema_invalid',
+      schema: settingsSchema,
+      load: () => readJsonFile<AutonomySettings>(repoPaths.settingsFile),
+    },
+    {
+      path: repoPaths.resultsFile,
+      code: 'results_schema_invalid',
+      schema: resultsSchema,
+      load: () => readJsonFile<AutonomyResults>(repoPaths.resultsFile),
     },
     {
       path: repoPaths.blockersFile,

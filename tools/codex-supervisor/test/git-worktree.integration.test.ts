@@ -1,15 +1,18 @@
-import { appendFile, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runBootstrapCommand } from "../src/commands/bootstrap.js";
 import { runDoctor } from "../src/commands/doctor.js";
+import { runReviewCommand } from "../src/commands/review.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
 import { runStatusCommand } from "../src/commands/status.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, getBackgroundWorktreePath } from "../src/infra/git.js";
+import { createAutonomyCommit, DEFAULT_AUTONOMY_BRANCH, inspectAutonomyCommitGate, getCurrentGitBranch } from "../src/infra/git.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   inspectCycleLockMock: vi.fn(),
@@ -35,6 +38,7 @@ vi.mock("../src/infra/process.js", async (importOriginal) => {
 });
 
 const tempRoots: string[] = [];
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const originalGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
@@ -259,5 +263,110 @@ describe("git/worktree integration", () => {
     expect((status.warnings ?? []).some((warning) => warning.code === "unsafe_background_worktree_path")).toBe(true);
     expect(doctor.ok).toBe(false);
     expect(doctor.issues.some((issue) => issue.code === "unsafe_background_worktree_path")).toBe(true);
+  });
+
+  it("detects commit gates, skips no-diff commits, and creates controlled autonomy commits", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    const bootstrap = await runBootstrapCommand(workspace);
+    expect(bootstrap.ok).toBe(true);
+    await writeFile(
+      join(workspace, "scripts", "review.ps1"),
+      await readFile(join(repoRoot, "scripts", "review.ps1"), "utf8"),
+      "utf8",
+    );
+
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    const cleanGate = await inspectAutonomyCommitGate(workspace);
+    expect(cleanGate.reason).toBe("no_diff");
+    expect(cleanGate.ok).toBe(false);
+    expect(cleanGate.branchDrift).toBe(false);
+    expect(cleanGate.currentBranch).toBe(DEFAULT_AUTONOMY_BRANCH);
+
+    const noDiffCommit = await createAutonomyCommit(workspace, "autonomy(goal/task): no-op");
+    expect(noDiffCommit.ok).toBe(true);
+    expect(noDiffCommit.committed).toBe(false);
+    expect(noDiffCommit.skippedReason).toBe("no_diff");
+
+    await appendFile(join(workspace, "README.md"), "\n<!-- autonomy commit test -->\n", "utf8");
+
+    const readyGate = await inspectAutonomyCommitGate(workspace);
+    expect(readyGate.reason).toBe("dirty_worktree");
+    expect(readyGate.ok).toBe(true);
+
+    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-1/task-1): update README");
+    expect(commitResult.ok).toBe(true);
+    expect(commitResult.committed).toBe(true);
+    expect(commitResult.commitHash).toBeTruthy();
+    expect(commitResult.message).toContain("Committed");
+    expect(commitResult.currentBranch).toBe(DEFAULT_AUTONOMY_BRANCH);
+
+    const branchAfterCommit = await getCurrentGitBranch(workspace);
+    expect(branchAfterCommit).toBe(DEFAULT_AUTONOMY_BRANCH);
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
+  });
+
+  it("runs review gating and blocks dirty or branch-drift states before review.ps1", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    await runBootstrapCommand(workspace);
+    await writeFile(
+      join(workspace, "scripts", "review.ps1"),
+      await readFile(join(repoRoot, "scripts", "review.ps1"), "utf8"),
+      "utf8",
+    );
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    const cleanReview = await runReviewCommand(workspace);
+    expect(cleanReview.ok).toBe(true);
+    expect(cleanReview.commit_ready).toBe(false);
+    expect(cleanReview.commit_skipped_reason).toBe("no_diff");
+    expect(cleanReview.issues).toHaveLength(0);
+    expect(cleanReview.review_script.exitCode).toBe(0);
+
+    await appendFile(join(workspace, "README.md"), "\n<!-- review dirty gate -->\n", "utf8");
+    const dirtyReview = await runReviewCommand(workspace);
+    expect(dirtyReview.ok).toBe(true);
+    expect(dirtyReview.dirty).toBe(true);
+    expect(dirtyReview.commit_ready).toBe(true);
+    expect(dirtyReview.commit_skipped_reason).toBeNull();
+    expect(dirtyReview.issues).toHaveLength(0);
+
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "stabilize before drift test"]);
+    runGit(workspace, ["switch", "-c", "feature/manual"]);
+
+    const driftReview = await runReviewCommand(workspace);
+    expect(driftReview.ok).toBe(false);
+    expect(driftReview.commit_ready).toBe(false);
+    expect(driftReview.commit_skipped_reason).toBe("branch_drift");
+    expect(driftReview.issues.some((issue) => issue.code === "branch_drift")).toBe(true);
   });
 });

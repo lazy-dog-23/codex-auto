@@ -3,6 +3,7 @@
   "tasks": [
     {
       "id": "task-a",
+      "goal_id": "goal-alpha",
       "title": "Build prompt bundle",
       "status": "queued",
       "priority": "P0",
@@ -11,10 +12,13 @@
       "file_hints": ["src/templates/automation-prompts.ts"],
       "retry_count": 0,
       "last_error": null,
-      "updated_at": "2026-01-01T00:00:00Z"
+      "updated_at": "2026-01-01T00:00:00Z",
+      "commit_hash": null,
+      "review_status": "not_reviewed"
     },
     {
       "id": "task-b",
+      "goal_id": "goal-alpha",
       "title": "Wire status report",
       "status": "ready",
       "priority": "P1",
@@ -23,10 +27,13 @@
       "file_hints": ["src/commands/status.ts"],
       "retry_count": 1,
       "last_error": "previous verify failed",
-      "updated_at": "2026-01-02T00:00:00Z"
+      "updated_at": "2026-01-02T00:00:00Z",
+      "commit_hash": "abc123",
+      "review_status": "passed"
     },
     {
       "id": "task-c",
+      "goal_id": "goal-alpha",
       "title": "Integrate unblock flow",
       "status": "queued",
       "priority": "P2",
@@ -35,10 +42,13 @@
       "file_hints": ["src/commands/unblock.ts"],
       "retry_count": 0,
       "last_error": null,
-      "updated_at": "2026-01-03T00:00:00Z"
+      "updated_at": "2026-01-03T00:00:00Z",
+      "commit_hash": null,
+      "review_status": "not_reviewed"
     },
     {
       "id": "task-d",
+      "goal_id": "goal-alpha",
       "title": "Keep verifier stable",
       "status": "verify_failed",
       "priority": "P0",
@@ -47,7 +57,9 @@
       "file_hints": ["test/schema.spec.ts"],
       "retry_count": 2,
       "last_error": "schema mismatch",
-      "updated_at": "2026-01-04T00:00:00Z"
+      "updated_at": "2026-01-04T00:00:00Z",
+      "commit_hash": null,
+      "review_status": "followup_required"
     }
   ]
 }

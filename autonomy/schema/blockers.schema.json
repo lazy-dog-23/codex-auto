@@ -4,7 +4,10 @@
   "title": "AutonomyBlockersFile",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "blockers"],
+  "required": [
+    "version",
+    "blockers"
+  ],
   "properties": {
     "version": {
       "type": "integer",
@@ -47,21 +50,34 @@
         },
         "severity": {
           "type": "string",
-          "enum": ["low", "medium", "high"]
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
         },
         "status": {
           "type": "string",
-          "enum": ["open", "resolved"]
+          "enum": [
+            "open",
+            "resolved"
+          ]
         },
         "resolution": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "opened_at": {
           "type": "string",
           "format": "date-time"
         },
         "resolved_at": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "format": "date-time"
         }
       },

@@ -3,6 +3,7 @@
   "tasks": [
     {
       "id": "task-security-review",
+      "goal_id": "goal-security-review",
       "title": "检查 codex-auto 的高风险安全问题",
       "status": "done",
       "priority": "P1",
@@ -20,7 +21,34 @@
       ],
       "retry_count": 0,
       "last_error": null,
-      "updated_at": "2026-04-12T16:48:41.6200454Z"
+      "updated_at": "2026-04-12T16:48:41.6200454Z",
+      "commit_hash": null,
+      "review_status": "passed"
+    },
+    {
+      "id": "task-codex-autonomy-v2",
+      "goal_id": "goal-codex-autonomy-v2",
+      "title": "升级 codex-autonomy 安装器、状态契约、自动化 prompts 与 review/merge 流程",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": [
+        "install 能把 v2 控制面写入目标仓库",
+        "CLI 契约覆盖目标队列、提案确认、run mode、report、review 与 merge",
+        "verify、review、tests 和 prompts 与 v2 契约一致"
+      ],
+      "file_hints": [
+        "tools/codex-supervisor/src",
+        "tools/codex-supervisor/test",
+        ".agents/skills",
+        "scripts",
+        "autonomy"
+      ],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-04-12T18:12:38.089Z",
+      "commit_hash": null,
+      "review_status": "passed"
     }
   ]
 }

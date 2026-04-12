@@ -1,3 +1,4 @@
+node_modules/
 tools/codex-supervisor/node_modules/
 tools/codex-supervisor/dist/
 tools/codex-supervisor/.vite/

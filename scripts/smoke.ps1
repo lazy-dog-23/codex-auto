@@ -18,6 +18,7 @@ Assert-Exists (Join-Path $repoRoot 'AGENTS.md')
 Assert-Exists $environmentFile
 Assert-Exists (Join-Path $repoRoot 'scripts/verify.ps1')
 Assert-Exists (Join-Path $repoRoot 'scripts/setup.windows.ps1')
+Assert-Exists (Join-Path $repoRoot 'scripts/review.ps1')
 
 $environmentText = Get-Content -LiteralPath $environmentFile -Raw
 if ($environmentText -notmatch 'setup.windows.ps1') {
@@ -28,6 +29,9 @@ if ($environmentText -notmatch 'name = "verify"') {
 }
 if ($environmentText -notmatch 'name = "smoke"') {
     throw 'environment.toml is missing the smoke action.'
+}
+if ($environmentText -notmatch 'name = "review"') {
+    throw 'environment.toml is missing the review action.'
 }
 
 Write-Host 'Smoke precheck passed.'

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "goals": [
+    {
+      "id": "goal-alpha",
+      "title": "Stabilize the autonomy control plane",
+      "objective": "Keep the planner, worker, reviewer, and reporter loop healthy.",
+      "success_criteria": ["Planner can propose work", "Worker can finish one task"],
+      "constraints": ["Stay inside the repo control plane"],
+      "out_of_scope": ["Publishing to GitHub"],
+      "status": "active",
+      "run_mode": "cruise",
+      "created_at": "2026-01-01T00:00:00Z",
+      "approved_at": "2026-01-01T01:00:00Z",
+      "completed_at": null
+    },
+    {
+      "id": "goal-beta",
+      "title": "Queue the next follow-up goal",
+      "objective": "Prepare the next approved goal for later activation.",
+      "success_criteria": ["Goal can be activated later"],
+      "constraints": ["Do not start before goal-alpha finishes"],
+      "out_of_scope": [],
+      "status": "approved",
+      "run_mode": "sprint",
+      "created_at": "2026-01-02T00:00:00Z",
+      "approved_at": "2026-01-02T01:00:00Z",
+      "completed_at": null
+    }
+  ]
+}

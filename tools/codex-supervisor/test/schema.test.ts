@@ -6,6 +6,10 @@ import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import { describe, expect, it } from "vitest";
 
 import { blockersSchema } from "../src/schemas/blockers.schema.js";
+import { goalsSchema } from "../src/schemas/goals.schema.js";
+import { proposalsSchema } from "../src/schemas/proposals.schema.js";
+import { resultsSchema } from "../src/schemas/results.schema.js";
+import { settingsSchema } from "../src/schemas/settings.schema.js";
 import { stateSchema } from "../src/schemas/state.schema.js";
 import { tasksSchema } from "../src/schemas/tasks.schema.js";
 
@@ -46,6 +50,38 @@ describe("schema fixtures", () => {
   it("accepts the sample blockers document", () => {
     const validate = createValidator(blockersSchema);
     const data = readJsonFixture("blockers.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts the sample goals document", () => {
+    const validate = createValidator(goalsSchema);
+    const data = readJsonFixture("goals.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts the sample proposals document", () => {
+    const validate = createValidator(proposalsSchema);
+    const data = readJsonFixture("proposals.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts the sample settings document", () => {
+    const validate = createValidator(settingsSchema);
+    const data = readJsonFixture("settings.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts the sample results document", () => {
+    const validate = createValidator(resultsSchema);
+    const data = readJsonFixture("results.sample.json");
 
     expect(validate(data)).toBe(true);
     expect(validate.errors).toBeNull();

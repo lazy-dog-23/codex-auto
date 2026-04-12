@@ -1,6 +1,7 @@
 import { basename, dirname, join, resolve } from 'node:path';
 import { runProcess, commandSucceeded } from './process.js';
 import { assertDirectPathBoundary, listDirectoryEntries, pathExists } from './json.js';
+import type { CommandExecution } from './types.js';
 import type {
   BackgroundWorktreePreparation,
   GitRepositoryInfo,
@@ -8,6 +9,35 @@ import type {
 } from './types.js';
 
 export const DEFAULT_BACKGROUND_WORKTREE_BRANCH = 'codex/background';
+export const DEFAULT_AUTONOMY_BRANCH = 'codex/autonomy';
+
+export interface GitCommitGate {
+  ok: boolean;
+  repoRoot: string;
+  expectedBranch: string;
+  currentBranch: string | null;
+  head: string | null;
+  dirty: boolean;
+  hasDiff: boolean;
+  branchDrift: boolean;
+  statusLines: string[];
+  reason: 'not_a_git_repo' | 'dirty_worktree' | 'branch_drift' | 'no_diff' | 'ready';
+}
+
+export interface AutonomyCommitResult {
+  ok: boolean;
+  repoRoot: string;
+  expectedBranch: string;
+  currentBranch: string | null;
+  headBefore: string | null;
+  headAfter: string | null;
+  commitHash: string | null;
+  committed: boolean;
+  skippedReason: 'no_diff' | null;
+  stageResult: CommandExecution | null;
+  commitResult: CommandExecution | null;
+  message: string;
+}
 
 export function getBackgroundWorktreePath(repoRoot: string): string {
   const parentDir = dirname(resolve(repoRoot));
@@ -65,6 +95,167 @@ export async function getRepositoryStatus(repoRoot: string): Promise<string[]> {
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .filter(Boolean);
+}
+
+export async function getCurrentGitBranch(repoRoot: string): Promise<string | null> {
+  const result = runProcess('git', ['branch', '--show-current'], { cwd: repoRoot });
+  if (!commandSucceeded(result)) {
+    return null;
+  }
+
+  const branch = result.stdout.trim();
+  return branch.length > 0 ? branch : null;
+}
+
+export function stageAllRepositoryChanges(repoRoot: string): CommandExecution {
+  return runProcess('git', ['add', '-A'], { cwd: repoRoot });
+}
+
+export function commitStagedRepositoryChanges(repoRoot: string, commitMessage: string): CommandExecution {
+  return runProcess('git', ['commit', '-m', commitMessage], { cwd: repoRoot });
+}
+
+export async function inspectAutonomyCommitGate(
+  repoRoot: string,
+  expectedBranch = DEFAULT_AUTONOMY_BRANCH,
+): Promise<GitCommitGate> {
+  const repoInfo = await detectGitRepository(repoRoot);
+  if (!repoInfo) {
+    return {
+      ok: false,
+      repoRoot: resolve(repoRoot),
+      expectedBranch,
+      currentBranch: null,
+      head: null,
+      dirty: false,
+      hasDiff: false,
+      branchDrift: true,
+      statusLines: [],
+      reason: 'not_a_git_repo',
+    };
+  }
+
+  const currentBranch = await getCurrentGitBranch(repoInfo.path);
+  const statusLines = repoInfo.statusLines;
+  const dirty = statusLines.length > 0;
+  const branchDrift = currentBranch !== expectedBranch;
+
+  let reason: GitCommitGate['reason'] = 'ready';
+  if (branchDrift) {
+    reason = 'branch_drift';
+  } else if (dirty) {
+    reason = 'dirty_worktree';
+  } else {
+    reason = 'no_diff';
+  }
+
+  return {
+    ok: reason === 'dirty_worktree',
+    repoRoot: repoInfo.path,
+    expectedBranch,
+    currentBranch,
+    head: repoInfo.head,
+    dirty,
+    hasDiff: dirty,
+    branchDrift,
+    statusLines,
+    reason,
+  };
+}
+
+export async function createAutonomyCommit(
+  repoRoot: string,
+  commitMessage: string,
+  expectedBranch = DEFAULT_AUTONOMY_BRANCH,
+): Promise<AutonomyCommitResult> {
+  const gate = await inspectAutonomyCommitGate(repoRoot, expectedBranch);
+  if (gate.reason === 'not_a_git_repo') {
+    return {
+      ok: false,
+      repoRoot: gate.repoRoot,
+      expectedBranch,
+      currentBranch: gate.currentBranch,
+      headBefore: gate.head,
+      headAfter: gate.head,
+      commitHash: null,
+      committed: false,
+      skippedReason: null,
+      stageResult: null,
+      commitResult: null,
+      message: `Repository at ${gate.repoRoot} is not a Git repository.`,
+    };
+  }
+
+  if (gate.reason === 'branch_drift') {
+    return {
+      ok: false,
+      repoRoot: gate.repoRoot,
+      expectedBranch,
+      currentBranch: gate.currentBranch,
+      headBefore: gate.head,
+      headAfter: gate.head,
+      commitHash: null,
+      committed: false,
+      skippedReason: null,
+      stageResult: null,
+      commitResult: null,
+      message: `Repository is on ${gate.currentBranch ?? 'detached HEAD'}, expected ${expectedBranch}.`,
+    };
+  }
+
+  if (gate.reason === 'no_diff') {
+    return {
+      ok: true,
+      repoRoot: gate.repoRoot,
+      expectedBranch,
+      currentBranch: gate.currentBranch,
+      headBefore: gate.head,
+      headAfter: gate.head,
+      commitHash: gate.head,
+      committed: false,
+      skippedReason: 'no_diff',
+      stageResult: null,
+      commitResult: null,
+      message: 'No repository diff was found; commit skipped.',
+    };
+  }
+
+  const stageResult = stageAllRepositoryChanges(gate.repoRoot);
+  if (!commandSucceeded(stageResult)) {
+    return {
+      ok: false,
+      repoRoot: gate.repoRoot,
+      expectedBranch,
+      currentBranch: gate.currentBranch,
+      headBefore: gate.head,
+      headAfter: gate.head,
+      commitHash: null,
+      committed: false,
+      skippedReason: null,
+      stageResult,
+      commitResult: null,
+      message: `Failed to stage changes: ${stageResult.stderr || stageResult.stdout || stageResult.error || 'unknown error'}`,
+    };
+  }
+
+  const commitResult = commitStagedRepositoryChanges(gate.repoRoot, commitMessage);
+  const headAfter = await getRepositoryHead(gate.repoRoot);
+  return {
+    ok: commandSucceeded(commitResult),
+    repoRoot: gate.repoRoot,
+    expectedBranch,
+    currentBranch: gate.currentBranch,
+    headBefore: gate.head,
+    headAfter,
+    commitHash: headAfter,
+    committed: commandSucceeded(commitResult),
+    skippedReason: null,
+    stageResult,
+    commitResult,
+    message: commandSucceeded(commitResult)
+      ? `Committed ${headAfter ?? 'unknown'} on ${gate.currentBranch ?? expectedBranch}.`
+      : `Failed to commit changes: ${commitResult.stderr || commitResult.stdout || commitResult.error || 'unknown error'}`,
+  };
 }
 
 export function normalizeGitSafeDirectoryPath(targetPath: string): string {

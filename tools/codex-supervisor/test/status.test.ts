@@ -1,44 +1,75 @@
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import type { BlockersDocument, TasksDocument, AutonomyState } from "../src/contracts/autonomy.js";
+import type {
+  AutonomyResults,
+  AutonomyState,
+  BlockersDocument,
+  GoalsDocument,
+  TasksDocument,
+} from "../src/contracts/autonomy.js";
 import { buildStatusSummary, runStatusCommand } from "../src/commands/status.js";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(testDir, "fixtures");
+const tempRoots: string[] = [];
+
+afterEach(async () => {
+  while (tempRoots.length > 0) {
+    const target = tempRoots.pop();
+    if (target) {
+      await rm(target, { recursive: true, force: true });
+    }
+  }
+});
 
 function readJsonFixture<T>(name: string): T {
   return JSON.parse(readFileSync(join(fixturesDir, name), "utf8")) as T;
 }
 
+async function makeTempWorkspace(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "codex-supervisor-status-"));
+  tempRoots.push(root);
+  return root;
+}
+
 describe("status command", () => {
-  it("summarizes tasks, blockers, and next-run eligibility", () => {
+  it("summarizes goals, tasks, blockers, and next-run eligibility", () => {
     const tasksDoc = readJsonFixture<TasksDocument>("tasks.sample.json");
+    const goalsDoc = readJsonFixture<GoalsDocument>("goals.sample.json");
     const state = readJsonFixture<AutonomyState>("state.sample.json");
     const blockersDoc = readJsonFixture<BlockersDocument>("blockers.sample.json");
+    const resultsDoc = readJsonFixture<AutonomyResults>("results.sample.json");
 
-    const summary = buildStatusSummary(tasksDoc, state, blockersDoc);
+    const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc);
 
     expect(summary.ok).toBe(true);
     expect(summary.total_tasks).toBe(4);
+    expect(summary.total_goals).toBe(2);
     expect(summary.tasks_by_status.ready).toBe(1);
-    expect(summary.tasks_by_status.verify_failed).toBe(1);
+    expect(summary.goals_by_status.active).toBe(1);
+    expect(summary.goals_by_status.approved).toBe(1);
     expect(summary.open_blocker_count).toBe(1);
     expect(summary.last_result).toBe("planned");
     expect(summary.ready_for_automation).toBe(false);
+    expect(summary.results_summary?.planner_summary).toBe("Planned the next ready window.");
+    expect(summary.latest_commit_hash).toBe("abc123");
     expect(summary.message).toContain("ready_for_automation=no");
   });
 
-  it("reports ready_for_automation when the repo is idle and actionable", () => {
+  it("reports ready_for_automation when the repo is idle and there is active work", () => {
     const summary = buildStatusSummary(
       {
         version: 1,
         tasks: [
           {
             id: "task-ready",
+            goal_id: "goal-42",
             title: "Ready task",
             status: "ready",
             priority: "P1",
@@ -48,28 +79,83 @@ describe("status command", () => {
             retry_count: 0,
             last_error: null,
             updated_at: "2026-01-06T00:00:00Z",
+            commit_hash: null,
+            review_status: "not_reviewed",
           },
         ],
       },
       {
         version: 1,
+        goals: [
+          {
+            id: "goal-42",
+            title: "Goal 42",
+            objective: "Ship it",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "active",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: "goal-42",
         current_task_id: null,
         cycle_status: "idle",
+        run_mode: "sprint",
         last_planner_run_at: "2026-01-05T00:00:00Z",
         last_worker_run_at: "2026-01-05T02:00:00Z",
         last_result: "planned",
         consecutive_worker_failures: 0,
         needs_human_review: false,
         open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
       },
       {
         version: 1,
         blockers: [],
       },
+      {
+        version: 1,
+        planner: { status: "planned", goal_id: "goal-42", task_id: null, summary: "planned next task", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: "completed task-ready", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-42/task-ready): Ready task", review_status: null },
+        reporter: { status: "sent", goal_id: "goal-42", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+      },
     );
 
     expect(summary.ready_for_automation).toBe(true);
-    expect(summary.open_blocker_count).toBe(0);
+    expect(summary.next_automation_ready).toBe(true);
+    expect(summary.current_goal_id).toBe("goal-42");
+    expect(summary.report_thread_id).toBe("thread-99");
+    expect(summary.sprint_active).toBe(true);
+    expect(summary.results_summary?.worker_result).toBe("completed task-ready");
+  });
+
+  it("reads result summaries from autonomy/results.json", async () => {
+    const workspace = await makeTempWorkspace();
+    await mkdir(join(workspace, "autonomy", "locks"), { recursive: true });
+    await writeFile(join(workspace, "autonomy", "tasks.json"), `${readFileSync(join(fixturesDir, "tasks.sample.json"), "utf8")}\n`, "utf8");
+    await writeFile(join(workspace, "autonomy", "goals.json"), `${readFileSync(join(fixturesDir, "goals.sample.json"), "utf8")}\n`, "utf8");
+    await writeFile(join(workspace, "autonomy", "state.json"), `${readFileSync(join(fixturesDir, "state.sample.json"), "utf8")}\n`, "utf8");
+    await writeFile(join(workspace, "autonomy", "blockers.json"), `${readFileSync(join(fixturesDir, "blockers.sample.json"), "utf8")}\n`, "utf8");
+    await writeFile(join(workspace, "autonomy", "results.json"), `${readFileSync(join(fixturesDir, "results.sample.json"), "utf8")}\n`, "utf8");
+
+    const summary = await runStatusCommand(workspace);
+
+    expect(summary.results_summary?.planner_summary).toBe("Planned the next ready window.");
+    expect(summary.results_summary?.commit_result).toBe("autonomy(goal-alpha/task-b): Wire status report");
+    expect(summary.message).toContain("commit=abc123");
   });
 
   it("does not treat verify_failed-only queues as ready for automation", () => {
@@ -79,6 +165,7 @@ describe("status command", () => {
         tasks: [
           {
             id: "task-retry",
+            goal_id: "goal-retry",
             title: "Retry later",
             status: "verify_failed",
             priority: "P1",
@@ -88,33 +175,61 @@ describe("status command", () => {
             retry_count: 1,
             last_error: "verify failed",
             updated_at: "2026-01-06T00:00:00Z",
+            commit_hash: null,
+            review_status: "not_reviewed",
           },
         ],
       },
       {
         version: 1,
+        goals: [
+          {
+            id: "goal-retry",
+            title: "Retry Goal",
+            objective: "retry",
+            success_criteria: ["retry"],
+            constraints: [],
+            out_of_scope: [],
+            status: "active",
+            run_mode: "cruise",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:01:00Z",
+            completed_at: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: "goal-retry",
         current_task_id: null,
         cycle_status: "idle",
+        run_mode: "cruise",
         last_planner_run_at: "2026-01-05T00:00:00Z",
         last_worker_run_at: "2026-01-05T02:00:00Z",
         last_result: "failed",
         consecutive_worker_failures: 1,
         needs_human_review: false,
         open_blocker_count: 0,
+        report_thread_id: null,
+        autonomy_branch: "codex/autonomy",
+        sprint_active: false,
+        paused: false,
+        pause_reason: null,
       },
       {
         version: 1,
         blockers: [],
       },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "failed", goal_id: "goal-retry", task_id: "task-retry", summary: "verify failed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      },
     );
 
     expect(summary.ready_for_automation).toBe(false);
-  });
-
-  it("can be loaded through the repo-local command helper", async () => {
-    const repoRoot = join(testDir, "__status_fixture_repo__");
-
-    // This is a contract-level placeholder only; the real integration test belongs in the main agent.
-    await expect(runStatusCommand(repoRoot)).rejects.toThrow();
   });
 });

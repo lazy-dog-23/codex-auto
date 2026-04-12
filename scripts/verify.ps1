@@ -24,8 +24,8 @@ function Assert-PropertyExists {
         [string]$Context = ''
     )
     $hasProperty = $Item.PSObject.Properties.Name -contains $Name
-    $prefix = if ([string]::IsNullOrWhiteSpace($Context)) { '' } else { "$Context " }
-    Assert-True $hasProperty "Missing required key '$Name' in ${prefix}$Path."
+    $contextLabel = if ([string]::IsNullOrWhiteSpace($Context)) { '' } else { "$Context " }
+    Assert-True $hasProperty "Missing required key '$Name' in $contextLabel$Path."
 }
 
 function Read-Toml {
@@ -76,7 +76,7 @@ function Read-Toml {
                 continue
             }
             default {
-                throw "Unsupported TOML line in ${Path}: $line"
+                throw "Unsupported TOML line in $($Path): $line"
             }
         }
     }
@@ -109,11 +109,11 @@ function Read-SimpleTomlMap {
         }
 
         if ($line -match '^\[\[') {
-            throw "Unsupported TOML array-of-tables in ${Path}: $line"
+            throw "Unsupported TOML array-of-tables in $($Path): $line"
         }
 
         if ($line -notmatch '^(?<key>[A-Za-z0-9_.:-]+)\s*=\s*(?<value>.+)$') {
-            throw "Unsupported TOML line in ${Path}: $line"
+            throw "Unsupported TOML line in $($Path): $line"
         }
 
         $key = $Matches.key
@@ -128,7 +128,7 @@ function Read-SimpleTomlMap {
         } elseif ($rawValue -match '^-?\d+$') {
             $value = [int]$rawValue
         } else {
-            throw "Unsupported TOML value in ${Path}: $line"
+            throw "Unsupported TOML value in $($Path): $line"
         }
 
         $fullKey = if ([string]::IsNullOrWhiteSpace($currentSection)) { $key } else { "$currentSection.$key" }
@@ -154,17 +154,28 @@ function Test-StateDocument {
     $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     foreach ($key in @(
         'version',
+        'current_goal_id',
         'current_task_id',
         'cycle_status',
+        'run_mode',
         'last_planner_run_at',
         'last_worker_run_at',
         'last_result',
         'consecutive_worker_failures',
         'needs_human_review',
-        'open_blocker_count'
+        'open_blocker_count',
+        'report_thread_id',
+        'autonomy_branch',
+        'sprint_active',
+        'paused',
+        'pause_reason'
     )) {
         Assert-PropertyExists -Item $state -Name $key -Path $Path
     }
+
+    Assert-True (@('idle','planning','working','blocked','review_pending') -contains [string]$state.cycle_status) "Invalid cycle_status in $Path."
+    Assert-True ($null -eq $state.run_mode -or @('sprint','cruise') -contains [string]$state.run_mode) "Invalid run_mode in $Path."
+    Assert-True (@('noop','planned','passed','failed','blocked') -contains [string]$state.last_result) "Invalid last_result in $Path."
 }
 
 function Test-TaskCollection {
@@ -172,9 +183,11 @@ function Test-TaskCollection {
     $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
     Assert-PropertyExists -Item $doc -Name 'tasks' -Path $Path
+
     foreach ($task in @($doc.tasks)) {
         foreach ($key in @(
             'id',
+            'goal_id',
             'title',
             'status',
             'priority',
@@ -183,11 +196,114 @@ function Test-TaskCollection {
             'file_hints',
             'retry_count',
             'last_error',
-            'updated_at'
+            'updated_at',
+            'commit_hash',
+            'review_status'
         )) {
             Assert-PropertyExists -Item $task -Name $key -Path $Path -Context 'a task from'
         }
-        Assert-True (@('queued','ready','in_progress','verify_failed','blocked','done') -contains $task.status) "Invalid task status in $Path."
+
+        Assert-True (@('queued','ready','in_progress','verify_failed','blocked','done') -contains [string]$task.status) "Invalid task status in $Path."
+        Assert-True (@('P0','P1','P2','P3') -contains [string]$task.priority) "Invalid task priority in $Path."
+        Assert-True (@('not_reviewed','passed','followup_required') -contains [string]$task.review_status) "Invalid review_status in $Path."
+    }
+}
+
+function Test-GoalCollection {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'goals' -Path $Path
+
+    foreach ($goal in @($doc.goals)) {
+        foreach ($key in @(
+            'id',
+            'title',
+            'objective',
+            'success_criteria',
+            'constraints',
+            'out_of_scope',
+            'status',
+            'run_mode',
+            'created_at',
+            'approved_at',
+            'completed_at'
+        )) {
+            Assert-PropertyExists -Item $goal -Name $key -Path $Path -Context 'a goal from'
+        }
+
+        Assert-True (@('draft','awaiting_confirmation','approved','active','completed','blocked','cancelled') -contains [string]$goal.status) "Invalid goal status in $Path."
+        Assert-True (@('sprint','cruise') -contains [string]$goal.run_mode) "Invalid goal run_mode in $Path."
+    }
+}
+
+function Test-ProposalCollection {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'proposals' -Path $Path
+
+    foreach ($proposal in @($doc.proposals)) {
+        foreach ($key in @(
+            'goal_id',
+            'status',
+            'summary',
+            'tasks',
+            'created_at',
+            'approved_at'
+        )) {
+            Assert-PropertyExists -Item $proposal -Name $key -Path $Path -Context 'a proposal from'
+        }
+
+        Assert-True (@('awaiting_confirmation','approved','superseded','cancelled') -contains [string]$proposal.status) "Invalid proposal status in $Path."
+
+        foreach ($task in @($proposal.tasks)) {
+            foreach ($key in @('id','title','priority','depends_on','acceptance','file_hints')) {
+                Assert-PropertyExists -Item $task -Name $key -Path $Path -Context 'a proposed task from'
+            }
+        }
+    }
+}
+
+function Test-SettingsDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $settings = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($key in @(
+        'version',
+        'install_source',
+        'initial_confirmation_required',
+        'report_surface',
+        'auto_commit',
+        'autonomy_branch',
+        'default_cruise_cadence',
+        'default_sprint_heartbeat_minutes'
+    )) {
+        Assert-PropertyExists -Item $settings -Name $key -Path $Path
+    }
+
+    Assert-True ([string]$settings.install_source -eq 'local_package') "Invalid install_source in $Path."
+    Assert-True ([string]$settings.report_surface -eq 'thread_and_inbox') "Invalid report_surface in $Path."
+    Assert-True (@('disabled','autonomy_branch') -contains [string]$settings.auto_commit) "Invalid auto_commit mode in $Path."
+
+    $cadence = $settings.default_cruise_cadence
+    foreach ($key in @('planner_hours','worker_hours','reviewer_hours')) {
+        Assert-PropertyExists -Item $cadence -Name $key -Path $Path -Context 'default_cruise_cadence from'
+    }
+}
+
+function Test-ResultsDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $results = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $results -Name 'version' -Path $Path
+
+    foreach ($entryName in @('planner','worker','review','commit','reporter')) {
+        Assert-PropertyExists -Item $results -Name $entryName -Path $Path
+        $entry = $results.$entryName
+        foreach ($key in @('status','goal_id','summary')) {
+            Assert-PropertyExists -Item $entry -Name $key -Path $Path -Context "$entryName entry from"
+        }
+
+        Assert-True (@('not_run','noop','planned','passed','failed','blocked','sent','skipped') -contains [string]$entry.status) "Invalid $entryName result status in $Path."
     }
 }
 
@@ -196,6 +312,7 @@ function Test-BlockerCollection {
     $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
     Assert-PropertyExists -Item $doc -Name 'blockers' -Path $Path
+
     foreach ($blocker in @($doc.blockers)) {
         foreach ($key in @(
             'id',
@@ -209,7 +326,9 @@ function Test-BlockerCollection {
         )) {
             Assert-PropertyExists -Item $blocker -Name $key -Path $Path -Context 'a blocker from'
         }
-        Assert-True (@('open','resolved') -contains $blocker.status) "Invalid blocker status in $Path."
+
+        Assert-True (@('low','medium','high') -contains [string]$blocker.severity) "Invalid blocker severity in $Path."
+        Assert-True (@('open','resolved') -contains [string]$blocker.status) "Invalid blocker status in $Path."
     }
 }
 
@@ -221,9 +340,9 @@ function Invoke-CliHarness {
     }
 
     $tsc = Join-Path $cliDir 'node_modules/.bin/tsc.cmd'
-    $vitest = Join-Path $cliDir 'node_modules/.bin/vitest.cmd'
+    $vitestModule = Join-Path $cliDir 'node_modules/vitest/vitest.mjs'
     Assert-True (Test-Path -LiteralPath $tsc) 'Missing local TypeScript CLI. Run scripts/setup.windows.ps1 first.'
-    Assert-True (Test-Path -LiteralPath $vitest) 'Missing local Vitest CLI. Run scripts/setup.windows.ps1 first.'
+    Assert-True (Test-Path -LiteralPath $vitestModule) 'Missing local Vitest module. Run scripts/setup.windows.ps1 first.'
 
     Push-Location $cliDir
     try {
@@ -232,9 +351,9 @@ function Invoke-CliHarness {
             throw "TypeScript validation failed with exit code $LASTEXITCODE."
         }
 
-        & $vitest run
+        & node $vitestModule run
         if ($LASTEXITCODE -ne 0) {
-            throw "vitest failed with exit code $LASTEXITCODE."
+            throw "Vitest failed with exit code $LASTEXITCODE."
         }
     } finally {
         Pop-Location
@@ -247,19 +366,33 @@ foreach ($requiredPath in @(
     'AGENTS.md',
     '.agents/skills/$autonomy-plan/SKILL.md',
     '.agents/skills/$autonomy-work/SKILL.md',
+    '.agents/skills/$autonomy-intake/SKILL.md',
+    '.agents/skills/$autonomy-review/SKILL.md',
+    '.agents/skills/$autonomy-report/SKILL.md',
+    '.agents/skills/$autonomy-sprint/SKILL.md',
     '.codex/environments/environment.toml',
     '.codex/config.toml',
     'scripts/setup.windows.ps1',
-    'scripts/smoke.ps1',
     'scripts/verify.ps1',
+    'scripts/smoke.ps1',
+    'scripts/review.ps1',
     'autonomy/goal.md',
     'autonomy/journal.md',
     'autonomy/tasks.json',
+    'autonomy/goals.json',
+    'autonomy/proposals.json',
     'autonomy/state.json',
+    'autonomy/settings.json',
+    'autonomy/results.json',
     'autonomy/blockers.json',
     'autonomy/schema/tasks.schema.json',
+    'autonomy/schema/goals.schema.json',
+    'autonomy/schema/proposals.schema.json',
     'autonomy/schema/state.schema.json',
-    'autonomy/schema/blockers.schema.json'
+    'autonomy/schema/settings.schema.json',
+    'autonomy/schema/results.schema.json',
+    'autonomy/schema/blockers.schema.json',
+    'autonomy/locks'
 )) {
     Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $requiredPath)) "Missing required path: $requiredPath"
 }
@@ -267,25 +400,53 @@ foreach ($requiredPath in @(
 Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
     '一次只处理一个任务',
     'scripts/verify.ps1',
+    'scripts/review.ps1',
     'autonomy/\*',
     'cycle\.lock',
     'UTC ISO 8601',
     'repo-relative forward-slash',
-    '绝不自动 `commit`、`push` 或 `deploy`'
+    'codex/autonomy'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-plan/SKILL.md') -Patterns @(
     '(?m)^---',
     '(?m)^name:\s*autonomy-plan',
-    'queued',
-    'Keep at most 5 tasks in `ready`'
+    'autonomy/goals\.json',
+    'awaiting_confirmation',
+    'Keep at most 5 tasks in'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-work/SKILL.md') -Patterns @(
     '(?m)^---',
     '(?m)^name:\s*autonomy-work',
-    'Select exactly one `ready` task',
+    'Select exactly one',
+    'scripts/review\.ps1',
+    'codex/autonomy',
     'review_pending'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-intake/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-intake',
+    'Normalize a user goal'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-review/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-review',
+    'scripts/review\.ps1'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-report/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-report',
+    'Summarize the current autonomy state'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-sprint/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-sprint',
+    'short, bounded execution loops'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/goal.md') -Patterns @(
@@ -306,8 +467,8 @@ Assert-True ($environment.version -eq 1) 'environment.toml version must be 1.'
 Assert-True ($environment.setup.script -match 'scripts/setup.windows.ps1') 'environment.toml setup script must point to scripts/setup.windows.ps1.'
 
 $actions = @($environment.actions)
-Assert-True ($actions.Count -ge 2) 'environment.toml must define at least two actions.'
-foreach ($requiredAction in @('verify', 'smoke')) {
+Assert-True ($actions.Count -ge 3) 'environment.toml must define at least three actions.'
+foreach ($requiredAction in @('verify', 'smoke', 'review')) {
     $match = $actions | Where-Object { $_.name -eq $requiredAction } | Select-Object -First 1
     Assert-True ($null -ne $match) "Missing action '$requiredAction' in environment.toml."
     Assert-True ($match.command -match "scripts/$requiredAction\.ps1") "Action '$requiredAction' must point to scripts/$requiredAction.ps1."
@@ -326,8 +487,12 @@ Assert-True (@('unelevated', 'elevated') -contains [string]$config['windows.sand
 
 Test-StateDocument -Path (Join-Path $repoRoot 'autonomy/state.json')
 Test-TaskCollection -Path (Join-Path $repoRoot 'autonomy/tasks.json')
+Test-GoalCollection -Path (Join-Path $repoRoot 'autonomy/goals.json')
+Test-ProposalCollection -Path (Join-Path $repoRoot 'autonomy/proposals.json')
+Test-SettingsDocument -Path (Join-Path $repoRoot 'autonomy/settings.json')
+Test-ResultsDocument -Path (Join-Path $repoRoot 'autonomy/results.json')
 Test-BlockerCollection -Path (Join-Path $repoRoot 'autonomy/blockers.json')
 
 Invoke-CliHarness
 
-Write-Host 'verify.ps1 completed successfully.'
+Write-Host 'Install verify passed.'

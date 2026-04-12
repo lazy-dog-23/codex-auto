@@ -1,9 +1,10 @@
 {
-  "name": "codex-supervisor",
+  "name": "codex-autonomy",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
+    "codex-autonomy": "dist/cli.js",
     "codex-supervisor": "dist/cli.js"
   },
   "scripts": {

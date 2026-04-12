@@ -1,6 +1,6 @@
 ---
 name: autonomy-work
-description: Pick one ready task, make the smallest change that satisfies it, verify the result, and stop.
+description: Pick one ready task, make the smallest change that satisfies it, verify and review the result, and stop.
 ---
 
 # autonomy-work
@@ -9,18 +9,19 @@ Use this skill when you are executing a single ready task in a dedicated worktre
 
 ## Responsibilities
 
-- Read `autonomy/goal.md`, `autonomy/tasks.json`, `autonomy/state.json`, and `autonomy/blockers.json`.
+- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.
 - Select exactly one `ready` task.
 - Make the smallest possible change for that task.
-- Run `scripts/verify.ps1`.
+- Run `scripts/verify.ps1` and then `scripts/review.ps1`.
+- If verify and review pass and there is a diff, commit only on `codex/autonomy` with the autonomy commit format.
 - Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.
 - Write `autonomy/*.json` via atomic temp-file then rename semantics.
-- Update task status and append one journal entry.
+- Update task status, review status, result summary, and append one journal entry.
 
 ## Guardrails
 
 - Do not pick a second task in the same run.
-- Do not auto commit, push, or deploy.
+- Do not push or deploy.
 - Do not continue after a verification failure or real ambiguity.
 - If the background worktree is dirty, set `review_pending` and stop.
 

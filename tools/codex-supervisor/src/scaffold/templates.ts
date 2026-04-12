@@ -7,10 +7,10 @@ export function getAgentsMarkdown(): string {
     "## 硬规则",
     "",
     "1. 一次只处理一个任务，禁止并行拿多个任务。",
-    "2. 唯一验收门是 `scripts/verify.ps1`。",
+    "2. `scripts/verify.ps1` 是 worker 的唯一验收门。",
     "3. 只改必要源文件和 `autonomy/*`，不要扩散到无关区域。",
     "4. 遇到歧义、冲突、缺失上下文时，先写 blocker，再停止。",
-    "5. 绝不自动 `commit`、`push` 或 `deploy`。",
+    "5. 手工 `commit`、`push`、`deploy` 统统禁止；自动提交只允许自治流程在 `codex/autonomy` 分支上执行。",
     "6. 所有写入 `autonomy/*` 的动作，先拿 `autonomy/locks/cycle.lock`。",
     "7. `autonomy/*` 下的 JSON 必须原子写入，时间统一用 UTC ISO 8601，路径统一用 repo-relative forward-slash。",
     "",
@@ -20,16 +20,23 @@ export function getAgentsMarkdown(): string {
     "- Worker 每轮只拿一个 `ready` 任务，做最小改动，跑验证，更新状态后停止。",
     "- 第一次验证失败记为 `verify_failed`；第二次失败或真实歧义记为 `blocked` 并新增 blocker。",
     "- dirty background worktree 立即置为 `review_pending` 并停机。",
+    "- Reviewer 运行 `scripts/review.ps1` 做效果检查和结论收口，不扩大任务范围。",
+    "- Reporter 只回传摘要，详细运行记录留在 Inbox 和 journal。",
+    "- Sprint runner 只推进单个任务闭环，遇到 blocker、review_pending 或无任务时停下。",
     "- 非 Git 目录允许 `bootstrap`，但不允许进入可运行 automation 态。",
     "",
     "## Skills",
     "",
     "- `.agents/skills/$autonomy-plan/SKILL.md`",
     "- `.agents/skills/$autonomy-work/SKILL.md`",
+    "- `.agents/skills/$autonomy-intake/SKILL.md`",
+    "- `.agents/skills/$autonomy-review/SKILL.md`",
+    "- `.agents/skills/$autonomy-report/SKILL.md`",
+    "- `.agents/skills/$autonomy-sprint/SKILL.md`",
     "",
     "## Shared Environment",
     "",
-    "- `.codex/environments/environment.toml` 由 repo 共享，包含 Windows setup script，以及 `verify` 和 `smoke` 两个 actions。",
+    "- `.codex/environments/environment.toml` 由 repo 共享，包含 Windows setup script，以及 `verify`、`smoke` 和 `review` 三个 actions。",
   ].join("\n");
 }
 
@@ -37,7 +44,7 @@ export function getAutonomyPlanSkillMarkdown(): string {
   return [
     "---",
     "name: autonomy-plan",
-    "description: Read the autonomy goal and state, keep the queued/ready window within policy, and update autonomy files without touching business code.",
+    "description: Read the active goal queue and state, keep the ready window within policy, and update autonomy files without touching business code.",
     "---",
     "",
     "# autonomy-plan",
@@ -46,18 +53,20 @@ export function getAutonomyPlanSkillMarkdown(): string {
     "",
     "## Responsibilities",
     "",
-    "- Read `autonomy/goal.md`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and any directly relevant source hints.",
-    "- Decide which eligible tasks should be `ready` and which should stay `queued`.",
-    "- Keep at most 5 tasks in `ready`.",
+    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/proposals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.",
+    "- Keep at most 5 tasks in `ready` for the current active goal.",
+    "- If a goal is still `awaiting_confirmation`, update only `autonomy/proposals.json` and do not materialize tasks yet.",
+    "- If the goal is `approved` or `active`, rebalance only inside that approved boundary.",
     "- Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.",
     "- Write `autonomy/*.json` via atomic temp-file then rename semantics.",
-    "- Update only autonomy state and journal entries.",
+    "- Update only autonomy state, proposal, result, and journal entries.",
     "",
     "## Guardrails",
     "",
     "- Do not edit business code.",
     "- Do not take implementation ownership of a worker task.",
     "- Do not bypass blockers or dependencies.",
+    "- Do not expand scope, change acceptance, or relax constraints without a blocker.",
     "- If the next step is unclear, write a blocker and stop.",
     "",
     "## Output",
@@ -73,7 +82,7 @@ export function getAutonomyWorkSkillMarkdown(): string {
   return [
     "---",
     "name: autonomy-work",
-    "description: Pick one ready task, make the smallest change that satisfies it, verify the result, and stop.",
+    "description: Pick one ready task, make the smallest change that satisfies it, verify and review the result, and stop.",
     "---",
     "",
     "# autonomy-work",
@@ -82,18 +91,19 @@ export function getAutonomyWorkSkillMarkdown(): string {
     "",
     "## Responsibilities",
     "",
-    "- Read `autonomy/goal.md`, `autonomy/tasks.json`, `autonomy/state.json`, and `autonomy/blockers.json`.",
+    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.",
     "- Select exactly one `ready` task.",
     "- Make the smallest possible change for that task.",
-    "- Run `scripts/verify.ps1`.",
+    "- Run `scripts/verify.ps1` and then `scripts/review.ps1`.",
+    "- If verify and review pass and there is a diff, commit only on `codex/autonomy` with the autonomy commit format.",
     "- Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.",
     "- Write `autonomy/*.json` via atomic temp-file then rename semantics.",
-    "- Update task status and append one journal entry.",
+    "- Update task status, review status, result summary, and append one journal entry.",
     "",
     "## Guardrails",
     "",
     "- Do not pick a second task in the same run.",
-    "- Do not auto commit, push, or deploy.",
+    "- Do not push or deploy.",
     "- Do not continue after a verification failure or real ambiguity.",
     "- If the background worktree is dirty, set `review_pending` and stop.",
     "",
@@ -105,32 +115,164 @@ export function getAutonomyWorkSkillMarkdown(): string {
   ].join("\n");
 }
 
+export function getAutonomyIntakeSkillMarkdown(): string {
+  return [
+    "---",
+    "name: autonomy-intake",
+    "description: Normalize a user goal into repo-local autonomy intent and capture the smallest useful intake artifacts.",
+    "---",
+    "",
+    "# autonomy-intake",
+    "",
+    "Use this skill when a natural-language request needs to be converted into the repo's current autonomy objective.",
+    "",
+    "## Responsibilities",
+    "",
+    "- Read the current `autonomy/goal.md` and existing journal entries before writing anything.",
+    "- Turn the user request into a concise objective, constraints, and success criteria.",
+    "- Keep the intake focused on the current repository and current thread.",
+    "- Update only the repo-local intake artifacts that already exist.",
+    "",
+    "## Guardrails",
+    "",
+    "- Do not edit application code.",
+    "- Do not expand scope beyond the user request without a blocker.",
+    "- Do not invent execution details that belong to worker or reviewer passes.",
+  ].join("\n");
+}
+
+export function getAutonomyReviewSkillMarkdown(): string {
+  return [
+    "---",
+    "name: autonomy-review",
+    "description: Run the review action, evaluate user-visible behavior, and record follow-up needs without touching unrelated code.",
+    "---",
+    "",
+    "# autonomy-review",
+    "",
+    "Use this skill when a task has reached a reviewable state and needs an effect-level check.",
+    "",
+    "## Responsibilities",
+    "",
+    "- Read the current goal, task, and latest verification context.",
+    "- Run `scripts/review.ps1` and interpret the result in plain language.",
+    "- Record whether the change is acceptable or needs follow-up.",
+    "- Keep the review bounded to the current task.",
+    "",
+    "## Guardrails",
+    "",
+    "- Do not broaden the scope into new implementation work.",
+    "- Do not replace verification with a manual eyeball check unless the script already does that.",
+    "- Do not continue after a genuine blocker.",
+  ].join("\n");
+}
+
+export function getAutonomyReportSkillMarkdown(): string {
+  return [
+    "---",
+    "name: autonomy-report",
+    "description: Summarize the current autonomy state for the thread and Inbox without changing code.",
+    "---",
+    "",
+    "# autonomy-report",
+    "",
+    "Use this skill when the user wants a concise status update from the automation run.",
+    "",
+    "## Responsibilities",
+    "",
+    "- Read the latest autonomy state, recent verification result, and journal entry.",
+    "- Summarize the current goal, current task, latest verify/review outcome, and blockers.",
+    "- Keep the report short and actionable.",
+    "",
+    "## Guardrails",
+    "",
+    "- Do not modify business code.",
+    "- Do not change task state unless the reporting workflow explicitly owns it.",
+    "- Do not invent commit details or review conclusions.",
+  ].join("\n");
+}
+
+export function getAutonomySprintSkillMarkdown(): string {
+  return [
+    "---",
+    "name: autonomy-sprint",
+    "description: Kick off and continue a single autonomy goal in short, bounded execution loops.",
+    "---",
+    "",
+    "# autonomy-sprint",
+    "",
+    "Use this skill when the goal should start immediately and keep moving in short cycles.",
+    "",
+    "## Responsibilities",
+    "",
+    "- Read the current goal, task queue, and most recent result.",
+    "- Start with one immediate kickoff loop when the goal is first approved.",
+    "- Move through plan, work, review, and report in a single bounded pass.",
+    "- Stop when the goal is blocked, completed, or there is nothing eligible to do.",
+    "",
+    "## Guardrails",
+    "",
+    "- Do not pick up a second task in the same loop.",
+    "- Do not keep running after a blocker or review_pending condition.",
+    "- Do not broaden the goal beyond its approved boundaries.",
+  ].join("\n");
+}
+
 export function getDefaultGoalMarkdown(): string {
   return [
     "# Objective",
     "",
-    "建立一个 Windows 原生 Codex 自治项目控制面，所有自治状态都由 repo 内文件驱动，所有运行规则都明确、可校验、可恢复。",
+    "建立一个可安装到任意本地仓库的 Windows 原生 Codex 自治产品，所有自治状态都由 repo 内文件驱动，所有运行规则都明确、可校验、可恢复。",
     "",
     "## Success Criteria",
     "",
     "- Codex app 能读取 repo 级 `AGENTS.md` 和 repo skills。",
-    "- `.codex/environments/environment.toml` 能定义 Windows setup script，以及 `verify` 和 `smoke` 两个 actions。",
+    "- `.codex/environments/environment.toml` 能定义 Windows setup script，以及 `verify`、`smoke` 和 `review` 三个 actions。",
     "- `scripts/setup.windows.ps1` 可重复执行且不覆盖已有内容。",
-    "- `scripts/verify.ps1` 是唯一正式验收门。",
+    "- `scripts/verify.ps1` 是 worker 的正式验收门，`scripts/review.ps1` 负责效果检查。",
     "",
     "## Constraints",
     "",
+    "- 只通过 repo 内文件和本地脚本驱动自治。",
     "- 不触碰 Codex 内部数据库、automation TOML、SQLite 或其他未公开接口。",
-    "- 不自动 `commit`、`push` 或 `deploy`。",
+    "- 手工 `commit`、`push`、`deploy` 仍然禁止；自动提交只允许自治流程在 `codex/autonomy` 分支上执行。",
     "- 所有写入 `autonomy/*` 的动作都必须先拿 `autonomy/locks/cycle.lock`。",
     "- 时间统一为 UTC ISO 8601，路径统一为 repo-relative forward-slash。",
     "",
     "## Out of Scope",
     "",
     "- GUI dashboard。",
-    "- 自动提交、自动推送、自动部署。",
+    "- 自动推送、自动部署。",
     "- Windows hooks。",
     "- 直接操控 Codex app 内部状态。",
+  ].join("\n");
+}
+
+export function getInstallGoalMarkdown(): string {
+  return [
+    "# Objective",
+    "",
+    "把 `codex-autonomy` 安装到当前仓库，形成 repo-local 的自治控制面骨架，并让后续 worker 可以在同一套文件约定下继续推进。",
+    "",
+    "## Success Criteria",
+    "",
+    "- 目标仓库能直接看到 repo 级 `AGENTS.md` 和 repo skills。",
+    "- `.codex/environments/environment.toml` 能定义 Windows setup script，以及 `verify`、`smoke` 和 `review` 三个 actions。",
+    "- `scripts/setup.windows.ps1`、`scripts/verify.ps1`、`scripts/smoke.ps1`、`scripts/review.ps1` 都存在且可重复执行。",
+    "- `autonomy/goal.md` 和 `autonomy/journal.md` 已放入仓库，供后续自治循环继续补全。",
+    "",
+    "## Constraints",
+    "",
+    "- 只写目标仓库根目录内的控制面文件。",
+    "- 保留现有用户文件，不覆盖已有内容。",
+    "- 不触碰 Codex 内部数据库、automation TOML、SQLite 或其他未公开接口。",
+    "- 时间统一为 UTC ISO 8601，路径统一为 repo-relative forward-slash。",
+    "",
+    "## Out of Scope",
+    "",
+    "- GUI dashboard。",
+    "- 直接操控 Codex app 内部状态。",
+    "- 自动推送、自动部署。",
   ].join("\n");
 }
 
@@ -152,11 +294,513 @@ export function getDefaultJournalMarkdown(): string {
   ].join("\n");
 }
 
+export function getInstallVerifyScriptTemplate(): string {
+  return String.raw`[CmdletBinding()]
+param()
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function Assert-True {
+    param(
+        [Parameter(Mandatory)][bool]$Condition,
+        [Parameter(Mandatory)][string]$Message
+    )
+    if (-not $Condition) {
+        throw $Message
+    }
+}
+
+function Assert-PropertyExists {
+    param(
+        [Parameter(Mandatory)]$Item,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Context = ''
+    )
+    $hasProperty = $Item.PSObject.Properties.Name -contains $Name
+    $contextLabel = if ([string]::IsNullOrWhiteSpace($Context)) { '' } else { "$Context " }
+    Assert-True $hasProperty "Missing required key '$Name' in $contextLabel$Path."
+}
+
+function Read-Toml {
+    param([Parameter(Mandatory)][string]$Path)
+    $lines = Get-Content -LiteralPath $Path
+    $result = [ordered]@{
+        version = $null
+        setup = [ordered]@{}
+        actions = @()
+    }
+    $currentSection = $null
+    $currentAction = $null
+
+    foreach ($rawLine in $lines) {
+        $line = $rawLine.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) {
+            continue
+        }
+
+        switch -Regex ($line) {
+            '^\[setup\]$' {
+                $currentSection = 'setup'
+                $currentAction = $null
+                continue
+            }
+            '^\[\[actions\]\]$' {
+                if ($null -ne $currentAction -and $currentAction.Count -gt 0) {
+                    $result.actions += [pscustomobject]$currentAction
+                }
+                $currentSection = 'actions'
+                $currentAction = [ordered]@{}
+                continue
+            }
+            '^version\s*=\s*(\d+)$' {
+                $result.version = [int]$Matches[1]
+                continue
+            }
+            '^(?<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"(?<value>.*)"$' {
+                $key = $Matches.key
+                $value = $Matches.value
+                if ($currentSection -eq 'actions' -and $null -ne $currentAction) {
+                    $currentAction[$key] = $value
+                } elseif ($currentSection -eq 'setup') {
+                    $result.setup[$key] = $value
+                } else {
+                    $result[$key] = $value
+                }
+                continue
+            }
+            default {
+                throw "Unsupported TOML line in $($Path): $line"
+            }
+        }
+    }
+
+    if ($null -ne $currentAction -and $currentAction.Count -gt 0) {
+        $result.actions += [pscustomobject]$currentAction
+    }
+
+    $result.setup = [pscustomobject]$result.setup
+    $result.actions = @($result.actions)
+
+    return [pscustomobject]$result
+}
+
+function Read-SimpleTomlMap {
+    param([Parameter(Mandatory)][string]$Path)
+    $lines = Get-Content -LiteralPath $Path
+    $result = [ordered]@{}
+    $currentSection = ''
+
+    foreach ($rawLine in $lines) {
+        $line = $rawLine.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) {
+            continue
+        }
+
+        if ($line -match '^\[(?<name>[^\[\]]+)\]$') {
+            $currentSection = $Matches.name.Trim()
+            continue
+        }
+
+        if ($line -match '^\[\[') {
+            throw "Unsupported TOML array-of-tables in $($Path): $line"
+        }
+
+        if ($line -notmatch '^(?<key>[A-Za-z0-9_.:-]+)\s*=\s*(?<value>.+)$') {
+            throw "Unsupported TOML line in $($Path): $line"
+        }
+
+        $key = $Matches.key
+        $rawValue = $Matches.value.Trim()
+
+        if ($rawValue -match '^"(.*)"$') {
+            $value = $Matches[1]
+        } elseif ($rawValue -eq 'true') {
+            $value = $true
+        } elseif ($rawValue -eq 'false') {
+            $value = $false
+        } elseif ($rawValue -match '^-?\d+$') {
+            $value = [int]$rawValue
+        } else {
+            throw "Unsupported TOML value in $($Path): $line"
+        }
+
+        $fullKey = if ([string]::IsNullOrWhiteSpace($currentSection)) { $key } else { "$currentSection.$key" }
+        $result[$fullKey] = $value
+    }
+
+    return $result
+}
+
+function Test-RequiredText {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Patterns
+    )
+    $text = Get-Content -LiteralPath $Path -Raw
+    foreach ($pattern in $Patterns) {
+        Assert-True ($text -match $pattern) "Required pattern '$pattern' was not found in $Path."
+    }
+}
+
+function Test-StateDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($key in @(
+        'version',
+        'current_goal_id',
+        'current_task_id',
+        'cycle_status',
+        'run_mode',
+        'last_planner_run_at',
+        'last_worker_run_at',
+        'last_result',
+        'consecutive_worker_failures',
+        'needs_human_review',
+        'open_blocker_count',
+        'report_thread_id',
+        'autonomy_branch',
+        'sprint_active',
+        'paused',
+        'pause_reason'
+    )) {
+        Assert-PropertyExists -Item $state -Name $key -Path $Path
+    }
+
+    Assert-True (@('idle','planning','working','blocked','review_pending') -contains [string]$state.cycle_status) "Invalid cycle_status in $Path."
+    Assert-True ($null -eq $state.run_mode -or @('sprint','cruise') -contains [string]$state.run_mode) "Invalid run_mode in $Path."
+    Assert-True (@('noop','planned','passed','failed','blocked') -contains [string]$state.last_result) "Invalid last_result in $Path."
+}
+
+function Test-TaskCollection {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'tasks' -Path $Path
+
+    foreach ($task in @($doc.tasks)) {
+        foreach ($key in @(
+            'id',
+            'goal_id',
+            'title',
+            'status',
+            'priority',
+            'depends_on',
+            'acceptance',
+            'file_hints',
+            'retry_count',
+            'last_error',
+            'updated_at',
+            'commit_hash',
+            'review_status'
+        )) {
+            Assert-PropertyExists -Item $task -Name $key -Path $Path -Context 'a task from'
+        }
+
+        Assert-True (@('queued','ready','in_progress','verify_failed','blocked','done') -contains [string]$task.status) "Invalid task status in $Path."
+        Assert-True (@('P0','P1','P2','P3') -contains [string]$task.priority) "Invalid task priority in $Path."
+        Assert-True (@('not_reviewed','passed','followup_required') -contains [string]$task.review_status) "Invalid review_status in $Path."
+    }
+}
+
+function Test-GoalCollection {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'goals' -Path $Path
+
+    foreach ($goal in @($doc.goals)) {
+        foreach ($key in @(
+            'id',
+            'title',
+            'objective',
+            'success_criteria',
+            'constraints',
+            'out_of_scope',
+            'status',
+            'run_mode',
+            'created_at',
+            'approved_at',
+            'completed_at'
+        )) {
+            Assert-PropertyExists -Item $goal -Name $key -Path $Path -Context 'a goal from'
+        }
+
+        Assert-True (@('draft','awaiting_confirmation','approved','active','completed','blocked','cancelled') -contains [string]$goal.status) "Invalid goal status in $Path."
+        Assert-True (@('sprint','cruise') -contains [string]$goal.run_mode) "Invalid goal run_mode in $Path."
+    }
+}
+
+function Test-ProposalCollection {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'proposals' -Path $Path
+
+    foreach ($proposal in @($doc.proposals)) {
+        foreach ($key in @(
+            'goal_id',
+            'status',
+            'summary',
+            'tasks',
+            'created_at',
+            'approved_at'
+        )) {
+            Assert-PropertyExists -Item $proposal -Name $key -Path $Path -Context 'a proposal from'
+        }
+
+        Assert-True (@('awaiting_confirmation','approved','superseded','cancelled') -contains [string]$proposal.status) "Invalid proposal status in $Path."
+
+        foreach ($task in @($proposal.tasks)) {
+            foreach ($key in @('id','title','priority','depends_on','acceptance','file_hints')) {
+                Assert-PropertyExists -Item $task -Name $key -Path $Path -Context 'a proposed task from'
+            }
+        }
+    }
+}
+
+function Test-SettingsDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $settings = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($key in @(
+        'version',
+        'install_source',
+        'initial_confirmation_required',
+        'report_surface',
+        'auto_commit',
+        'autonomy_branch',
+        'default_cruise_cadence',
+        'default_sprint_heartbeat_minutes'
+    )) {
+        Assert-PropertyExists -Item $settings -Name $key -Path $Path
+    }
+
+    Assert-True ([string]$settings.install_source -eq 'local_package') "Invalid install_source in $Path."
+    Assert-True ([string]$settings.report_surface -eq 'thread_and_inbox') "Invalid report_surface in $Path."
+    Assert-True (@('disabled','autonomy_branch') -contains [string]$settings.auto_commit) "Invalid auto_commit mode in $Path."
+
+    $cadence = $settings.default_cruise_cadence
+    foreach ($key in @('planner_hours','worker_hours','reviewer_hours')) {
+        Assert-PropertyExists -Item $cadence -Name $key -Path $Path -Context 'default_cruise_cadence from'
+    }
+}
+
+function Test-ResultsDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $results = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $results -Name 'version' -Path $Path
+
+    foreach ($entryName in @('planner','worker','review','commit','reporter')) {
+        Assert-PropertyExists -Item $results -Name $entryName -Path $Path
+        $entry = $results.$entryName
+        foreach ($key in @('status','goal_id','summary')) {
+            Assert-PropertyExists -Item $entry -Name $key -Path $Path -Context "$entryName entry from"
+        }
+
+        Assert-True (@('not_run','noop','planned','passed','failed','blocked','sent','skipped') -contains [string]$entry.status) "Invalid $entryName result status in $Path."
+    }
+}
+
+function Test-BlockerCollection {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'blockers' -Path $Path
+
+    foreach ($blocker in @($doc.blockers)) {
+        foreach ($key in @(
+            'id',
+            'task_id',
+            'question',
+            'severity',
+            'status',
+            'resolution',
+            'opened_at',
+            'resolved_at'
+        )) {
+            Assert-PropertyExists -Item $blocker -Name $key -Path $Path -Context 'a blocker from'
+        }
+
+        Assert-True (@('low','medium','high') -contains [string]$blocker.severity) "Invalid blocker severity in $Path."
+        Assert-True (@('open','resolved') -contains [string]$blocker.status) "Invalid blocker status in $Path."
+    }
+}
+
+function Invoke-CliHarness {
+    $cliDir = Join-Path $repoRoot 'tools/codex-supervisor'
+    $packageJson = Join-Path $cliDir 'package.json'
+    if (-not (Test-Path -LiteralPath $packageJson)) {
+        return
+    }
+
+    $tsc = Join-Path $cliDir 'node_modules/.bin/tsc.cmd'
+    $vitestModule = Join-Path $cliDir 'node_modules/vitest/vitest.mjs'
+    Assert-True (Test-Path -LiteralPath $tsc) 'Missing local TypeScript CLI. Run scripts/setup.windows.ps1 first.'
+    Assert-True (Test-Path -LiteralPath $vitestModule) 'Missing local Vitest module. Run scripts/setup.windows.ps1 first.'
+
+    Push-Location $cliDir
+    try {
+        & $tsc -p tsconfig.json --noEmit
+        if ($LASTEXITCODE -ne 0) {
+            throw "TypeScript validation failed with exit code $LASTEXITCODE."
+        }
+
+        & node $vitestModule run
+        if ($LASTEXITCODE -ne 0) {
+            throw "Vitest failed with exit code $LASTEXITCODE."
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+Write-Host 'Verifying repo control surface...'
+
+foreach ($requiredPath in @(
+    'AGENTS.md',
+    '.agents/skills/$autonomy-plan/SKILL.md',
+    '.agents/skills/$autonomy-work/SKILL.md',
+    '.agents/skills/$autonomy-intake/SKILL.md',
+    '.agents/skills/$autonomy-review/SKILL.md',
+    '.agents/skills/$autonomy-report/SKILL.md',
+    '.agents/skills/$autonomy-sprint/SKILL.md',
+    '.codex/environments/environment.toml',
+    '.codex/config.toml',
+    'scripts/setup.windows.ps1',
+    'scripts/verify.ps1',
+    'scripts/smoke.ps1',
+    'scripts/review.ps1',
+    'autonomy/goal.md',
+    'autonomy/journal.md',
+    'autonomy/tasks.json',
+    'autonomy/goals.json',
+    'autonomy/proposals.json',
+    'autonomy/state.json',
+    'autonomy/settings.json',
+    'autonomy/results.json',
+    'autonomy/blockers.json',
+    'autonomy/schema/tasks.schema.json',
+    'autonomy/schema/goals.schema.json',
+    'autonomy/schema/proposals.schema.json',
+    'autonomy/schema/state.schema.json',
+    'autonomy/schema/settings.schema.json',
+    'autonomy/schema/results.schema.json',
+    'autonomy/schema/blockers.schema.json',
+    'autonomy/locks'
+)) {
+    Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $requiredPath)) "Missing required path: $requiredPath"
+}
+
+Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
+    '一次只处理一个任务',
+    'scripts/verify.ps1',
+    'scripts/review.ps1',
+    'autonomy/\*',
+    'cycle\.lock',
+    'UTC ISO 8601',
+    'repo-relative forward-slash',
+    'codex/autonomy'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-plan/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-plan',
+    'autonomy/goals\.json',
+    'awaiting_confirmation',
+    'Keep at most 5 tasks in'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-work/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-work',
+    'Select exactly one',
+    'scripts/review\.ps1',
+    'codex/autonomy',
+    'review_pending'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-intake/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-intake',
+    'Normalize a user goal'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-review/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-review',
+    'scripts/review\.ps1'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-report/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-report',
+    'Summarize the current autonomy state'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-sprint/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-sprint',
+    'short, bounded execution loops'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/goal.md') -Patterns @(
+    '(?m)^# Objective',
+    '(?m)^## Success Criteria',
+    '(?m)^## Constraints',
+    '(?m)^## Out of Scope'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/journal.md') -Patterns @(
+    'Append one entry per run',
+    'Entry Template',
+    'result: planned \| passed \| failed \| blocked \| noop'
+)
+
+$environment = Read-Toml -Path (Join-Path $repoRoot '.codex/environments/environment.toml')
+Assert-True ($environment.version -eq 1) 'environment.toml version must be 1.'
+Assert-True ($environment.setup.script -match 'scripts/setup.windows.ps1') 'environment.toml setup script must point to scripts/setup.windows.ps1.'
+
+$actions = @($environment.actions)
+Assert-True ($actions.Count -ge 3) 'environment.toml must define at least three actions.'
+foreach ($requiredAction in @('verify', 'smoke', 'review')) {
+    $match = $actions | Where-Object { $_.name -eq $requiredAction } | Select-Object -First 1
+    Assert-True ($null -ne $match) "Missing action '$requiredAction' in environment.toml."
+    Assert-True ($match.command -match "scripts/$requiredAction\.ps1") "Action '$requiredAction' must point to scripts/$requiredAction.ps1."
+    Assert-True ($match.platform -eq 'windows') "Action '$requiredAction' must target windows."
+}
+
+$config = Read-SimpleTomlMap -Path (Join-Path $repoRoot '.codex/config.toml')
+Assert-True ($config.Contains('approval_policy')) 'config.toml must define a top-level approval_policy.'
+Assert-True (@('untrusted', 'on-request', 'never') -contains [string]$config['approval_policy']) 'config.toml approval_policy is invalid.'
+Assert-True ($config.Contains('sandbox_mode')) 'config.toml must define a top-level sandbox_mode.'
+Assert-True (@('read-only', 'workspace-write', 'danger-full-access') -contains [string]$config['sandbox_mode']) 'config.toml sandbox_mode is invalid.'
+Assert-True ($config.Contains('sandbox_workspace_write.network_access')) 'config.toml must define sandbox_workspace_write.network_access.'
+Assert-True ($config['sandbox_workspace_write.network_access'] -is [bool]) 'config.toml sandbox_workspace_write.network_access must be a boolean.'
+Assert-True ($config.Contains('windows.sandbox')) 'config.toml must define windows.sandbox.'
+Assert-True (@('unelevated', 'elevated') -contains [string]$config['windows.sandbox']) 'config.toml windows.sandbox is invalid.'
+
+Test-StateDocument -Path (Join-Path $repoRoot 'autonomy/state.json')
+Test-TaskCollection -Path (Join-Path $repoRoot 'autonomy/tasks.json')
+Test-GoalCollection -Path (Join-Path $repoRoot 'autonomy/goals.json')
+Test-ProposalCollection -Path (Join-Path $repoRoot 'autonomy/proposals.json')
+Test-SettingsDocument -Path (Join-Path $repoRoot 'autonomy/settings.json')
+Test-ResultsDocument -Path (Join-Path $repoRoot 'autonomy/results.json')
+Test-BlockerCollection -Path (Join-Path $repoRoot 'autonomy/blockers.json')
+
+Invoke-CliHarness
+
+Write-Host 'Install verify passed.'
+`;
+}
+
 export function getEnvironmentTomlTemplate(): string {
   return [
     "# Generated repo environment for Codex app.",
     "version = 1",
-    'name = "codex-auto"',
+    'name = "codex-autonomy"',
     "",
     "[setup]",
     'script = "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1"',
@@ -171,6 +815,12 @@ export function getEnvironmentTomlTemplate(): string {
     'name = "smoke"',
     'icon = "play"',
     'command = "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1"',
+    'platform = "windows"',
+    "",
+    "[[actions]]",
+    'name = "review"',
+    'icon = "eye"',
+    'command = "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/review.ps1"',
     'platform = "windows"',
   ].join("\n");
 }
@@ -281,42 +931,51 @@ Write-Host 'setup.windows.ps1 completed successfully.'
 
 export function getReadmeMarkdown(): string {
   return [
-    "# codex-auto",
+    "# codex-autonomy",
     "",
-    "Windows 原生 Codex 自治项目，控制面全部放在 repo 内，`codex-supervisor` 只负责初始化、体检、worktree 准备、状态汇总和 prompt 输出。",
+    "Windows 原生 Codex 自治产品，控制面全部放在 repo 内，`codex-autonomy` 作为本机本地包安装到目标仓库，线程内通过自然语言持续托管目标。",
     "",
     "## 快速开始",
     "",
     "1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。",
-    "2. 在仓库根目录运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。",
-    "3. 运行 `npm --prefix tools/codex-supervisor run build` 生成 `dist/cli.js`。",
-    "4. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是唯一正式验收门。",
-    "5. 运行 `node tools/codex-supervisor/dist/cli.js doctor` 查看环境与控制面健康状况。",
-    "6. 目录已经是 Git 仓库后，再运行 `node tools/codex-supervisor/dist/cli.js prepare-worktree` 创建专用 background worktree。",
+    "2. 在本仓库运行 `npm --prefix tools/codex-supervisor run build` 生成 `dist/cli.js`。",
+    "3. 用 `node tools/codex-supervisor/dist/cli.js install --target <repoB>` 把控制面安装到目标仓库。",
+    "4. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。",
+    "5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。",
+    "6. 在目标仓库运行 `node tools/codex-supervisor/dist/cli.js doctor` 或 `codex-autonomy doctor` 查看健康状况。",
     "",
     "## 日常命令",
     "",
-    "- `node tools/codex-supervisor/dist/cli.js bootstrap`：补齐缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。",
+    "- `node tools/codex-supervisor/dist/cli.js install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。",
+    "- `node tools/codex-supervisor/dist/cli.js bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。",
     "- `node tools/codex-supervisor/dist/cli.js doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。",
-    "- `node tools/codex-supervisor/dist/cli.js status`：汇总任务数量、当前状态、blockers、上次结果、是否适合下一轮 automation。",
+    "- `node tools/codex-supervisor/dist/cli.js intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标规范化为待确认 goal。",
+    "- `node tools/codex-supervisor/dist/cli.js approve-proposal <goal-id>`：把提案物化为任务并激活该 goal。",
+    "- `node tools/codex-supervisor/dist/cli.js status`：汇总 goal、任务、blocker、最近一次 verify/review/commit，以及是否适合下一轮 automation。",
     "- `node tools/codex-supervisor/dist/cli.js prepare-worktree`：创建或校验专用 background worktree；主仓库或 background worktree dirty 时会拒绝继续。",
-    "- `node tools/codex-supervisor/dist/cli.js emit-automation-prompts`：输出 Planner / Worker prompt 与建议 cadence。",
+    "- `node tools/codex-supervisor/dist/cli.js set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。",
+    "- `node tools/codex-supervisor/dist/cli.js review`：执行 review gate 并返回是否允许后续提交或合并。",
+    "- `node tools/codex-supervisor/dist/cli.js report`：输出当前 goal、任务、verify/review/commit 的摘要。",
+    "- `node tools/codex-supervisor/dist/cli.js pause` / `resume`：暂停或恢复自治循环。",
+    "- `node tools/codex-supervisor/dist/cli.js emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner prompts 与建议 cadence。",
+    "- `node tools/codex-supervisor/dist/cli.js merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。",
     "- `node tools/codex-supervisor/dist/cli.js unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。",
     "",
     "## Repo 控制面",
     "",
     "- `AGENTS.md`：硬规则与运行约定。",
-    "- `.agents/skills/$autonomy-plan`、`.agents/skills/$autonomy-work`：Planner / Worker repo skill。",
-    "- `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` actions。",
-    "- `autonomy/tasks.json`、`autonomy/state.json`、`autonomy/blockers.json`：任务、状态、blocker 真源。",
+    "- `.agents/skills/$autonomy-plan`、`$autonomy-work`、`$autonomy-intake`、`$autonomy-review`、`$autonomy-report`、`$autonomy-sprint`：repo skills。",
+    "- `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。",
+    "- `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。",
     "- `autonomy/journal.md`：每次 run 只追加一条记录。",
     "- `scripts/verify.ps1`：唯一验收门。",
+    "- `scripts/review.ps1`：效果检查门。",
     "",
     "## Background Worktree",
     "",
     "- 默认路径：仓库同级目录下的 `<repo-name>.__codex_bg`。",
     "- 默认分支：`codex/background`。",
-    "- supervisor 只准备和校验 worktree，不会自动 `commit`、`push` 或 `deploy`。",
+    "- 自动提交只允许进入 `codex/autonomy`，不会自动 push、PR 或 deploy。",
     "",
     "## Git safe.directory",
     "",
@@ -330,15 +989,18 @@ export function getReadmeMarkdown(): string {
     '  "tasks": [',
     "    {",
     '      "id": "task-example",',
-    '      "title": "Add a minimal smoke assertion",',
-    '      "status": "queued",',
-    '      "priority": "P1",',
-    '      "depends_on": [],',
-    '      "acceptance": ["smoke script passes"],',
-    '      "file_hints": ["scripts/smoke.ps1"],',
-    '      "retry_count": 0,',
-    '      "last_error": null,',
-    '      "updated_at": "2026-04-12T00:00:00Z"',
+      '      "goal_id": "goal-example",',
+      '      "title": "Add a minimal smoke assertion",',
+      '      "status": "queued",',
+      '      "priority": "P1",',
+      '      "depends_on": [],',
+      '      "acceptance": ["smoke script passes"],',
+      '      "file_hints": ["scripts/smoke.ps1"],',
+      '      "retry_count": 0,',
+      '      "last_error": null,',
+      '      "updated_at": "2026-04-12T00:00:00Z",',
+      '      "commit_hash": null,',
+      '      "review_status": "not_reviewed"',
     "    }",
     "  ]",
     "}",
@@ -346,347 +1008,14 @@ export function getReadmeMarkdown(): string {
     "",
     "## 运行边界",
     "",
-    "- 第一版允许改代码和跑验证，但禁止自动 `commit`、`push`、`deploy`。",
+    "- 自动提交只允许进入 `codex/autonomy`，不会自动 push、PR、merge 或 deploy。",
     "- 非 Git 目录允许 `bootstrap`，但 `status` 不会给出可运行 automation 的结论。",
-    "- `ready_for_automation=false` 常见原因包括：没有任务、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用。",
+    "- `ready_for_automation=false` 常见原因包括：没有 active goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用、目标仍在等待首次确认。",
   ].join("\n");
 }
 
 export function getVerifyScriptTemplate(): string {
-  return String.raw`[CmdletBinding()]
-param()
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-
-function Assert-True {
-    param(
-        [Parameter(Mandatory)][bool]$Condition,
-        [Parameter(Mandatory)][string]$Message
-    )
-    if (-not $Condition) {
-        throw $Message
-    }
-}
-
-function Assert-PropertyExists {
-    param(
-        [Parameter(Mandatory)]$Item,
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Path,
-        [string]$Context = ''
-    )
-    $hasProperty = $Item.PSObject.Properties.Name -contains $Name
-    $prefix = if ([string]::IsNullOrWhiteSpace($Context)) { '' } else { "$Context " }
-    Assert-True $hasProperty "Missing required key '$Name' in $prefix$Path."
-}
-
-function Read-Toml {
-    param([Parameter(Mandatory)][string]$Path)
-    $lines = Get-Content -LiteralPath $Path
-    $result = [ordered]@{
-        version = $null
-        setup = [ordered]@{}
-        actions = @()
-    }
-    $currentSection = $null
-    $currentAction = $null
-
-    foreach ($rawLine in $lines) {
-        $line = $rawLine.Trim()
-        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) {
-            continue
-        }
-
-        switch -Regex ($line) {
-            '^\[setup\]$' {
-                $currentSection = 'setup'
-                $currentAction = $null
-                continue
-            }
-            '^\[\[actions\]\]$' {
-                if ($null -ne $currentAction -and $currentAction.Count -gt 0) {
-                    $result.actions += [pscustomobject]$currentAction
-                }
-                $currentSection = 'actions'
-                $currentAction = [ordered]@{}
-                continue
-            }
-            '^version\s*=\s*(\d+)$' {
-                $result.version = [int]$Matches[1]
-                continue
-            }
-            '^(?<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"(?<value>.*)"$' {
-                $key = $Matches.key
-                $value = $Matches.value
-                if ($currentSection -eq 'actions' -and $null -ne $currentAction) {
-                    $currentAction[$key] = $value
-                } elseif ($currentSection -eq 'setup') {
-                    $result.setup[$key] = $value
-                } else {
-                    $result[$key] = $value
-                }
-                continue
-            }
-            default {
-                throw "Unsupported TOML line in $Path: $line"
-            }
-        }
-    }
-
-    if ($null -ne $currentAction -and $currentAction.Count -gt 0) {
-        $result.actions += [pscustomobject]$currentAction
-    }
-
-    $result.setup = [pscustomobject]$result.setup
-    $result.actions = @($result.actions)
-
-    return [pscustomobject]$result
-}
-
-function Read-SimpleTomlMap {
-    param([Parameter(Mandatory)][string]$Path)
-    $lines = Get-Content -LiteralPath $Path
-    $result = [ordered]@{}
-    $currentSection = ''
-
-    foreach ($rawLine in $lines) {
-        $line = $rawLine.Trim()
-        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) {
-            continue
-        }
-
-        if ($line -match '^\[(?<name>[^\[\]]+)\]$') {
-            $currentSection = $Matches.name.Trim()
-            continue
-        }
-
-        if ($line -match '^\[\[') {
-            throw "Unsupported TOML array-of-tables in \${Path}: $line"
-        }
-
-        if ($line -notmatch '^(?<key>[A-Za-z0-9_.:-]+)\s*=\s*(?<value>.+)$') {
-            throw "Unsupported TOML line in \${Path}: $line"
-        }
-
-        $key = $Matches.key
-        $rawValue = $Matches.value.Trim()
-
-        if ($rawValue -match '^"(.*)"$') {
-            $value = $Matches[1]
-        } elseif ($rawValue -eq 'true') {
-            $value = $true
-        } elseif ($rawValue -eq 'false') {
-            $value = $false
-        } elseif ($rawValue -match '^-?\d+$') {
-            $value = [int]$rawValue
-        } else {
-            throw "Unsupported TOML value in \${Path}: $line"
-        }
-
-        $fullKey = if ([string]::IsNullOrWhiteSpace($currentSection)) { $key } else { "$currentSection.$key" }
-        $result[$fullKey] = $value
-    }
-
-    return $result
-}
-
-function Test-RequiredText {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string[]]$Patterns
-    )
-    $text = Get-Content -LiteralPath $Path -Raw
-    foreach ($pattern in $Patterns) {
-        Assert-True ($text -match $pattern) "Required pattern '$pattern' was not found in $Path."
-    }
-}
-
-function Test-StateDocument {
-    param([Parameter(Mandatory)][string]$Path)
-    $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    foreach ($key in @(
-        'version',
-        'current_task_id',
-        'cycle_status',
-        'last_planner_run_at',
-        'last_worker_run_at',
-        'last_result',
-        'consecutive_worker_failures',
-        'needs_human_review',
-        'open_blocker_count'
-    )) {
-        Assert-PropertyExists -Item $state -Name $key -Path $Path
-    }
-}
-
-function Test-TaskCollection {
-    param([Parameter(Mandatory)][string]$Path)
-    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
-    Assert-PropertyExists -Item $doc -Name 'tasks' -Path $Path
-    foreach ($task in @($doc.tasks)) {
-        foreach ($key in @(
-            'id',
-            'title',
-            'status',
-            'priority',
-            'depends_on',
-            'acceptance',
-            'file_hints',
-            'retry_count',
-            'last_error',
-            'updated_at'
-        )) {
-            Assert-PropertyExists -Item $task -Name $key -Path $Path -Context 'a task from'
-        }
-        Assert-True (@('queued','ready','in_progress','verify_failed','blocked','done') -contains $task.status) "Invalid task status in $Path."
-    }
-}
-
-function Test-BlockerCollection {
-    param([Parameter(Mandatory)][string]$Path)
-    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
-    Assert-PropertyExists -Item $doc -Name 'blockers' -Path $Path
-    foreach ($blocker in @($doc.blockers)) {
-        foreach ($key in @(
-            'id',
-            'task_id',
-            'question',
-            'severity',
-            'status',
-            'resolution',
-            'opened_at',
-            'resolved_at'
-        )) {
-            Assert-PropertyExists -Item $blocker -Name $key -Path $Path -Context 'a blocker from'
-        }
-        Assert-True (@('open','resolved') -contains $blocker.status) "Invalid blocker status in $Path."
-    }
-}
-
-function Invoke-CliHarness {
-    $cliDir = Join-Path $repoRoot 'tools/codex-supervisor'
-    $packageJson = Join-Path $cliDir 'package.json'
-    if (-not (Test-Path -LiteralPath $packageJson)) {
-        return
-    }
-
-    $tsc = Join-Path $cliDir 'node_modules/.bin/tsc.cmd'
-    $vitest = Join-Path $cliDir 'node_modules/.bin/vitest.cmd'
-    Assert-True (Test-Path -LiteralPath $tsc) 'Missing local TypeScript CLI. Run scripts/setup.windows.ps1 first.'
-    Assert-True (Test-Path -LiteralPath $vitest) 'Missing local Vitest CLI. Run scripts/setup.windows.ps1 first.'
-
-    Push-Location $cliDir
-    try {
-        & $tsc -p tsconfig.json --noEmit
-        if ($LASTEXITCODE -ne 0) {
-            throw "TypeScript validation failed with exit code $LASTEXITCODE."
-        }
-
-        & $vitest run
-        if ($LASTEXITCODE -ne 0) {
-            throw "vitest failed with exit code $LASTEXITCODE."
-        }
-    } finally {
-        Pop-Location
-    }
-}
-
-Write-Host 'Verifying repo control surface...'
-
-foreach ($requiredPath in @(
-    'AGENTS.md',
-    '.agents/skills/$autonomy-plan/SKILL.md',
-    '.agents/skills/$autonomy-work/SKILL.md',
-    '.codex/environments/environment.toml',
-    '.codex/config.toml',
-    'scripts/setup.windows.ps1',
-    'scripts/smoke.ps1',
-    'scripts/verify.ps1',
-    'autonomy/goal.md',
-    'autonomy/journal.md',
-    'autonomy/tasks.json',
-    'autonomy/state.json',
-    'autonomy/blockers.json',
-    'autonomy/schema/tasks.schema.json',
-    'autonomy/schema/state.schema.json',
-    'autonomy/schema/blockers.schema.json'
-)) {
-    Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $requiredPath)) "Missing required path: $requiredPath"
-}
-
-Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
-    '一次只处理一个任务',
-    'scripts/verify.ps1',
-    'autonomy/\*',
-    'cycle\.lock',
-    'UTC ISO 8601',
-    'repo-relative forward-slash',
-    '绝不自动 \`commit\`、\`push\` 或 \`deploy\`'
-)
-
-Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-plan/SKILL.md') -Patterns @(
-    '(?m)^---',
-    '(?m)^name:\s*autonomy-plan',
-    'queued',
-    'Keep at most 5 tasks in \`ready\`'
-)
-
-Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-work/SKILL.md') -Patterns @(
-    '(?m)^---',
-    '(?m)^name:\s*autonomy-work',
-    'Select exactly one \`ready\` task',
-    'review_pending'
-)
-
-Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/goal.md') -Patterns @(
-    '(?m)^# Objective',
-    '(?m)^## Success Criteria',
-    '(?m)^## Constraints',
-    '(?m)^## Out of Scope'
-)
-
-Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/journal.md') -Patterns @(
-    'Append one entry per run',
-    'Entry Template',
-    'result: planned \| passed \| failed \| blocked \| noop'
-)
-
-$environment = Read-Toml -Path (Join-Path $repoRoot '.codex/environments/environment.toml')
-Assert-True ($environment.version -eq 1) 'environment.toml version must be 1.'
-Assert-True ($environment.setup.script -match 'scripts/setup.windows.ps1') 'environment.toml setup script must point to scripts/setup.windows.ps1.'
-
-$actions = @($environment.actions)
-Assert-True ($actions.Count -ge 2) 'environment.toml must define at least two actions.'
-foreach ($requiredAction in @('verify', 'smoke')) {
-    $match = $actions | Where-Object { $_.name -eq $requiredAction } | Select-Object -First 1
-    Assert-True ($null -ne $match) "Missing action '$requiredAction' in environment.toml."
-    Assert-True ($match.command -match "scripts/$requiredAction\.ps1") "Action '$requiredAction' must point to scripts/$requiredAction.ps1."
-    Assert-True ($match.platform -eq 'windows') "Action '$requiredAction' must target windows."
-}
-
-$config = Read-SimpleTomlMap -Path (Join-Path $repoRoot '.codex/config.toml')
-Assert-True ($config.Contains('approval_policy')) 'config.toml must define a top-level approval_policy.'
-Assert-True (@('untrusted', 'on-request', 'never') -contains [string]$config['approval_policy']) 'config.toml approval_policy is invalid.'
-Assert-True ($config.Contains('sandbox_mode')) 'config.toml must define a top-level sandbox_mode.'
-Assert-True (@('read-only', 'workspace-write', 'danger-full-access') -contains [string]$config['sandbox_mode']) 'config.toml sandbox_mode is invalid.'
-Assert-True ($config.Contains('sandbox_workspace_write.network_access')) 'config.toml must define sandbox_workspace_write.network_access.'
-Assert-True ($config['sandbox_workspace_write.network_access'] -is [bool]) 'config.toml sandbox_workspace_write.network_access must be a boolean.'
-Assert-True ($config.Contains('windows.sandbox')) 'config.toml must define windows.sandbox.'
-Assert-True (@('unelevated', 'elevated') -contains [string]$config['windows.sandbox']) 'config.toml windows.sandbox is invalid.'
-
-Test-StateDocument -Path (Join-Path $repoRoot 'autonomy/state.json')
-Test-TaskCollection -Path (Join-Path $repoRoot 'autonomy/tasks.json')
-Test-BlockerCollection -Path (Join-Path $repoRoot 'autonomy/blockers.json')
-
-Invoke-CliHarness
-
-Write-Host 'verify.ps1 completed successfully.'
-`;
+  return getInstallVerifyScriptTemplate();
 }
 
 export function getSmokeScriptTemplate(): string {
@@ -710,6 +1039,7 @@ Assert-Exists (Join-Path $repoRoot 'AGENTS.md')
 Assert-Exists $environmentFile
 Assert-Exists (Join-Path $repoRoot 'scripts/verify.ps1')
 Assert-Exists (Join-Path $repoRoot 'scripts/setup.windows.ps1')
+Assert-Exists (Join-Path $repoRoot 'scripts/review.ps1')
 
 $environmentText = Get-Content -LiteralPath $environmentFile -Raw
 if ($environmentText -notmatch 'setup.windows.ps1') {
@@ -721,7 +1051,39 @@ if ($environmentText -notmatch 'name = "verify"') {
 if ($environmentText -notmatch 'name = "smoke"') {
     throw 'environment.toml is missing the smoke action.'
 }
+if ($environmentText -notmatch 'name = "review"') {
+    throw 'environment.toml is missing the review action.'
+}
 
 Write-Host 'Smoke precheck passed.'
+`;
+}
+
+export function getReviewScriptTemplate(): string {
+  return String.raw`[CmdletBinding()]
+param()
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function Assert-Exists {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Missing required path: $Path"
+    }
+}
+
+Assert-Exists (Join-Path $repoRoot 'scripts/smoke.ps1')
+
+& (Join-Path $repoRoot 'scripts/smoke.ps1')
+if (-not $?) {
+    $exitCodeVar = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+    $exitCode = if ($null -eq $exitCodeVar) { 1 } else { [int]$exitCodeVar.Value }
+    throw "smoke.ps1 failed with exit code $exitCode."
+}
+
+Write-Host 'Review precheck passed.'
 `;
 }

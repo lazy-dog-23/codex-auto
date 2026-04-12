@@ -51,8 +51,12 @@ export async function runUnblock(taskId: string, repoRoot = process.cwd()): Prom
     const now = new Date().toISOString();
     const taskIndex = buildTaskIndex(tasksDoc.tasks);
     const dependenciesSatisfied = areDependenciesSatisfied(targetTask, taskIndex);
-    const readyCount = tasksDoc.tasks.filter((task) => task.id !== taskId && task.status === "ready").length;
+    const readyCount = tasksDoc.tasks.filter(
+      (task) => task.id !== taskId && task.status === "ready" && task.goal_id === targetTask.goal_id,
+    ).length;
     const decision = decideUnblockRestoration({
+      taskGoalId: targetTask.goal_id,
+      currentGoalId: state.current_goal_id,
       openBlockerCountForTask: countOpenBlockersForTask(updatedBlockers.blockers, taskId),
       dependenciesSatisfied,
       readyCount,
@@ -127,6 +131,7 @@ function buildStateAfterUnblock(options: {
     current_task_id: null,
     cycle_status: openBlockersRemain ? "blocked" : "idle",
     last_result: openBlockersRemain ? "blocked" : (options.changed ? "planned" : "noop"),
+    sprint_active: openBlockersRemain ? false : baseState.sprint_active,
   };
 }
 

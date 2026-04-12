@@ -29,3 +29,15 @@ Append one entry per run. Do not rewrite old entries.
 - summary: Pinned repo defaults to gpt-5.4/xhigh/full-access, hardened status and doctor against redirected background worktrees, and closed the remaining redirected-path review findings.
 - verify: npm run build; npm test (33 passed); scripts/verify.ps1 passed; codex-supervisor doctor/status/prepare-worktree exercised
 - blocker: none
+
+## 2026-04-12T18:05:54.854Z | supervisor | task: task-codex-autonomy-v2
+- result: passed
+- summary: Synchronized the root repo control plane to the codex-autonomy v2 contract, including goal queue state, new skills, upgraded verify/review scripts, and schema artifacts.
+- verify: npm run build; node ./node_modules/vitest/vitest.mjs run
+- blocker: none
+
+## 2026-04-12T18:12:38.089Z | supervisor | task: task-codex-autonomy-v2
+- result: passed
+- summary: Closed the autonomy-branch merge gate bug, reran the full CLI test suite, and verified the root control plane with verify plus review.
+- verify: npm run build; node ./node_modules/vitest/vitest.mjs run; pwsh -File scripts/verify.ps1; pwsh -File scripts/review.ps1
+- blocker: none

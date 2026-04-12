@@ -1,6 +1,6 @@
 ---
 name: autonomy-plan
-description: Read the autonomy goal and state, keep the queued/ready window within policy, and update autonomy files without touching business code.
+description: Read the active goal queue and state, keep the ready window within policy, and update autonomy files without touching business code.
 ---
 
 # autonomy-plan
@@ -9,18 +9,20 @@ Use this skill when you need to plan the next automation cycle for the repo cont
 
 ## Responsibilities
 
-- Read `autonomy/goal.md`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and any directly relevant source hints.
-- Decide which eligible tasks should be `ready` and which should stay `queued`.
-- Keep at most 5 tasks in `ready`.
+- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/proposals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.
+- Keep at most 5 tasks in `ready` for the current active goal.
+- If a goal is still `awaiting_confirmation`, update only `autonomy/proposals.json` and do not materialize tasks yet.
+- If the goal is `approved` or `active`, rebalance only inside that approved boundary.
 - Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.
 - Write `autonomy/*.json` via atomic temp-file then rename semantics.
-- Update only autonomy state and journal entries.
+- Update only autonomy state, proposal, result, and journal entries.
 
 ## Guardrails
 
 - Do not edit business code.
 - Do not take implementation ownership of a worker task.
 - Do not bypass blockers or dependencies.
+- Do not expand scope, change acceptance, or relax constraints without a blocker.
 - If the next step is unclear, write a blocker and stop.
 
 ## Output

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "proposals": [
+    {
+      "goal_id": "goal-beta",
+      "status": "awaiting_confirmation",
+      "summary": "Queue one setup task and one review task.",
+      "tasks": [
+        {
+          "id": "task-beta-1",
+          "title": "Draft sprint kickoff",
+          "priority": "P1",
+          "depends_on": [],
+          "acceptance": ["Kickoff can start immediately"],
+          "file_hints": ["autonomy/proposals.json"]
+        }
+      ],
+      "created_at": "2026-01-02T01:30:00Z",
+      "approved_at": null
+    }
+  ]
+}

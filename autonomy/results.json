@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "planner": {
+    "status": "planned",
+    "goal_id": "goal-codex-autonomy-v2",
+    "task_id": null,
+    "summary": "Expanded the repo control plane to goal queues, proposal confirmation, sprint and cruise modes, and reporter plus reviewer flows.",
+    "happened_at": "2026-04-12T18:05:54.854Z",
+    "sent_at": null,
+    "verify_summary": null,
+    "hash": null,
+    "message": null,
+    "review_status": null
+  },
+  "worker": {
+    "status": "passed",
+    "goal_id": "goal-codex-autonomy-v2",
+    "task_id": "task-codex-autonomy-v2",
+    "summary": "Implemented install, intake-goal, approve-proposal, set-run-mode, pause/resume, report, review, merge, schemas, automation prompts, and the corrected autonomy-branch merge gate.",
+    "happened_at": "2026-04-12T18:12:38.089Z",
+    "sent_at": null,
+    "verify_summary": "npm run build; node ./node_modules/vitest/vitest.mjs run; pwsh -File scripts/verify.ps1",
+    "hash": null,
+    "message": null,
+    "review_status": "passed"
+  },
+  "review": {
+    "status": "passed",
+    "goal_id": "goal-codex-autonomy-v2",
+    "task_id": "task-codex-autonomy-v2",
+    "summary": "All CLI tests passed, the merge gate now reads review state from codex/autonomy itself, and the root control plane passed verify plus review.",
+    "happened_at": "2026-04-12T18:12:38.089Z",
+    "sent_at": null,
+    "verify_summary": "pwsh -File scripts/verify.ps1; pwsh -File scripts/review.ps1",
+    "hash": null,
+    "message": null,
+    "review_status": "passed"
+  },
+  "commit": {
+    "status": "skipped",
+    "goal_id": "goal-codex-autonomy-v2",
+    "task_id": "task-codex-autonomy-v2",
+    "summary": "No repository commit was recorded during implementation; the repo remains intentionally uncommitted.",
+    "happened_at": "2026-04-12T18:12:38.089Z",
+    "sent_at": null,
+    "verify_summary": null,
+    "hash": null,
+    "message": null,
+    "review_status": null
+  },
+  "reporter": {
+    "status": "not_run",
+    "goal_id": null,
+    "task_id": null,
+    "summary": null,
+    "happened_at": null,
+    "sent_at": null,
+    "verify_summary": null,
+    "hash": null,
+    "message": null,
+    "review_status": null
+  }
+}

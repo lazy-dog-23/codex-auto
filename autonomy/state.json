@@ -1,11 +1,18 @@
 {
   "version": 1,
+  "current_goal_id": null,
   "current_task_id": null,
   "cycle_status": "idle",
-  "last_planner_run_at": "2026-04-12T14:04:53.424Z",
-  "last_worker_run_at": "2026-04-12T16:48:41.6200454Z",
+  "run_mode": null,
+  "last_planner_run_at": "2026-04-12T18:05:54.854Z",
+  "last_worker_run_at": "2026-04-12T18:12:38.089Z",
   "last_result": "passed",
   "consecutive_worker_failures": 0,
   "needs_human_review": false,
-  "open_blocker_count": 0
+  "open_blocker_count": 0,
+  "report_thread_id": null,
+  "autonomy_branch": "codex/autonomy",
+  "sprint_active": false,
+  "paused": false,
+  "pause_reason": null
 }

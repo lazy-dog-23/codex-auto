@@ -1,62 +1,123 @@
 import { Command } from "commander";
 
-import type { BlockersDocument, StatusSummary, TasksDocument, AutonomyState, TaskStatus } from "../contracts/autonomy.js";
+import type {
+  AutonomyResults,
+  AutonomyState,
+  BlockersDocument,
+  GoalStatus,
+  GoalsDocument,
+  StatusSummary,
+  TaskStatus,
+  TasksDocument,
+} from "../contracts/autonomy.js";
+import { GOAL_STATUSES, TASK_STATUSES } from "../contracts/autonomy.js";
 import { countOpenBlockers } from "../domain/autonomy.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
-import { readJsonFile } from "../infra/json.js";
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess } from "../infra/process.js";
 import { resolveRepoPaths } from "../shared/paths.js";
+import {
+  loadBlockersDocument,
+  loadGoalsDocument,
+  loadResultsDocument,
+  loadStateDocument,
+  loadTasksDocument,
+} from "./control-plane.js";
 
 function createEmptyTaskCounts(): Record<TaskStatus, number> {
-  return {
-    queued: 0,
-    ready: 0,
-    in_progress: 0,
-    verify_failed: 0,
-    blocked: 0,
-    done: 0,
-  };
+  return TASK_STATUSES.reduce((accumulator, status) => {
+    accumulator[status] = 0;
+    return accumulator;
+  }, {} as Record<TaskStatus, number>);
+}
+
+function createEmptyGoalCounts(): Record<GoalStatus, number> {
+  return GOAL_STATUSES.reduce((accumulator, status) => {
+    accumulator[status] = 0;
+    return accumulator;
+  }, {} as Record<GoalStatus, number>);
 }
 
 function countTaskStatuses(tasks: TasksDocument["tasks"]): Record<TaskStatus, number> {
   const counts = createEmptyTaskCounts();
-
   for (const task of tasks) {
     counts[task.status] += 1;
   }
-
   return counts;
 }
 
+function countGoalStatuses(goals: GoalsDocument["goals"]): Record<GoalStatus, number> {
+  const counts = createEmptyGoalCounts();
+  for (const goal of goals) {
+    counts[goal.status] += 1;
+  }
+  return counts;
+}
+
+function hasActionableTasks(tasks: TasksDocument["tasks"], currentGoalId: string | null): boolean {
+  if (!currentGoalId) {
+    return false;
+  }
+
+  return tasks.some(
+    (task) => task.goal_id === currentGoalId && (task.status === "ready" || task.status === "queued"),
+  );
+}
+
+function hasPlanningWork(goals: GoalsDocument["goals"]): boolean {
+  return goals.some((goal) => goal.status === "awaiting_confirmation" || goal.status === "approved");
+}
+
+function formatNullableText(value: string | null | undefined): string {
+  return value && value.length > 0 ? value : "none";
+}
+
 function buildMessage(summary: StatusSummary): string {
-  const nextAutomation = summary.ready_for_automation ? "yes" : "no";
   return [
-    `Tasks=${summary.total_tasks}`,
-    `ready=${summary.tasks_by_status.ready}`,
+    `goals=${summary.total_goals}`,
+    `tasks=${summary.total_tasks}`,
+    `current_goal=${formatNullableText(summary.current_goal_id)}`,
+    `current_task=${formatNullableText(summary.current_task_id)}`,
+    `run_mode=${formatNullableText(summary.run_mode)}`,
+    `paused=${summary.paused ? "yes" : "no"}`,
     `open_blockers=${summary.open_blocker_count}`,
     `last_result=${summary.last_result}`,
-    `ready_for_automation=${nextAutomation}`,
+    `commit=${formatNullableText(summary.latest_commit_hash)}`,
+    `report_thread=${formatNullableText(summary.report_thread_id)}`,
+    `autonomy_branch=${formatNullableText(summary.autonomy_branch)}`,
+    `ready_for_automation=${summary.ready_for_automation ? "yes" : "no"}`,
   ].join(" ");
 }
 
-function hasActionableTasks(tasks: TasksDocument["tasks"]): boolean {
-  return tasks.some((task) => task.status === "ready" || task.status === "queued");
+function summarizeResults(results: AutonomyResults): StatusSummary["results_summary"] {
+  return {
+    planner_summary: results.planner.summary,
+    worker_result: results.worker.summary,
+    review_result: results.review.summary,
+    commit_result: results.commit.message ?? results.commit.summary,
+    reporter_sent_at: results.reporter.sent_at ?? results.reporter.happened_at ?? null,
+  };
 }
 
 export function buildStatusSummary(
   tasksDoc: TasksDocument,
+  goalsDoc: GoalsDocument,
   state: AutonomyState,
   blockersDoc: BlockersDocument,
+  resultsDoc: AutonomyResults,
 ): StatusSummary {
   const openBlockerCount = countOpenBlockers(blockersDoc.blockers);
   const tasksByStatus = countTaskStatuses(tasksDoc.tasks);
-  const actionableTasks = hasActionableTasks(tasksDoc.tasks);
+  const goalsByStatus = countGoalStatuses(goalsDoc.goals);
+  const actionableTasks = hasActionableTasks(tasksDoc.tasks, state.current_goal_id);
+  const pendingPlanningWork = hasPlanningWork(goalsDoc.goals);
   const readyForAutomation =
     state.cycle_status === "idle" &&
     state.needs_human_review === false &&
+    state.paused === false &&
     openBlockerCount === 0 &&
-    actionableTasks;
+    (actionableTasks || pendingPlanningWork);
+
   const warnings =
     state.open_blocker_count === openBlockerCount
       ? undefined
@@ -67,27 +128,35 @@ export function buildStatusSummary(
           },
         ];
 
-  return {
+  const summary: StatusSummary = {
     ok: true,
-    message: buildMessage({
-      ok: true,
-      message: "",
-      total_tasks: tasksDoc.tasks.length,
-      tasks_by_status: tasksByStatus,
-      current_task_id: state.current_task_id,
-      cycle_status: state.cycle_status,
-      open_blocker_count: openBlockerCount,
-      last_result: state.last_result,
-      ready_for_automation: readyForAutomation,
-    }),
+    message: "",
     warnings,
     total_tasks: tasksDoc.tasks.length,
+    total_goals: goalsDoc.goals.length,
     tasks_by_status: tasksByStatus,
+    goals_by_status: goalsByStatus,
+    current_goal_id: state.current_goal_id,
     current_task_id: state.current_task_id,
     cycle_status: state.cycle_status,
+    run_mode: state.run_mode,
     open_blocker_count: openBlockerCount,
     last_result: state.last_result,
     ready_for_automation: readyForAutomation,
+    paused: state.paused,
+    review_pending_reason: state.pause_reason,
+    latest_commit_hash: resultsDoc.commit.hash ?? null,
+    latest_commit_message: resultsDoc.commit.message ?? resultsDoc.commit.summary ?? null,
+    report_thread_id: state.report_thread_id,
+    autonomy_branch: state.autonomy_branch,
+    sprint_active: state.sprint_active,
+    results_summary: summarizeResults(resultsDoc),
+    next_automation_ready: readyForAutomation,
+  };
+
+  return {
+    ...summary,
+    message: buildMessage(summary),
   };
 }
 
@@ -95,19 +164,22 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const gitRepo = await detectGitRepository(repoRoot);
   const controlRoot = gitRepo?.path ?? repoRoot;
   const paths = resolveRepoPaths(controlRoot);
-  const tasksDoc = await readJsonFile<TasksDocument>(paths.tasksFile);
-  const state = await readJsonFile<AutonomyState>(paths.stateFile);
-  const blockersDoc = await readJsonFile<BlockersDocument>(paths.blockersFile);
-  const summary = buildStatusSummary(tasksDoc, state, blockersDoc);
+  const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc] = await Promise.all([
+    loadTasksDocument(paths),
+    loadGoalsDocument(paths),
+    loadStateDocument(paths),
+    loadBlockersDocument(paths),
+    loadResultsDocument(paths),
+  ]);
+  const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc);
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
-  const actionableTasks = hasActionableTasks(tasksDoc.tasks);
 
-  if (!actionableTasks) {
+  if (!hasActionableTasks(tasksDoc.tasks, state.current_goal_id) && !hasPlanningWork(goalsDoc.goals)) {
     readyForAutomation = false;
     warnings.push({
-      code: "no_actionable_tasks",
-      message: "No queued or ready tasks are available.",
+      code: "no_actionable_work",
+      message: "No active goal work or proposal generation work is currently available.",
     });
   }
 
@@ -124,6 +196,14 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     warnings.push({
       code: "needs_human_review",
       message: "State requires human review before the next automation run.",
+    });
+  }
+
+  if (state.paused) {
+    readyForAutomation = false;
+    warnings.push({
+      code: "goal_paused",
+      message: state.pause_reason ?? "Current goal is paused.",
     });
   }
 
@@ -222,18 +302,23 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     });
   }
 
-  return {
+  const result: StatusSummary = {
     ...summary,
-    message: buildMessage({ ...summary, ready_for_automation: readyForAutomation }),
     ready_for_automation: readyForAutomation,
+    next_automation_ready: readyForAutomation,
     warnings: warnings.length > 0 ? warnings : undefined,
+  };
+
+  return {
+    ...result,
+    message: buildMessage(result),
   };
 }
 
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
-    .description("Summarize autonomy task, blocker, and state progress")
+    .description("Summarize autonomy goals, tasks, results, and next-run readiness")
     .action(async () => {
       const result = await runStatusCommand();
       console.log(JSON.stringify(result, null, 2));

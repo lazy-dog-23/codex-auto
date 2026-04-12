@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "goals": [
+    {
+      "id": "goal-security-review",
+      "title": "Repo security hardening",
+      "objective": "Review high-risk command execution, autonomy file writes, Git operations, and background worktree handling in codex-auto, then fix any real boundary issues.",
+      "success_criteria": [
+        "Confirmed the high-risk safety boundaries or fixed the specific issues found.",
+        "scripts/verify.ps1 passes after the hardening changes."
+      ],
+      "constraints": [
+        "Keep the control plane repo-local.",
+        "Do not auto push, deploy, or merge unrelated work."
+      ],
+      "out_of_scope": [
+        "New product features unrelated to safety hardening."
+      ],
+      "status": "completed",
+      "run_mode": "cruise",
+      "created_at": "2026-04-12T14:00:00.000Z",
+      "approved_at": "2026-04-12T14:04:53.424Z",
+      "completed_at": "2026-04-12T16:48:41.6200454Z"
+    },
+    {
+      "id": "goal-codex-autonomy-v2",
+      "title": "Productize codex-autonomy for repo installation",
+      "objective": "Upgrade codex-auto into an installable codex-autonomy product with goal queue intake, proposal confirmation, sprint and cruise run modes, reviewer and reporter flows, and codex/autonomy commit gating.",
+      "success_criteria": [
+        "codex-autonomy install scaffolds the upgraded repo control plane into a target repository.",
+        "The CLI supports install, intake-goal, approve-proposal, set-run-mode, review, report, pause, resume, and merge-autonomy-branch.",
+        "Automation prompts cover planner, worker, reviewer, reporter, and sprint runner flows.",
+        "The root repo control plane mirrors the same v2 contract and passes verify plus tests."
+      ],
+      "constraints": [
+        "Keep the control plane inside the repo.",
+        "Do not touch internal Codex databases or automation storage.",
+        "Allow commits only on codex/autonomy; do not auto push, PR, or deploy."
+      ],
+      "out_of_scope": [
+        "GUI dashboard.",
+        "Automatic push, PR creation, or deployment.",
+        "Direct manipulation of private Codex app internals."
+      ],
+      "status": "completed",
+      "run_mode": "sprint",
+      "created_at": "2026-04-12T18:05:54.854Z",
+      "approved_at": "2026-04-12T18:05:54.854Z",
+      "completed_at": "2026-04-12T18:05:54.854Z"
+    }
+  ]
+}

@@ -4,7 +4,10 @@
   "title": "AutonomyTasksFile",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "tasks"],
+  "required": [
+    "version",
+    "tasks"
+  ],
   "properties": {
     "version": {
       "type": "integer",
@@ -24,6 +27,7 @@
       "additionalProperties": false,
       "required": [
         "id",
+        "goal_id",
         "title",
         "status",
         "priority",
@@ -32,10 +36,16 @@
         "file_hints",
         "retry_count",
         "last_error",
-        "updated_at"
+        "updated_at",
+        "commit_hash",
+        "review_status"
       ],
       "properties": {
         "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "goal_id": {
           "type": "string",
           "minLength": 1
         },
@@ -45,11 +55,23 @@
         },
         "status": {
           "type": "string",
-          "enum": ["queued", "ready", "in_progress", "verify_failed", "blocked", "done"]
+          "enum": [
+            "queued",
+            "ready",
+            "in_progress",
+            "verify_failed",
+            "blocked",
+            "done"
+          ]
         },
         "priority": {
           "type": "string",
-          "enum": ["P0", "P1", "P2", "P3"]
+          "enum": [
+            "P0",
+            "P1",
+            "P2",
+            "P3"
+          ]
         },
         "depends_on": {
           "type": "array",
@@ -82,11 +104,28 @@
           "default": 0
         },
         "last_error": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "updated_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "commit_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_status": {
+          "type": "string",
+          "enum": [
+            "not_reviewed",
+            "passed",
+            "followup_required"
+          ]
         }
       }
     }
