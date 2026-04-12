@@ -132,11 +132,11 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
         });
       }
 
-      if (backgroundWorktree.repoRoot !== gitRepo.path) {
+      if (backgroundWorktree.commonGitDir !== gitRepo.commonGitDir) {
         readyForAutomation = false;
         warnings.push({
           code: "unexpected_background_repo",
-          message: `Background worktree points at ${backgroundWorktree.repoRoot}, expected ${gitRepo.path}.`,
+          message: `Background worktree belongs to ${backgroundWorktree.commonGitDir}, expected ${gitRepo.commonGitDir}.`,
         });
       }
 

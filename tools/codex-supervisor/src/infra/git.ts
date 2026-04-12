@@ -27,12 +27,16 @@ export async function detectGitRepository(startPath: string): Promise<GitReposit
   }
 
   const gitDirProbe = runProcess('git', ['rev-parse', '--git-dir'], { cwd: repoRoot });
+  const commonGitDirProbe = runProcess('git', ['rev-parse', '--git-common-dir'], { cwd: repoRoot });
   const headProbe = runProcess('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
   const statusProbe = runProcess('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: repoRoot });
 
   return {
     path: repoRoot,
     gitDir: gitDirProbe.stdout.trim() || '',
+    commonGitDir: commandSucceeded(commonGitDirProbe)
+      ? resolve(repoRoot, commonGitDirProbe.stdout.trim() || '.git')
+      : resolve(repoRoot, '.git'),
     head: commandSucceeded(headProbe) ? headProbe.stdout.trim() || null : null,
     dirty: Boolean(statusProbe.stdout.trim()),
     statusLines: statusProbe.stdout
@@ -76,6 +80,7 @@ export async function getWorktreeSummary(worktreePath: string): Promise<Worktree
   return {
     path: worktreePath,
     repoRoot: repoInfo.path,
+    commonGitDir: repoInfo.commonGitDir,
     branch: commandSucceeded(branchProbe) ? branchProbe.stdout.trim() || null : null,
     head: commandSucceeded(headProbe) ? headProbe.stdout.trim() || null : null,
     dirty: Boolean(statusProbe.stdout.trim()),
@@ -122,15 +127,17 @@ export async function prepareBackgroundWorktree(
 ): Promise<BackgroundWorktreePreparation> {
   const branch = options?.branch ?? DEFAULT_BACKGROUND_WORKTREE_BRANCH;
   const backgroundPath = options?.backgroundPath ?? getBackgroundWorktreePath(repoRoot);
-  const repoHead = await getRepositoryHead(repoRoot);
+  const repoInfo = await detectGitRepository(repoRoot);
+  const repoHead = repoInfo?.head ?? await getRepositoryHead(repoRoot);
   if (!repoHead) {
     throw new Error(`Repository at ${repoRoot} does not have a commit HEAD yet; cannot create a background worktree.`);
   }
 
-  const repoStatus = await getRepositoryStatus(repoRoot);
+  const repoStatus = repoInfo?.statusLines ?? await getRepositoryStatus(repoRoot);
   if (repoStatus.length > 0) {
     throw new Error(`Repository at ${repoRoot} is dirty; refusing to prepare the background worktree.`);
   }
+  const repoCommonGitDir = repoInfo?.commonGitDir ?? resolve(repoRoot, '.git');
 
   const backgroundExists = await pathExists(backgroundPath);
   const backgroundSummary = backgroundExists ? await getWorktreeSummary(backgroundPath) : null;
@@ -171,9 +178,9 @@ export async function prepareBackgroundWorktree(
     throw new Error(`Background worktree at ${backgroundPath} is dirty; refusing to align it.`);
   }
 
-  if (backgroundSummary.repoRoot !== repoRoot) {
+  if (backgroundSummary.commonGitDir !== repoCommonGitDir) {
     throw new Error(
-      `Background worktree at ${backgroundPath} points at ${backgroundSummary.repoRoot}, not ${repoRoot}. Refusing to reuse it.`,
+      `Background worktree at ${backgroundPath} belongs to ${backgroundSummary.commonGitDir}, not ${repoCommonGitDir}. Refusing to reuse it.`,
     );
   }
 

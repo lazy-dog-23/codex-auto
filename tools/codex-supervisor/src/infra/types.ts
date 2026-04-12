@@ -50,6 +50,7 @@ export interface CycleLockHandle {
 export interface GitRepositoryInfo {
   path: string;
   gitDir: string;
+  commonGitDir: string;
   head: string | null;
   dirty: boolean;
   statusLines: string[];
@@ -58,6 +59,7 @@ export interface GitRepositoryInfo {
 export interface WorktreeSummary {
   path: string;
   repoRoot: string;
+  commonGitDir: string;
   branch: string | null;
   head: string | null;
   dirty: boolean;

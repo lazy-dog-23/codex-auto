@@ -44,6 +44,7 @@ describe("status runtime gates", () => {
     detectGitRepositoryMock.mockResolvedValue({
       path: "C:/repo",
       gitDir: ".git",
+      commonGitDir: "C:/repo/.git",
       head: "abc123",
       dirty: false,
       statusLines: [],
@@ -52,6 +53,7 @@ describe("status runtime gates", () => {
     getWorktreeSummaryMock.mockResolvedValue({
       path: "C:\\repo.__codex_bg",
       repoRoot: "C:/repo",
+      commonGitDir: "C:/repo/.git",
       branch: "feature/manual",
       head: "abc123",
       dirty: false,

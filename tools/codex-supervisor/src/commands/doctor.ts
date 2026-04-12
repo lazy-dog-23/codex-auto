@@ -147,6 +147,13 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
         message: `Background worktree at ${backgroundPath} is dirty.`,
         path: backgroundPath,
       });
+    } else if (backgroundWorktree.commonGitDir !== gitRepo.commonGitDir) {
+      issues.push({
+        severity: 'warn',
+        code: 'unexpected_background_repo',
+        message: `Background worktree belongs to ${backgroundWorktree.commonGitDir}, expected ${gitRepo.commonGitDir}.`,
+        path: backgroundPath,
+      });
     } else if (backgroundWorktree.branch !== DEFAULT_BACKGROUND_WORKTREE_BRANCH) {
       issues.push({
         severity: 'warn',
