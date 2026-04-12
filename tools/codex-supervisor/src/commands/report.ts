@@ -12,6 +12,25 @@ import {
   loadStateDocument,
   loadTasksDocument,
 } from "./control-plane.js";
+import { runStatusCommand } from "./status.js";
+
+const REPORT_BLOCKING_WARNING_CODES = new Set([
+  "not_a_git_repo",
+  "dirty_repository",
+  "missing_background_worktree",
+  "unsafe_background_worktree_path",
+  "dirty_background_worktree",
+  "unexpected_background_repo",
+  "unexpected_background_branch",
+  "background_worktree_head_mismatch",
+  "active_cycle_lock",
+  "stale_cycle_lock",
+]);
+
+interface ReportWarning {
+  code: string;
+  message: string;
+}
 
 export interface ReportResult {
   ok: boolean;
@@ -30,10 +49,13 @@ export interface ReportResult {
   latest_commit_hash: string | null;
   latest_commit_message: string | null;
   goal_transition: string | null;
+  healthy_runtime: boolean;
+  runtime_warnings: ReportWarning[];
   latest_results: AutonomyResults;
 }
 
 export async function runReport(repoRoot = process.cwd()): Promise<ReportResult> {
+  const status = await runStatusCommand(repoRoot);
   const gitRepo = await detectGitRepository(repoRoot);
   const paths = resolveRepoPaths(gitRepo?.path ?? repoRoot);
   const [goalsDoc, tasksDoc, state, blockersDoc, resultsDoc] = await Promise.all([
@@ -56,6 +78,8 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
   const latestCommitHash = resultsDoc.commit.hash ?? null;
   const latestCommitMessage = resultsDoc.commit.message ?? resultsDoc.commit.summary ?? null;
   const goalTransition = buildGoalTransitionSummary(previousGoal, currentGoal);
+  const runtimeWarnings = (status.warnings ?? []).filter((warning) => REPORT_BLOCKING_WARNING_CODES.has(warning.code));
+  const healthyRuntime = runtimeWarnings.length === 0;
   const message = buildReportMessage({
     currentGoal,
     previousGoal,
@@ -70,10 +94,11 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     reportThreadId: state.report_thread_id,
     runMode: state.run_mode,
     goalTransition,
+    runtimeWarnings,
   });
 
   return {
-    ok: true,
+    ok: healthyRuntime,
     message,
     current_goal: currentGoal,
     previous_goal: previousGoal,
@@ -89,6 +114,8 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     latest_commit_hash: latestCommitHash,
     latest_commit_message: latestCommitMessage,
     goal_transition: goalTransition,
+    healthy_runtime: healthyRuntime,
+    runtime_warnings: runtimeWarnings,
     latest_results: resultsDoc,
   };
 }
@@ -118,6 +145,7 @@ function buildReportMessage(
     reportThreadId: string | null;
     runMode: string | null;
     goalTransition: string | null;
+    runtimeWarnings: readonly ReportWarning[];
   },
 ): string {
   const goalPart = formatGoalPart(options.currentGoal);
@@ -133,6 +161,7 @@ function buildReportMessage(
   const reportThreadPart = `report_thread=${formatNullableValue(options.reportThreadId)}`;
   const runModePart = `run_mode=${formatNullableValue(options.runMode)}`;
   const transitionPart = options.goalTransition ? `goal_transition=${options.goalTransition}` : "goal_transition=none";
+  const runtimePart = formatRuntimeWarnings(options.runtimeWarnings);
   return [
     goalPart,
     previousGoalPart,
@@ -145,6 +174,7 @@ function buildReportMessage(
     reportThreadPart,
     runModePart,
     transitionPart,
+    runtimePart,
   ].join(" ");
 }
 
@@ -203,6 +233,15 @@ function formatBlockerList(blockers: readonly BlockerRecord[]): string {
   const entries = blockers.slice(0, 3).map((blocker) => `${blocker.id}/${blocker.task_id}:${blocker.severity}`);
   const remaining = blockers.length - entries.length;
   return `[${entries.join(",")}${remaining > 0 ? `,+${remaining}` : ""}]`;
+}
+
+function formatRuntimeWarnings(warnings: readonly ReportWarning[]): string {
+  if (warnings.length === 0) {
+    return "runtime=healthy";
+  }
+
+  const codes = warnings.map((warning) => warning.code);
+  return `runtime=warning[${codes.join(",")}]`;
 }
 
 function findMostRecentCompletedGoal(goals: readonly GoalRecord[], currentGoalId: string | null): GoalRecord | null {

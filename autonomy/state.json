@@ -10,7 +10,7 @@
   "consecutive_worker_failures": 0,
   "needs_human_review": false,
   "open_blocker_count": 0,
-  "report_thread_id": null,
+  "report_thread_id": "019d818a-7c51-7562-8e7f-e5fb60180408",
   "autonomy_branch": "codex/autonomy",
   "sprint_active": false,
   "paused": false,

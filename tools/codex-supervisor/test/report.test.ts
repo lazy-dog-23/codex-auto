@@ -86,6 +86,8 @@ describe("report command", () => {
     expect(report.open_blockers).toHaveLength(1);
     expect(report.open_blockers[0]?.id).toBe("blocker-a");
     expect(report.goal_transition).toBeNull();
+    expect(report.healthy_runtime).toBe(false);
+    expect(report.runtime_warnings.some((warning) => warning.code === "not_a_git_repo")).toBe(true);
     expect(report.message).toContain("goal=goal-alpha(Stabilize the autonomy control plane)");
     expect(report.message).toContain("task=task-b(Wire status report)[ready,priority=P1,review=passed,commit=abc123]");
     expect(report.message).toContain("verify=verify passed");
@@ -94,6 +96,7 @@ describe("report command", () => {
     expect(report.message).toContain("open_blockers=1[blocker-a/task-c:medium]");
     expect(report.message).toContain("paused=yes(needs human review)");
     expect(report.message).toContain("goal_transition=none");
+    expect(report.message).toContain("runtime=warning[not_a_git_repo]");
   });
 
   it("describes a completed goal and the newly active goal when the thread has switched goals", async () => {
@@ -161,10 +164,12 @@ describe("report command", () => {
     expect(report.current_goal?.id).toBe("goal-beta");
     expect(report.current_task?.id).toBe("task-beta-1");
     expect(report.goal_transition).toBe("completed goal-alpha(Wrap up the first goal) -> active goal-beta(Start the follow-up goal)");
+    expect(report.runtime_warnings.some((warning) => warning.code === "not_a_git_repo")).toBe(true);
     expect(report.message).toContain("previous_goal=goal-alpha(Wrap up the first goal)");
     expect(report.message).toContain("goal=goal-beta(Start the follow-up goal)");
     expect(report.message).toContain("goal_transition=completed goal-alpha(Wrap up the first goal) -> active goal-beta(Start the follow-up goal)");
     expect(report.message).toContain("commit=def456:autonomy(goal-beta/task-beta-1): Kick off the next goal");
     expect(report.message).toContain("paused=no");
+    expect(report.message).toContain("runtime=warning[not_a_git_repo]");
   });
 });

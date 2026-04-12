@@ -11,11 +11,14 @@ Use this skill when the goal should start immediately and keep moving in short c
 
 - Read the current goal, task queue, and most recent result.
 - Start with one immediate kickoff loop when the goal is first approved.
+- Treat the sprint heartbeat as a wake-up interval, not a task duration.
+- When sprint_active is false or paused is true, keep the loop to a status check and report, then stop.
 - Move through plan, work, review, and report in a single bounded pass.
-- Stop when the goal is blocked, completed, or there is nothing eligible to do.
+- When the current goal completes and another approved goal exists, continue in the same loop instead of waiting for the next heartbeat.
+- Stop when sprint_active is false, paused is true, the goal is blocked, or there is nothing eligible to do.
 
 ## Guardrails
 
 - Do not pick up a second task in the same loop.
-- Do not keep running after a blocker or review_pending condition.
+- Do not keep running after a blocker, review_pending condition, commit failure, or pause.
 - Do not broaden the goal beyond its approved boundaries.

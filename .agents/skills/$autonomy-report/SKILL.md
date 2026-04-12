@@ -11,6 +11,7 @@ Use this skill when the user wants a concise status update from the automation r
 
 - Read the latest autonomy state, recent verification result, and journal entry.
 - Summarize the current goal, current task, latest verify/review outcome, and blockers.
+- Treat normal success as a heartbeat summary, and surface blocked, review_pending, commit failure, or other failure states immediately.
 - Keep the report short and actionable.
 
 ## Guardrails

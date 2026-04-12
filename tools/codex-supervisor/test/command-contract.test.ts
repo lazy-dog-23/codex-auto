@@ -51,6 +51,15 @@ describe("command integration contracts", () => {
     await expect(readFile(join(workspace, ".codex", "config.toml"), "utf8")).resolves.toContain(
       'sandbox_mode = "workspace-write"',
     );
+    await expect(readFile(join(workspace, ".codex", "config.toml"), "utf8")).resolves.toContain(
+      'model = "gpt-5.4"',
+    );
+    await expect(readFile(join(workspace, ".codex", "config.toml"), "utf8")).resolves.toContain(
+      'model_reasoning_effort = "xhigh"',
+    );
+    await expect(readFile(join(workspace, ".codex", "config.toml"), "utf8")).resolves.toContain(
+      'service_tier = "fast"',
+    );
     await expect(readFile(join(workspace, "autonomy", "schema", "tasks.schema.json"), "utf8")).resolves.toContain(
       '"queued"',
     );

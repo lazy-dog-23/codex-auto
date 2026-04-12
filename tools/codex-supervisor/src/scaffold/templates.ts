@@ -21,8 +21,10 @@ export function getAgentsMarkdown(): string {
     "- 第一次验证失败记为 `verify_failed`；第二次失败或真实歧义记为 `blocked` 并新增 blocker。",
     "- dirty background worktree 立即置为 `review_pending` 并停机。",
     "- Reviewer 运行 `scripts/review.ps1` 做效果检查和结论收口，不扩大任务范围。",
-    "- Reporter 只回传摘要，详细运行记录留在 Inbox 和 journal。",
-    "- Sprint runner 只推进单个任务闭环，遇到 blocker、review_pending 或无任务时停下。",
+    "- Reporter 只有异常、blocked、review_pending、commit 失败等情况立即回线程；正常成功按 heartbeat 汇总，详细运行记录留在 Inbox 和 journal。",
+    "- Sprint runner 的 heartbeat 只是唤醒间隔，不是任务时长；每次唤醒只推进单个任务闭环，当前 goal 完成且存在下一个 approved goal 时同轮直接接续。",
+    "- `sprint_active=false` 或 `paused=true` 时只做状态检查和汇报，不做新的 plan/work/review 推进。",
+    "- Sprint runner 遇到 blocker、review_pending 或无任务时停下。",
     "- 非 Git 目录允许 `bootstrap`，但不允许进入可运行 automation 态。",
     "",
     "## Skills",
@@ -182,6 +184,7 @@ export function getAutonomyReportSkillMarkdown(): string {
     "",
     "- Read the latest autonomy state, recent verification result, and journal entry.",
     "- Summarize the current goal, current task, latest verify/review outcome, and blockers.",
+    "- Treat normal success as a heartbeat summary, and surface blocked, review_pending, commit failure, or other failure states immediately.",
     "- Keep the report short and actionable.",
     "",
     "## Guardrails",
@@ -207,13 +210,16 @@ export function getAutonomySprintSkillMarkdown(): string {
     "",
     "- Read the current goal, task queue, and most recent result.",
     "- Start with one immediate kickoff loop when the goal is first approved.",
+    "- Treat the sprint heartbeat as a wake-up interval, not a task duration.",
+    "- When sprint_active is false or paused is true, keep the loop to a status check and report, then stop.",
     "- Move through plan, work, review, and report in a single bounded pass.",
-    "- Stop when the goal is blocked, completed, or there is nothing eligible to do.",
+    "- When the current goal completes and another approved goal exists, continue in the same loop instead of waiting for the next heartbeat.",
+    "- Stop when sprint_active is false, paused is true, the goal is blocked, or there is nothing eligible to do.",
     "",
     "## Guardrails",
     "",
     "- Do not pick up a second task in the same loop.",
-    "- Do not keep running after a blocker or review_pending condition.",
+    "- Do not keep running after a blocker, review_pending condition, commit failure, or pause.",
     "- Do not broaden the goal beyond its approved boundaries.",
   ].join("\n");
 }
@@ -228,6 +234,7 @@ export function getDefaultGoalMarkdown(): string {
     "",
     "- Codex app 能读取 repo 级 `AGENTS.md` 和 repo skills。",
     "- `.codex/environments/environment.toml` 能定义 Windows setup script，以及 `verify`、`smoke` 和 `review` 三个 actions。",
+    "- `.codex/config.toml` 采用 `gpt-5.4`、`xhigh` 和 `fast` 的默认策略。",
     "- `scripts/setup.windows.ps1` 可重复执行且不覆盖已有内容。",
     "- `scripts/verify.ps1` 是 worker 的正式验收门，`scripts/review.ps1` 负责效果检查。",
     "",
@@ -238,6 +245,8 @@ export function getDefaultGoalMarkdown(): string {
     "- 手工 `commit`、`push`、`deploy` 仍然禁止；自动提交只允许自治流程在 `codex/autonomy` 分支上执行。",
     "- 所有写入 `autonomy/*` 的动作都必须先拿 `autonomy/locks/cycle.lock`。",
     "- 时间统一为 UTC ISO 8601，路径统一为 repo-relative forward-slash。",
+    "- Reporter 只有异常、blocked、review_pending、commit 失败等情况立即回线程；正常成功按 heartbeat 汇总。",
+    "- Sprint runner 的 heartbeat 是唤醒间隔，不是任务时长；当前 goal 完成且存在下一个 approved goal 时同轮直接接续。",
     "",
     "## Out of Scope",
     "",
@@ -258,6 +267,7 @@ export function getInstallGoalMarkdown(): string {
     "",
     "- 目标仓库能直接看到 repo 级 `AGENTS.md` 和 repo skills。",
     "- `.codex/environments/environment.toml` 能定义 Windows setup script，以及 `verify`、`smoke` 和 `review` 三个 actions。",
+    "- `.codex/config.toml` 采用 `gpt-5.4`、`xhigh` 和 `fast` 的默认策略。",
     "- `scripts/setup.windows.ps1`、`scripts/verify.ps1`、`scripts/smoke.ps1`、`scripts/review.ps1` 都存在且可重复执行。",
     "- `autonomy/goal.md` 和 `autonomy/journal.md` 已放入仓库，供后续自治循环继续补全。",
     "",
@@ -267,6 +277,8 @@ export function getInstallGoalMarkdown(): string {
     "- 保留现有用户文件，不覆盖已有内容。",
     "- 不触碰 Codex 内部数据库、automation TOML、SQLite 或其他未公开接口。",
     "- 时间统一为 UTC ISO 8601，路径统一为 repo-relative forward-slash。",
+    "- Reporter 只有异常、blocked、review_pending、commit 失败等情况立即回线程；正常成功按 heartbeat 汇总。",
+    "- Sprint runner 的 heartbeat 是唤醒间隔，不是任务时长；当前 goal 完成且存在下一个 approved goal 时同轮直接接续。",
     "",
     "## Out of Scope",
     "",
@@ -702,7 +714,9 @@ Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
     'cycle\.lock',
     'UTC ISO 8601',
     'repo-relative forward-slash',
-    'codex/autonomy'
+    'codex/autonomy',
+    'Reporter 只有异常',
+    'Sprint runner 的 heartbeat 只是唤醒间隔'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-plan/SKILL.md') -Patterns @(
@@ -777,6 +791,12 @@ Assert-True ($config.Contains('approval_policy')) 'config.toml must define a top
 Assert-True (@('untrusted', 'on-request', 'never') -contains [string]$config['approval_policy']) 'config.toml approval_policy is invalid.'
 Assert-True ($config.Contains('sandbox_mode')) 'config.toml must define a top-level sandbox_mode.'
 Assert-True (@('read-only', 'workspace-write', 'danger-full-access') -contains [string]$config['sandbox_mode']) 'config.toml sandbox_mode is invalid.'
+Assert-True ($config.Contains('model')) 'config.toml must define a top-level model.'
+Assert-True ([string]$config['model'] -eq 'gpt-5.4') 'config.toml model must be gpt-5.4.'
+Assert-True ($config.Contains('model_reasoning_effort')) 'config.toml must define a top-level model_reasoning_effort.'
+Assert-True ([string]$config['model_reasoning_effort'] -eq 'xhigh') 'config.toml model_reasoning_effort must be xhigh.'
+Assert-True ($config.Contains('service_tier')) 'config.toml must define a top-level service_tier.'
+Assert-True ([string]$config['service_tier'] -eq 'fast') 'config.toml service_tier must be fast.'
 Assert-True ($config.Contains('sandbox_workspace_write.network_access')) 'config.toml must define sandbox_workspace_write.network_access.'
 Assert-True ($config['sandbox_workspace_write.network_access'] -is [bool]) 'config.toml sandbox_workspace_write.network_access must be a boolean.'
 Assert-True ($config.Contains('windows.sandbox')) 'config.toml must define windows.sandbox.'
@@ -831,6 +851,9 @@ export function getConfigTomlTemplate(): string {
     "",
     'approval_policy = "on-request"',
     'sandbox_mode = "workspace-write"',
+    'model = "gpt-5.4"',
+    'model_reasoning_effort = "xhigh"',
+    'service_tier = "fast"',
     "",
     "[sandbox_workspace_write]",
     "network_access = true",
@@ -1010,6 +1033,7 @@ export function getReadmeMarkdown(): string {
     "",
     "- 自动提交只允许进入 `codex/autonomy`，不会自动 push、PR、merge 或 deploy。",
     "- 非 Git 目录允许 `bootstrap`，但 `status` 不会给出可运行 automation 的结论。",
+    "- `paused=true` 时只保留状态检查和汇报，不继续推进新的 plan/work/review。",
     "- `ready_for_automation=false` 常见原因包括：没有 active goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用、目标仍在等待首次确认。",
   ].join("\n");
 }

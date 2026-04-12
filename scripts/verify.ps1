@@ -405,7 +405,9 @@ Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
     'cycle\.lock',
     'UTC ISO 8601',
     'repo-relative forward-slash',
-    'codex/autonomy'
+    'codex/autonomy',
+    'Reporter 只有异常',
+    'Sprint runner 的 heartbeat 只是唤醒间隔'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-plan/SKILL.md') -Patterns @(
@@ -440,13 +442,15 @@ Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-review/SK
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-report/SKILL.md') -Patterns @(
     '(?m)^---',
     '(?m)^name:\s*autonomy-report',
-    'Summarize the current autonomy state'
+    'Summarize the current autonomy state',
+    'heartbeat summary'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-sprint/SKILL.md') -Patterns @(
     '(?m)^---',
     '(?m)^name:\s*autonomy-sprint',
-    'short, bounded execution loops'
+    'short, bounded execution loops',
+    'wake-up interval'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/goal.md') -Patterns @(
@@ -480,6 +484,12 @@ Assert-True ($config.Contains('approval_policy')) 'config.toml must define a top
 Assert-True (@('untrusted', 'on-request', 'never') -contains [string]$config['approval_policy']) 'config.toml approval_policy is invalid.'
 Assert-True ($config.Contains('sandbox_mode')) 'config.toml must define a top-level sandbox_mode.'
 Assert-True (@('read-only', 'workspace-write', 'danger-full-access') -contains [string]$config['sandbox_mode']) 'config.toml sandbox_mode is invalid.'
+Assert-True ($config.Contains('model')) 'config.toml must define a top-level model.'
+Assert-True ([string]$config['model'] -eq 'gpt-5.4') 'config.toml model must be gpt-5.4.'
+Assert-True ($config.Contains('model_reasoning_effort')) 'config.toml must define a top-level model_reasoning_effort.'
+Assert-True ([string]$config['model_reasoning_effort'] -eq 'xhigh') 'config.toml model_reasoning_effort must be xhigh.'
+Assert-True ($config.Contains('service_tier')) 'config.toml must define a top-level service_tier.'
+Assert-True ([string]$config['service_tier'] -eq 'fast') 'config.toml service_tier must be fast.'
 Assert-True ($config.Contains('sandbox_workspace_write.network_access')) 'config.toml must define sandbox_workspace_write.network_access.'
 Assert-True ($config['sandbox_workspace_write.network_access'] -is [bool]) 'config.toml sandbox_workspace_write.network_access must be a boolean.'
 Assert-True ($config.Contains('windows.sandbox')) 'config.toml must define windows.sandbox.'

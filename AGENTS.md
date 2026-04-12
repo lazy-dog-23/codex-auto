@@ -19,8 +19,10 @@
 - 第一次验证失败记为 `verify_failed`；第二次失败或真实歧义记为 `blocked` 并新增 blocker。
 - dirty background worktree 立即置为 `review_pending` 并停机。
 - Reviewer 运行 `scripts/review.ps1` 做效果检查和结论收口，不扩大任务范围。
-- Reporter 只回传摘要，详细运行记录留在 Inbox 和 journal。
-- Sprint runner 只推进单个任务闭环，遇到 blocker、review_pending 或无任务时停下。
+- Reporter 只有异常、blocked、review_pending、commit 失败等情况立即回线程；正常成功按 heartbeat 汇总，详细运行记录留在 Inbox 和 journal。
+- Sprint runner 的 heartbeat 只是唤醒间隔，不是任务时长；每次唤醒只推进单个任务闭环，当前 goal 完成且存在下一个 approved goal 时同轮直接接续。
+- `sprint_active=false` 或 `paused=true` 时只做状态检查和汇报，不做新的 plan/work/review 推进。
+- Sprint runner 遇到 blocker、review_pending 或无任务时停下。
 - 非 Git 目录允许 `bootstrap`，但不允许进入可运行 automation 态。
 
 ## Skills

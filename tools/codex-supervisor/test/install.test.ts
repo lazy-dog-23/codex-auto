@@ -55,10 +55,19 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-intake", "SKILL.md"), "utf8")).toContain(
       "autonomy-intake",
     );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-report", "SKILL.md"), "utf8")).toContain(
+      "heartbeat summary",
+    );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
+      "wake-up interval",
+    );
     expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("codex-autonomy");
     expect(await readFile(join(workspace, "autonomy", "journal.md"), "utf8")).toContain("Append one entry per run");
     expect(await readFile(join(workspace, "autonomy", "goals.json"), "utf8")).toContain('"goals"');
     expect(await readFile(join(workspace, "autonomy", "settings.json"), "utf8")).toContain('"autonomy_branch"');
     expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain('"reporter"');
+    expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('service_tier = "fast"');
+    expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('model_reasoning_effort = "xhigh"');
+    expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('model = "gpt-5.4"');
   });
 });

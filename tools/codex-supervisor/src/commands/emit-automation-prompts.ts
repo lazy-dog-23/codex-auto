@@ -10,7 +10,7 @@ export async function runEmitAutomationPromptsCommand(): Promise<ExtendedAutomat
 export function registerEmitAutomationPromptsCommand(program: Command): void {
   program
     .command("emit-automation-prompts")
-    .description("Emit planner and worker automation prompt templates")
+    .description("Emit planner, worker, reviewer, reporter, and sprint automation prompt templates")
     .action(async () => {
       const result = await runEmitAutomationPromptsCommand();
       console.log(formatAutomationPromptsResult(result));
