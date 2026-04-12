@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "current_task_id": null,
+  "cycle_status": "idle",
+  "last_planner_run_at": null,
+  "last_worker_run_at": null,
+  "last_result": "noop",
+  "consecutive_worker_failures": 0,
+  "needs_human_review": false,
+  "open_blocker_count": 0
+}

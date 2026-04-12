@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "blockers": [
+    {
+      "id": "blocker-a",
+      "task_id": "task-c",
+      "question": "What should unblock task-c?",
+      "severity": "medium",
+      "status": "open",
+      "resolution": null,
+      "opened_at": "2026-01-03T04:00:00Z",
+      "resolved_at": null
+    },
+    {
+      "id": "blocker-b",
+      "task_id": "task-d",
+      "question": "What should be ignored?",
+      "severity": "low",
+      "status": "resolved",
+      "resolution": "Verified in follow-up run",
+      "opened_at": "2026-01-04T04:00:00Z",
+      "resolved_at": "2026-01-04T05:00:00Z"
+    }
+  ]
+}

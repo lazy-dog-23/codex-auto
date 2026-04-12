@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "task-a",
+      "title": "Build prompt bundle",
+      "status": "queued",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": ["Planner prompt exists"],
+      "file_hints": ["src/templates/automation-prompts.ts"],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-01-01T00:00:00Z"
+    },
+    {
+      "id": "task-b",
+      "title": "Wire status report",
+      "status": "ready",
+      "priority": "P1",
+      "depends_on": [],
+      "acceptance": ["Status summary renders"],
+      "file_hints": ["src/commands/status.ts"],
+      "retry_count": 1,
+      "last_error": "previous verify failed",
+      "updated_at": "2026-01-02T00:00:00Z"
+    },
+    {
+      "id": "task-c",
+      "title": "Integrate unblock flow",
+      "status": "queued",
+      "priority": "P2",
+      "depends_on": ["task-b"],
+      "acceptance": ["Blocked tasks can be reopened"],
+      "file_hints": ["src/commands/unblock.ts"],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-01-03T00:00:00Z"
+    },
+    {
+      "id": "task-d",
+      "title": "Keep verifier stable",
+      "status": "verify_failed",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": ["Verifier runs cleanly"],
+      "file_hints": ["test/schema.spec.ts"],
+      "retry_count": 2,
+      "last_error": "schema mismatch",
+      "updated_at": "2026-01-04T00:00:00Z"
+    }
+  ]
+}
