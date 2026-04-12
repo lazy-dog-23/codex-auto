@@ -1,4 +1,4 @@
-import { RESULT_STATES, REVIEW_STATUSES } from "../domain/types.js";
+import { RESULT_STATES, REVIEW_STATUSES, SUMMARY_KINDS } from "../contracts/autonomy.js";
 
 const resultEntrySchema = {
   type: "object",
@@ -55,6 +55,21 @@ export const resultsSchema = {
     version: {
       type: "integer",
       minimum: 1,
+    },
+    last_thread_summary_sent_at: {
+      type: ["string", "null"],
+      format: "date-time",
+    },
+    last_inbox_run_at: {
+      type: ["string", "null"],
+      format: "date-time",
+    },
+    last_summary_kind: {
+      type: ["string", "null"],
+      enum: [...SUMMARY_KINDS, null],
+    },
+    last_summary_reason: {
+      type: ["string", "null"],
     },
     planner: resultEntrySchema,
     worker: resultEntrySchema,

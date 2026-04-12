@@ -49,6 +49,12 @@ export interface ReportResult {
   latest_commit_hash: string | null;
   latest_commit_message: string | null;
   goal_transition: string | null;
+  last_thread_summary_sent_at: string | null;
+  last_inbox_run_at: string | null;
+  latest_summary_kind: string | null;
+  latest_summary_reason: string | null;
+  next_automation_reason: string | null;
+  runtime_reason: string | null;
   healthy_runtime: boolean;
   runtime_warnings: ReportWarning[];
   latest_results: AutonomyResults;
@@ -78,6 +84,11 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
   const latestCommitHash = resultsDoc.commit.hash ?? null;
   const latestCommitMessage = resultsDoc.commit.message ?? resultsDoc.commit.summary ?? null;
   const goalTransition = buildGoalTransitionSummary(previousGoal, currentGoal);
+  const lastThreadSummarySentAt = status.last_thread_summary_sent_at ?? resultsDoc.last_thread_summary_sent_at ?? state.last_thread_summary_sent_at ?? null;
+  const lastInboxRunAt = status.last_inbox_run_at ?? resultsDoc.last_inbox_run_at ?? state.last_inbox_run_at ?? null;
+  const latestSummaryKind = status.latest_summary_kind ?? resultsDoc.last_summary_kind ?? null;
+  const latestSummaryReason = status.latest_summary_reason ?? resultsDoc.last_summary_reason ?? null;
+  const nextAutomationReason = status.next_automation_reason ?? null;
   const runtimeWarnings = (status.warnings ?? []).filter((warning) => REPORT_BLOCKING_WARNING_CODES.has(warning.code));
   const healthyRuntime = runtimeWarnings.length === 0;
   const message = buildReportMessage({
@@ -94,6 +105,11 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     reportThreadId: state.report_thread_id,
     runMode: state.run_mode,
     goalTransition,
+    lastThreadSummarySentAt,
+    lastInboxRunAt,
+    latestSummaryKind,
+    latestSummaryReason,
+    nextAutomationReason,
     runtimeWarnings,
   });
 
@@ -114,6 +130,12 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     latest_commit_hash: latestCommitHash,
     latest_commit_message: latestCommitMessage,
     goal_transition: goalTransition,
+    last_thread_summary_sent_at: lastThreadSummarySentAt,
+    last_inbox_run_at: lastInboxRunAt,
+    latest_summary_kind: latestSummaryKind,
+    latest_summary_reason: latestSummaryReason,
+    next_automation_reason: nextAutomationReason,
+    runtime_reason: nextAutomationReason,
     healthy_runtime: healthyRuntime,
     runtime_warnings: runtimeWarnings,
     latest_results: resultsDoc,
@@ -145,6 +167,11 @@ function buildReportMessage(
     reportThreadId: string | null;
     runMode: string | null;
     goalTransition: string | null;
+    lastThreadSummarySentAt: string | null;
+    lastInboxRunAt: string | null;
+    latestSummaryKind: string | null;
+    latestSummaryReason: string | null;
+    nextAutomationReason: string | null;
     runtimeWarnings: readonly ReportWarning[];
   },
 ): string {
@@ -161,6 +188,11 @@ function buildReportMessage(
   const reportThreadPart = `report_thread=${formatNullableValue(options.reportThreadId)}`;
   const runModePart = `run_mode=${formatNullableValue(options.runMode)}`;
   const transitionPart = options.goalTransition ? `goal_transition=${options.goalTransition}` : "goal_transition=none";
+  const summaryKindPart = `summary_kind=${formatNullableValue(options.latestSummaryKind)}`;
+  const summaryReasonPart = `summary_reason=${formatNullableValue(options.latestSummaryReason)}`;
+  const threadSummaryAtPart = `last_thread_summary_sent_at=${formatNullableValue(options.lastThreadSummarySentAt)}`;
+  const inboxRunAtPart = `last_inbox_run_at=${formatNullableValue(options.lastInboxRunAt)}`;
+  const nextAutomationReasonPart = `next_automation_reason=${formatNullableValue(options.nextAutomationReason)}`;
   const runtimePart = formatRuntimeWarnings(options.runtimeWarnings);
   return [
     goalPart,
@@ -174,6 +206,11 @@ function buildReportMessage(
     reportThreadPart,
     runModePart,
     transitionPart,
+    summaryKindPart,
+    summaryReasonPart,
+    threadSummaryAtPart,
+    inboxRunAtPart,
+    nextAutomationReasonPart,
     runtimePart,
   ].join(" ");
 }

@@ -85,6 +85,14 @@ export const stateSchema = {
     pause_reason: {
       type: ["string", "null"],
     },
+    last_thread_summary_sent_at: {
+      type: ["string", "null"],
+      format: "date-time",
+    },
+    last_inbox_run_at: {
+      type: ["string", "null"],
+      format: "date-time",
+    },
   },
 } as const;
 

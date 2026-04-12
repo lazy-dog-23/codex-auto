@@ -17,6 +17,39 @@
       "type": "integer",
       "minimum": 1
     },
+    "last_thread_summary_sent_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "last_inbox_run_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "last_summary_kind": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "normal_success",
+        "thread_summary",
+        "immediate_exception",
+        "goal_transition",
+        null
+      ]
+    },
+    "last_summary_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "planner": {
       "type": "object",
       "additionalProperties": false,

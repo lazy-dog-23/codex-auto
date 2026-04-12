@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "last_thread_summary_sent_at": "2026-01-05T02:20:00Z",
+  "last_inbox_run_at": "2026-01-05T02:18:00Z",
+  "last_summary_kind": "thread_summary",
+  "last_summary_reason": "Heartbeat summary sent to the thread and Inbox.",
   "planner": {
     "status": "planned",
     "goal_id": "goal-alpha",

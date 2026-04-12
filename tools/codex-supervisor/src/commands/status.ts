@@ -7,6 +7,7 @@ import type {
   GoalStatus,
   GoalsDocument,
   StatusSummary,
+  SummaryKind,
   TaskStatus,
   TasksDocument,
 } from "../contracts/autonomy.js";
@@ -85,8 +86,106 @@ function buildMessage(summary: StatusSummary): string {
     `commit=${formatNullableText(summary.latest_commit_hash)}`,
     `report_thread=${formatNullableText(summary.report_thread_id)}`,
     `autonomy_branch=${formatNullableText(summary.autonomy_branch)}`,
+    `summary_kind=${formatNullableText(summary.latest_summary_kind)}`,
+    `summary_reason=${formatNullableText(summary.latest_summary_reason)}`,
+    `last_thread_summary_sent_at=${formatNullableText(summary.last_thread_summary_sent_at)}`,
+    `last_inbox_run_at=${formatNullableText(summary.last_inbox_run_at)}`,
+    `next_automation_reason=${formatNullableText(summary.next_automation_reason)}`,
     `ready_for_automation=${summary.ready_for_automation ? "yes" : "no"}`,
   ].join(" ");
+}
+
+function buildLocalAutomationReason(options: {
+  readyForAutomation: boolean;
+  actionableTasks: boolean;
+  pendingPlanningWork: boolean;
+  paused: boolean;
+  pauseReason: string | null;
+  cycleStatus: StatusSummary["cycle_status"];
+  needsHumanReview: boolean;
+  openBlockerCount: number;
+}): string {
+  if (options.readyForAutomation) {
+    return "Ready for automation: active or planning work is available.";
+  }
+
+  if (options.paused) {
+    return options.pauseReason ?? "Current goal is paused.";
+  }
+
+  if (options.needsHumanReview) {
+    return "State requires human review before the next automation run.";
+  }
+
+  if (options.cycleStatus !== "idle") {
+    return `Current cycle status is ${options.cycleStatus}.`;
+  }
+
+  if (options.openBlockerCount > 0) {
+    return `There ${options.openBlockerCount === 1 ? "is" : "are"} ${options.openBlockerCount} open blocker(s).`;
+  }
+
+  if (!options.actionableTasks && !options.pendingPlanningWork) {
+    return "No active goal work or proposal generation work is currently available.";
+  }
+
+  return "Eligible work is available, but runtime checks need to pass before the next automation run.";
+}
+
+function buildRuntimeAutomationReason(warnings: readonly { message: string }[]): string {
+  if (warnings.length === 0) {
+    return "Ready for automation: runtime checks passed.";
+  }
+
+  return warnings.map((warning) => warning.message).join("; ");
+}
+
+function inferLatestSummaryKind(resultsDoc: AutonomyResults, goalsDoc: GoalsDocument, state: AutonomyState): SummaryKind {
+  if (resultsDoc.worker.status === "failed" || resultsDoc.review.status === "failed" || resultsDoc.commit.status === "failed") {
+    return "immediate_exception";
+  }
+
+  const currentGoal = state.current_goal_id
+    ? goalsDoc.goals.find((goal) => goal.id === state.current_goal_id) ?? null
+    : goalsDoc.goals.find((goal) => goal.status === "active") ?? null;
+  const hasCompletedGoal = goalsDoc.goals.some((goal) => goal.status === "completed" && goal.id !== currentGoal?.id);
+
+  if (currentGoal && currentGoal.status === "active" && hasCompletedGoal) {
+    return "goal_transition";
+  }
+
+  if (resultsDoc.reporter.sent_at || state.last_thread_summary_sent_at || resultsDoc.last_thread_summary_sent_at) {
+    return "thread_summary";
+  }
+
+  return "normal_success";
+}
+
+function inferLatestSummaryReason(options: {
+  kind: SummaryKind;
+  resultsDoc: AutonomyResults;
+  goalsDoc: GoalsDocument;
+  state: AutonomyState;
+}): string {
+  const kind = options.kind;
+
+  if (kind === "goal_transition") {
+    return "The previous goal completed and the next approved goal is active.";
+  }
+
+  if (options.resultsDoc.last_summary_reason) {
+    return options.resultsDoc.last_summary_reason;
+  }
+
+  if (kind === "thread_summary") {
+    return "The latest successful run was summarized to the thread.";
+  }
+
+  if (kind === "immediate_exception") {
+    return "A worker, review, or commit step failed and needs immediate attention.";
+  }
+
+  return "The latest run completed successfully and is waiting for summary handling.";
 }
 
 function summarizeResults(results: AutonomyResults): StatusSummary["results_summary"] {
@@ -127,6 +226,23 @@ export function buildStatusSummary(
             message: `State reported ${state.open_blocker_count} open blocker(s), but blockers.json contains ${openBlockerCount}.`,
           },
         ];
+  const nextAutomationReason = buildLocalAutomationReason({
+    readyForAutomation,
+    actionableTasks,
+    pendingPlanningWork,
+    paused: state.paused,
+    pauseReason: state.pause_reason,
+    cycleStatus: state.cycle_status,
+    needsHumanReview: state.needs_human_review,
+    openBlockerCount,
+  });
+  const inferredSummaryKind = inferLatestSummaryKind(resultsDoc, goalsDoc, state);
+  const latestSummaryKind = inferredSummaryKind !== "normal_success"
+    ? inferredSummaryKind
+    : resultsDoc.last_summary_kind ?? inferredSummaryKind;
+  const latestSummaryReason = inferredSummaryKind !== "normal_success"
+    ? inferLatestSummaryReason({ kind: inferredSummaryKind, resultsDoc, goalsDoc, state })
+    : resultsDoc.last_summary_reason ?? inferLatestSummaryReason({ kind: latestSummaryKind, resultsDoc, goalsDoc, state });
 
   const summary: StatusSummary = {
     ok: true,
@@ -150,6 +266,11 @@ export function buildStatusSummary(
     report_thread_id: state.report_thread_id,
     autonomy_branch: state.autonomy_branch,
     sprint_active: state.sprint_active,
+    last_thread_summary_sent_at: state.last_thread_summary_sent_at ?? resultsDoc.last_thread_summary_sent_at ?? null,
+    last_inbox_run_at: state.last_inbox_run_at ?? resultsDoc.last_inbox_run_at ?? null,
+    latest_summary_kind: latestSummaryKind,
+    latest_summary_reason: latestSummaryReason,
+    next_automation_reason: nextAutomationReason,
     results_summary: summarizeResults(resultsDoc),
     next_automation_ready: readyForAutomation,
   };
@@ -302,10 +423,15 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     });
   }
 
+  const nextAutomationReason = readyForAutomation
+    ? "Ready for automation: runtime checks passed and eligible work exists."
+    : buildRuntimeAutomationReason(warnings);
+
   const result: StatusSummary = {
     ...summary,
     ready_for_automation: readyForAutomation,
     next_automation_ready: readyForAutomation,
+    next_automation_reason: nextAutomationReason,
     warnings: warnings.length > 0 ? warnings : undefined,
   };
 

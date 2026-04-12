@@ -59,7 +59,14 @@ describe("status command", () => {
     expect(summary.ready_for_automation).toBe(false);
     expect(summary.results_summary?.planner_summary).toBe("Planned the next ready window.");
     expect(summary.latest_commit_hash).toBe("abc123");
+    expect(summary.last_thread_summary_sent_at).toBe("2026-01-05T02:20:00Z");
+    expect(summary.last_inbox_run_at).toBe("2026-01-05T02:18:00Z");
+    expect(summary.latest_summary_kind).toBe("thread_summary");
+    expect(summary.latest_summary_reason).toBe("Heartbeat summary sent to the thread and Inbox.");
+    expect(summary.next_automation_reason).toContain("open blocker");
     expect(summary.message).toContain("ready_for_automation=no");
+    expect(summary.message).toContain("summary_kind=thread_summary");
+    expect(summary.message).toContain("next_automation_reason=There is 1 open blocker(s).");
   });
 
   it("reports ready_for_automation when the repo is idle and there is active work", () => {
@@ -140,6 +147,7 @@ describe("status command", () => {
     expect(summary.report_thread_id).toBe("thread-99");
     expect(summary.sprint_active).toBe(true);
     expect(summary.results_summary?.worker_result).toBe("completed task-ready");
+    expect(summary.next_automation_reason).toBe("Ready for automation: active or planning work is available.");
   });
 
   it("reads result summaries from autonomy/results.json", async () => {
@@ -155,7 +163,9 @@ describe("status command", () => {
 
     expect(summary.results_summary?.planner_summary).toBe("Planned the next ready window.");
     expect(summary.results_summary?.commit_result).toBe("autonomy(goal-alpha/task-b): Wire status report");
+    expect(summary.next_automation_reason).toContain("Current workspace is not a Git repository");
     expect(summary.message).toContain("commit=abc123");
+    expect(summary.message).toContain("next_automation_reason=Current workspace is not a Git repository");
   });
 
   it("does not treat verify_failed-only queues as ready for automation", () => {

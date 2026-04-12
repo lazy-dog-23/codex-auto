@@ -56,6 +56,12 @@ export const REPORT_SURFACES = ["thread_and_inbox"] as const;
 export const INSTALL_SOURCES = ["local_package"] as const;
 export const AUTO_COMMIT_MODES = ["disabled", "autonomy_branch"] as const;
 export const RESULT_STATES = ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"] as const;
+export const SUMMARY_KINDS = [
+  "normal_success",
+  "thread_summary",
+  "immediate_exception",
+  "goal_transition",
+] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
@@ -71,6 +77,7 @@ export type ReportSurface = (typeof REPORT_SURFACES)[number];
 export type InstallSource = (typeof INSTALL_SOURCES)[number];
 export type AutoCommitMode = (typeof AUTO_COMMIT_MODES)[number];
 export type ResultState = (typeof RESULT_STATES)[number];
+export type SummaryKind = (typeof SUMMARY_KINDS)[number];
 
 export interface GoalRecord {
   id: string;
@@ -167,6 +174,10 @@ export interface ResultEntry {
 
 export interface AutonomyResults {
   version: number;
+  last_thread_summary_sent_at?: string | null;
+  last_inbox_run_at?: string | null;
+  last_summary_kind?: SummaryKind | null;
+  last_summary_reason?: string | null;
   planner: ResultEntry;
   worker: ResultEntry;
   review: ResultEntry;
@@ -191,6 +202,8 @@ export interface AutonomyState {
   sprint_active: boolean;
   paused: boolean;
   pause_reason: string | null;
+  last_thread_summary_sent_at?: string | null;
+  last_inbox_run_at?: string | null;
 }
 
 export interface Blocker {
@@ -282,6 +295,11 @@ export interface StatusSummary extends CommandResult {
   report_thread_id: string | null;
   autonomy_branch: string | null;
   sprint_active: boolean;
+  last_thread_summary_sent_at: string | null;
+  last_inbox_run_at: string | null;
+  latest_summary_kind: SummaryKind | null;
+  latest_summary_reason: string | null;
+  next_automation_reason: string | null;
   results_summary: {
     planner_summary: string | null;
     worker_result: string | null;

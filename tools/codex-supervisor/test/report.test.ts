@@ -83,6 +83,12 @@ describe("report command", () => {
     expect(report.latest_review_summary).toBe("Review passed.");
     expect(report.latest_commit_hash).toBe("abc123");
     expect(report.latest_commit_message).toBe("autonomy(goal-alpha/task-b): Wire status report");
+    expect(report.last_thread_summary_sent_at).toBe("2026-01-05T02:20:00Z");
+    expect(report.last_inbox_run_at).toBe("2026-01-05T02:18:00Z");
+    expect(report.latest_summary_kind).toBe("thread_summary");
+    expect(report.latest_summary_reason).toBe("Heartbeat summary sent to the thread and Inbox.");
+    expect(report.next_automation_reason).toContain("Current workspace is not a Git repository");
+    expect(report.runtime_reason).toContain("Current workspace is not a Git repository");
     expect(report.open_blockers).toHaveLength(1);
     expect(report.open_blockers[0]?.id).toBe("blocker-a");
     expect(report.goal_transition).toBeNull();
@@ -143,6 +149,7 @@ describe("report command", () => {
     state.paused = false;
     state.pause_reason = null;
     state.report_thread_id = "thread-123";
+    state.open_blocker_count = 0;
     blockers.blockers = [];
     results.worker.goal_id = "goal-beta";
     results.worker.task_id = "task-beta-1";
@@ -164,10 +171,15 @@ describe("report command", () => {
     expect(report.current_goal?.id).toBe("goal-beta");
     expect(report.current_task?.id).toBe("task-beta-1");
     expect(report.goal_transition).toBe("completed goal-alpha(Wrap up the first goal) -> active goal-beta(Start the follow-up goal)");
+    expect(report.latest_summary_kind).toBe("goal_transition");
+    expect(report.latest_summary_reason).toBe("The previous goal completed and the next approved goal is active.");
     expect(report.runtime_warnings.some((warning) => warning.code === "not_a_git_repo")).toBe(true);
+    expect(report.next_automation_reason).toContain("Current workspace is not a Git repository");
     expect(report.message).toContain("previous_goal=goal-alpha(Wrap up the first goal)");
     expect(report.message).toContain("goal=goal-beta(Start the follow-up goal)");
     expect(report.message).toContain("goal_transition=completed goal-alpha(Wrap up the first goal) -> active goal-beta(Start the follow-up goal)");
+    expect(report.message).toContain("summary_kind=goal_transition");
+    expect(report.message).toContain("next_automation_reason=Current workspace is not a Git repository");
     expect(report.message).toContain("commit=def456:autonomy(goal-beta/task-beta-1): Kick off the next goal");
     expect(report.message).toContain("paused=no");
     expect(report.message).toContain("runtime=warning[not_a_git_repo]");

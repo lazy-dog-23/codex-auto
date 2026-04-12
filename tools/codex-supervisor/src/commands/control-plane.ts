@@ -69,6 +69,10 @@ export function createDefaultSettingsDocument(): AutonomySettings {
 export function createDefaultResultsDocument(): AutonomyResults {
   return {
     version: 1,
+    last_thread_summary_sent_at: null,
+    last_inbox_run_at: null,
+    last_summary_kind: null,
+    last_summary_reason: null,
     planner: emptyResultEntry(),
     worker: emptyResultEntry(),
     review: emptyResultEntry(),
@@ -95,6 +99,8 @@ export function createDefaultState(): AutonomyState {
     sprint_active: false,
     paused: false,
     pause_reason: null,
+    last_thread_summary_sent_at: null,
+    last_inbox_run_at: null,
   };
 }
 
