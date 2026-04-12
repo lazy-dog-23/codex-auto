@@ -1,6 +1,6 @@
 import { Command } from "commander";
 
-import type { AutonomyResults, GoalRecord, TaskRecord } from "../domain/types.js";
+import type { AutonomyResults, BlockerRecord, GoalRecord, TaskRecord } from "../domain/types.js";
 import { countOpenBlockers } from "../domain/autonomy.js";
 import { detectGitRepository } from "../infra/git.js";
 import { resolveRepoPaths } from "../shared/paths.js";
@@ -17,12 +17,19 @@ export interface ReportResult {
   ok: boolean;
   message: string;
   current_goal: GoalRecord | null;
+  previous_goal: GoalRecord | null;
   current_task: TaskRecord | null;
   paused: boolean;
   pause_reason: string | null;
   run_mode: string | null;
   report_thread_id: string | null;
   blockers_open: number;
+  open_blockers: BlockerRecord[];
+  latest_verify_summary: string | null;
+  latest_review_summary: string | null;
+  latest_commit_hash: string | null;
+  latest_commit_message: string | null;
+  goal_transition: string | null;
   latest_results: AutonomyResults;
 }
 
@@ -38,22 +45,50 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
   ]);
 
   const currentGoal = getActiveGoal(goalsDoc.goals, state);
+  const previousGoal = findMostRecentCompletedGoal(goalsDoc.goals, currentGoal?.id ?? null);
   const currentTask = state.current_task_id
     ? tasksDoc.tasks.find((task) => task.id === state.current_task_id) ?? null
     : tasksDoc.tasks.find((task) => task.goal_id === state.current_goal_id && task.status === "ready") ?? null;
+  const openBlockers = blockersDoc.blockers.filter((blocker) => blocker.status === "open");
   const blockersOpen = countOpenBlockers(blockersDoc.blockers);
-  const message = buildReportMessage(currentGoal, currentTask, state.paused, blockersOpen, resultsDoc);
+  const latestVerifySummary = resultsDoc.worker.verify_summary ?? resultsDoc.worker.summary ?? null;
+  const latestReviewSummary = resultsDoc.review.summary ?? resultsDoc.review.review_status ?? null;
+  const latestCommitHash = resultsDoc.commit.hash ?? null;
+  const latestCommitMessage = resultsDoc.commit.message ?? resultsDoc.commit.summary ?? null;
+  const goalTransition = buildGoalTransitionSummary(previousGoal, currentGoal);
+  const message = buildReportMessage({
+    currentGoal,
+    previousGoal,
+    currentTask,
+    paused: state.paused,
+    pauseReason: state.pause_reason,
+    blockers: openBlockers,
+    verifySummary: latestVerifySummary,
+    reviewSummary: latestReviewSummary,
+    commitHash: latestCommitHash,
+    commitMessage: latestCommitMessage,
+    reportThreadId: state.report_thread_id,
+    runMode: state.run_mode,
+    goalTransition,
+  });
 
   return {
     ok: true,
     message,
     current_goal: currentGoal,
+    previous_goal: previousGoal,
     current_task: currentTask,
     paused: state.paused,
     pause_reason: state.pause_reason,
     run_mode: state.run_mode,
     report_thread_id: state.report_thread_id,
     blockers_open: blockersOpen,
+    open_blockers: openBlockers,
+    latest_verify_summary: latestVerifySummary,
+    latest_review_summary: latestReviewSummary,
+    latest_commit_hash: latestCommitHash,
+    latest_commit_message: latestCommitMessage,
+    goal_transition: goalTransition,
     latest_results: resultsDoc,
   };
 }
@@ -69,15 +104,132 @@ export function registerReportCommand(program: Command): void {
 }
 
 function buildReportMessage(
-  goal: GoalRecord | null,
-  task: TaskRecord | null,
-  paused: boolean,
-  blockersOpen: number,
-  results: AutonomyResults,
+  options: {
+    currentGoal: GoalRecord | null;
+    previousGoal: GoalRecord | null;
+    currentTask: TaskRecord | null;
+    paused: boolean;
+    pauseReason: string | null;
+    blockers: readonly BlockerRecord[];
+    verifySummary: string | null;
+    reviewSummary: string | null;
+    commitHash: string | null;
+    commitMessage: string | null;
+    reportThreadId: string | null;
+    runMode: string | null;
+    goalTransition: string | null;
+  },
 ): string {
-  const goalPart = goal ? `goal=${goal.id}` : "goal=none";
-  const taskPart = task ? `task=${task.id}` : "task=none";
-  const pausePart = paused ? "paused=yes" : "paused=no";
-  const commitPart = results.commit.hash ? `commit=${results.commit.hash}` : "commit=none";
-  return [goalPart, taskPart, pausePart, `open_blockers=${blockersOpen}`, commitPart].join(" ");
+  const goalPart = formatGoalPart(options.currentGoal);
+  const previousGoalPart = options.previousGoal ? `previous_goal=${formatGoalLabel(options.previousGoal)}` : "previous_goal=none";
+  const taskPart = formatTaskPart(options.currentTask);
+  const verifyPart = `verify=${formatNullableValue(options.verifySummary)}`;
+  const reviewPart = `review=${formatNullableValue(options.reviewSummary)}`;
+  const commitPart = `commit=${formatCommitValue(options.commitHash, options.commitMessage)}`;
+  const blockersPart = `open_blockers=${options.blockers.length}${formatBlockerList(options.blockers)}`;
+  const pausePart = options.paused
+    ? `paused=yes${options.pauseReason ? `(${options.pauseReason})` : ""}`
+    : "paused=no";
+  const reportThreadPart = `report_thread=${formatNullableValue(options.reportThreadId)}`;
+  const runModePart = `run_mode=${formatNullableValue(options.runMode)}`;
+  const transitionPart = options.goalTransition ? `goal_transition=${options.goalTransition}` : "goal_transition=none";
+  return [
+    goalPart,
+    previousGoalPart,
+    taskPart,
+    verifyPart,
+    reviewPart,
+    commitPart,
+    blockersPart,
+    pausePart,
+    reportThreadPart,
+    runModePart,
+    transitionPart,
+  ].join(" ");
+}
+
+function formatGoalPart(goal: GoalRecord | null): string {
+  return goal ? `goal=${formatGoalLabel(goal)}` : "goal=none";
+}
+
+function formatGoalLabel(goal: GoalRecord): string {
+  return `${goal.id}${goal.title ? `(${goal.title})` : ""}`;
+}
+
+function formatTaskPart(task: TaskRecord | null): string {
+  if (!task) {
+    return "task=none";
+  }
+
+  const details = [task.status, `priority=${task.priority}`];
+  if (task.review_status) {
+    details.push(`review=${task.review_status}`);
+  }
+  if (task.commit_hash) {
+    details.push(`commit=${task.commit_hash}`);
+  }
+  return `task=${formatTaskLabel(task)}[${details.join(",")}]`;
+}
+
+function formatTaskLabel(task: TaskRecord): string {
+  return `${task.id}${task.title ? `(${task.title})` : ""}`;
+}
+
+function formatNullableValue(value: string | null): string {
+  return value && value.length > 0 ? value : "none";
+}
+
+function formatCommitValue(hash: string | null, message: string | null): string {
+  if (!hash && !message) {
+    return "none";
+  }
+
+  if (!hash) {
+    return message ?? "none";
+  }
+
+  if (!message) {
+    return hash;
+  }
+
+  return `${hash}:${message}`;
+}
+
+function formatBlockerList(blockers: readonly BlockerRecord[]): string {
+  if (blockers.length === 0) {
+    return "";
+  }
+
+  const entries = blockers.slice(0, 3).map((blocker) => `${blocker.id}/${blocker.task_id}:${blocker.severity}`);
+  const remaining = blockers.length - entries.length;
+  return `[${entries.join(",")}${remaining > 0 ? `,+${remaining}` : ""}]`;
+}
+
+function findMostRecentCompletedGoal(goals: readonly GoalRecord[], currentGoalId: string | null): GoalRecord | null {
+  return [...goals]
+    .filter((goal) => goal.status === "completed" && goal.id !== currentGoalId)
+    .sort((left, right) => {
+      const completedOrder = right.completed_at?.localeCompare(left.completed_at ?? "") ?? 0;
+      if (completedOrder !== 0) {
+        return completedOrder;
+      }
+
+      return right.created_at.localeCompare(left.created_at);
+    })[0] ?? null;
+}
+
+function buildGoalTransitionSummary(previousGoal: GoalRecord | null, currentGoal: GoalRecord | null): string | null {
+  if (!previousGoal || !currentGoal) {
+    return null;
+  }
+
+  if (previousGoal.id === currentGoal.id) {
+    return null;
+  }
+
+  if (previousGoal.status !== "completed" || currentGoal.status !== "active") {
+    return null;
+  }
+
+  return `completed ${formatGoalLabel(previousGoal)} -> active ${formatGoalLabel(currentGoal)}`;
 }
