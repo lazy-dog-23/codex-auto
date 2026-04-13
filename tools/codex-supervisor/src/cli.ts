@@ -21,11 +21,15 @@ import { registerStatusCommand } from "./commands/status.js";
 import { registerUnblockCommand } from "./commands/unblock.js";
 import { registerRebaselineManagedCommand, registerUpgradeManagedCommand } from "./commands/upgrade-managed.js";
 import { toCliError } from "./shared/errors.js";
+import { PRODUCT_NAME, PRODUCT_VERSION } from "./shared/product.js";
 
 async function main(): Promise<void> {
   const program = new Command();
 
-  program.name("codex-autonomy").description("Repo-local helper CLI for Codex autonomy scaffolding and checks");
+  program
+    .name(PRODUCT_NAME)
+    .description("Repo-local helper CLI for Codex autonomy scaffolding and checks")
+    .version(PRODUCT_VERSION);
 
   registerBootstrapCommand(program);
   registerInstallCommand(program);

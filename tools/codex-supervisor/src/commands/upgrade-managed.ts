@@ -8,6 +8,7 @@ import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { isDirectory, loadJsonFile, pathExists, writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
 import { getInstallMetadataPath, getManagedFileClass, resolveRepoPaths } from "../shared/paths.js";
+import { PRODUCT_VERSION } from "../shared/product.js";
 import {
   getAgentsMarkdown,
   getAutonomyIntakeSkillMarkdown,
@@ -43,8 +44,6 @@ import {
   tasksSchema,
   verificationSchema,
 } from "../schemas/index.js";
-
-const PRODUCT_VERSION = "0.1.0";
 
 type UpgradeDecision = "managed_match" | "safe_replace" | "auto_merge" | "manual_conflict" | "foreign_occupied";
 

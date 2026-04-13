@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $packageRoot = Join-Path $repoRoot 'tools/codex-supervisor'
+$routerSkillInstaller = Join-Path $repoRoot 'scripts/install-router-skill.ps1'
 
 function Invoke-Npm {
     param(
@@ -31,6 +32,14 @@ if ([string]::IsNullOrWhiteSpace($globalPrefix)) {
 }
 
 Write-Host "Installing codex-autonomy into global prefix: $globalPrefix"
-Invoke-Npm -Arguments @('install', '-g', '--prefix', $globalPrefix, $packageRoot)
+Invoke-Npm -Arguments @('install', '-g', '--force', '--prefix', $globalPrefix, $packageRoot)
+
+if (Test-Path -LiteralPath $routerSkillInstaller) {
+    Write-Host 'Installing global codex-autonomy router skill...'
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $routerSkillInstaller
+    if ($LASTEXITCODE -ne 0) {
+        throw "Router skill install failed with exit code $LASTEXITCODE."
+    }
+}
 
 Write-Host "codex-autonomy is ready at the global npm prefix: $globalPrefix"

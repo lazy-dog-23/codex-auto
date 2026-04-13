@@ -66,10 +66,10 @@ import {
   getManagedControlSurfacePaths,
   getManagedControlSurfaceRelativePaths,
 } from "../shared/paths.js";
+import { PRODUCT_VERSION } from "../shared/product.js";
 
 const execFileAsync = promisify(execFile);
 const LEGACY_GOAL_ID = "goal-legacy";
-const PRODUCT_VERSION = "0.1.0";
 
 const DEFAULT_TASKS: TasksDocument = {
   version: 1,

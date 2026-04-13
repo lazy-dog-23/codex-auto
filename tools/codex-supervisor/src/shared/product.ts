@@ -1,0 +1,2 @@
+export const PRODUCT_NAME = "codex-autonomy";
+export const PRODUCT_VERSION = "0.1.0";

@@ -7,7 +7,7 @@
 ## 快速开始
 
 1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。
-2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀。
+2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀，同时在当前机器的 `CODEX_HOME/skills/personal` 下安装全局 `codex-autonomy-router` skill。
 3. 在目标仓库优先使用 `codex-autonomy ...`。例如：`codex-autonomy install --target <repoB>`。
 4. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。
 5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
@@ -17,11 +17,14 @@
 ## 日常命令
 
 - 标准路径：`codex-autonomy <command>`。
+- 可先用 `codex-autonomy --version` 确认当前机器级 CLI 版本；全局 router skill 也会把它作为“是否需要先刷新本机产品版本”的判断信号之一。
+- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“把 auto 装进当前项目”“目标是……”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本，再继续路由到 intake / status / report / review / merge 流。
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
 - `codex-autonomy rebaseline-managed --target <repo>`：把 advisory managed drift 重新登记为当前仓库的 repo-specific 基线，不改文件内容，只更新 `autonomy/install.json` 元数据。
 - `codex-autonomy bind-thread --report-thread-id <threadId>`：把目标仓库的原线程绑定为唯一汇报线程。
 - `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`：构建并安装 `codex-autonomy` 到全局 npm 前缀。
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-router-skill.ps1`：只同步/刷新这台机器上的全局 `codex-autonomy-router` skill，不重装 CLI。
 - `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。
 - `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
@@ -99,6 +102,31 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - 心跳 automation 的模型字段在不同持久化路径里不一定都能保留。
 - 所以 repo 里的 `.codex/config.toml` 是兜底配置，负责给当前项目和新 turn 提供稳定默认值。
 - 也就是说，automation 侧能配置时用 automation 配置，不能持久化时靠 repo `.codex/config.toml` 托底。
+
+## 新项目线程怎么接
+
+做完一次机器级安装后，新项目里的 Codex 线程可以直接用自然语言触发：
+
+- `把 auto 装进当前项目`
+- `目标是：……`
+- `直接做这个目标`
+- `继续当前目标`
+- `汇报当前情况`
+
+全局 router skill 的工作方式是：
+
+1. 先检查本机有没有 `codex-autonomy`
+2. 对“装进当前项目 / 开始自治 / 继续推进”这类请求，优先从当前这份产品源码仓库自动执行一次机器级刷新
+3. 再检查当前项目有没有控制面
+4. 没有就自动安装控制面并跑 `setup -> doctor -> prepare-worktree`
+5. 已安装就先尝试对齐到当前本地产品版本
+6. 最后把你的自然语言请求路由到 intake / proposal / status / report / review / merge
+
+这意味着：
+
+- 新项目第一次接入，不需要你先手工判断“装没装”
+- `scripts/install-global.ps1` 现在会强制刷新本地全局包；router skill 在接管/推进类请求前也可以直接调用它，因此就算你本地改了 `codex-auto` 但还没 bump version，也能优先吃到最新源码
+- 后续新项目线程会优先按最新本地产品逻辑接管
 
 ## Review 扩展点
 

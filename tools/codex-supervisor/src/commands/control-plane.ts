@@ -21,6 +21,7 @@ import {
 } from "../contracts/autonomy.js";
 import { loadJsonFile, writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
 import { createDefaultAutonomySettings } from "../shared/policy.js";
+import { PRODUCT_VERSION } from "../shared/product.js";
 
 function emptyResultEntry(): ResultEntry {
   return {
@@ -61,7 +62,7 @@ export function createDefaultSettingsDocument(): AutonomySettings {
 export function createDefaultInstallDocument(now: string, sourceRepo: string): InstallDocument {
   return {
     version: 1,
-    product_version: "0.1.0",
+    product_version: PRODUCT_VERSION,
     installed_at: now,
     managed_paths: [],
     managed_files: [],
