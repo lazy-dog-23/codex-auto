@@ -13,6 +13,7 @@ import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
 import { runStatusCommand } from "../src/commands/status.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, getBackgroundWorktreePath } from "../src/infra/git.js";
 import { createAutonomyCommit, DEFAULT_AUTONOMY_BRANCH, inspectAutonomyCommitGate, getCurrentGitBranch } from "../src/infra/git.js";
+import { probeWorktreeState } from "../src/infra/worktree-state.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   inspectCycleLockMock: vi.fn(),
@@ -208,6 +209,40 @@ describe("git/worktree integration", () => {
 
     const backgroundJournal = await readFile(join(prepare.backgroundPath, "autonomy", "journal.md"), "utf8");
     expect(backgroundJournal).toContain("allowlisted sync marker");
+  });
+
+  it("probes a managed-only dirty worktree with forward-slash normalized status paths", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    const bootstrap = await runBootstrapCommand(workspace);
+    expect(bootstrap.ok).toBe(true);
+
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+
+    await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- normalized probe marker -->\n", "utf8");
+
+    const probe = await probeWorktreeState(workspace, { debounceMs: 0 });
+
+    expect(probe).not.toBeNull();
+    expect(probe?.stable).toBe(true);
+    expect(probe?.transient).toBe(false);
+    expect(probe?.managedControlSurfaceOnly).toBe(true);
+    expect(probe?.unmanagedDirtyPaths).toEqual([]);
+    expect(probe?.managedDirtyPaths).toContain("autonomy/journal.md");
+    expect(probe?.normalizedStatusLines.some((line) => line.includes("autonomy/journal.md"))).toBe(true);
+    expect(probe?.normalizedStatusLines.some((line) => line.includes("\\"))).toBe(false);
   });
 
   it("mirrors allowlisted deletions into the background worktree", async () => {

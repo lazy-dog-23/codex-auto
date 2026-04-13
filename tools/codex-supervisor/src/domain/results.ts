@@ -41,7 +41,8 @@ export function hasRecordedResultEntry(entry: ResultEntry): boolean {
     (entry.message !== null && entry.message !== undefined) ||
     (entry.review_status !== null && entry.review_status !== undefined) ||
     (entry.next_step_summary !== null && entry.next_step_summary !== undefined) ||
-    (entry.continuation_decision !== null && entry.continuation_decision !== undefined)
+    (entry.continuation_decision !== null && entry.continuation_decision !== undefined) ||
+    (entry.verification_pending_axes !== null && entry.verification_pending_axes !== undefined)
   );
 }
 

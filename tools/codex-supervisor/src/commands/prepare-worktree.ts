@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, ensureGitSafeDirectory, getBackgroundWorktreePath, getRepositoryHead, getWorktreeSummary, prepareBackgroundWorktree } from "../infra/git.js";
 import { listDirectoryEntries, pathExists } from "../infra/json.js";
 import { commandSucceeded, runProcess } from "../infra/process.js";
-import { getManagedControlSurfaceRelativePaths, isManagedControlSurfaceRelativePath } from "../shared/paths.js";
+import { probeWorktreeState } from "../infra/worktree-state.js";
 
 export interface PrepareWorktreeOptions {
   workspaceRoot?: string;
@@ -39,10 +39,33 @@ export async function runPrepareWorktree(options: PrepareWorktreeOptions = {}): 
     };
   }
 
-  const repoStatus = await runGitStatus(repo.path);
-  const dirtyPaths = extractDirtyPaths(repoStatus);
-  const blockedDirtyPaths = dirtyPaths.filter((pathValue) => !isManagedControlSurfacePath(pathValue));
-  const repoDirty = repoStatus.length > 0;
+  const repoState = await probeWorktreeState(repo.path);
+  if (!repoState) {
+    return {
+      ok: false,
+      workspaceRoot,
+      repoRoot: repo.path,
+      backgroundPath: getBackgroundWorktreePath(repo.path),
+      branch: DEFAULT_BACKGROUND_WORKTREE_BRANCH,
+      dirtyRepository: false,
+      message: "Git repository state could not be read.",
+    };
+  }
+
+  if (repoState.transient) {
+    return {
+      ok: false,
+      workspaceRoot,
+      repoRoot: repo.path,
+      backgroundPath: getBackgroundWorktreePath(repo.path),
+      branch: DEFAULT_BACKGROUND_WORKTREE_BRANCH,
+      dirtyRepository: repoState.dirty,
+      message: "transient_git_state: repository status was unstable across consecutive snapshots. Please retry.",
+    };
+  }
+
+  const blockedDirtyPaths = repoState.unmanagedDirtyPaths;
+  const repoDirty = repoState.dirty;
 
   if (blockedDirtyPaths.length > 0) {
     const backgroundPath = getBackgroundWorktreePath(repo.path);
@@ -71,7 +94,7 @@ export async function runPrepareWorktree(options: PrepareWorktreeOptions = {}): 
   }
 
   const backgroundPath = getBackgroundWorktreePath(repo.path);
-  const managedDirtyPaths = repoDirty ? dirtyPaths.filter((pathValue) => isManagedControlSurfacePath(pathValue)) : [];
+  const managedDirtyPaths = repoDirty ? repoState.managedDirtyPaths : [];
   const worktreeResult = repoDirty
     ? await createOrAlignBackgroundWorktree(
         repo.path,
@@ -97,6 +120,47 @@ export async function runPrepareWorktree(options: PrepareWorktreeOptions = {}): 
   const syncedPaths = repoDirty
     ? await syncManagedControlSurfaceFiles(repo.path, backgroundPath, managedDirtyPaths)
     : [];
+  if (repoDirty && managedDirtyPaths.length > 0) {
+    await refreshGitIndex(backgroundPath);
+  }
+
+  const backgroundState = await probeWorktreeState(backgroundPath);
+  if (!backgroundState) {
+    return {
+      ok: false,
+      workspaceRoot,
+      repoRoot: repo.path,
+      backgroundPath,
+      branch: worktreeResult.branch,
+      dirtyRepository: repoDirty,
+      message: `Unable to read background worktree state at ${backgroundPath}.`,
+    };
+  }
+
+  if (backgroundState.transient) {
+    return {
+      ok: false,
+      workspaceRoot,
+      repoRoot: repo.path,
+      backgroundPath,
+      branch: worktreeResult.branch,
+      dirtyRepository: repoDirty,
+      message: "transient_git_state: background worktree status was unstable across consecutive snapshots. Please retry.",
+    };
+  }
+
+  if (backgroundState.unmanagedDirtyPaths.length > 0) {
+    return {
+      ok: false,
+      workspaceRoot,
+      repoRoot: repo.path,
+      backgroundPath,
+      branch: worktreeResult.branch,
+      dirtyRepository: true,
+      message: `Background worktree is dirty outside the managed control surface: ${backgroundState.unmanagedDirtyPaths.join(", ")}.`,
+    };
+  }
+
   ensureGitSafeDirectory(repo.path, repo.path);
   ensureGitSafeDirectory(backgroundPath, repo.path);
 
@@ -222,8 +286,16 @@ async function createOrAlignBackgroundWorktree(
   }
 
   if (backgroundSummary.dirty) {
-    const dirtyPaths = extractDirtyPaths(backgroundSummary.statusLines);
-    const blockedDirtyPaths = dirtyPaths.filter((pathValue) => !isManagedControlSurfacePath(pathValue));
+    const backgroundState = await probeWorktreeState(backgroundPath);
+    if (backgroundState?.transient) {
+      return {
+        ok: false,
+        branch,
+        message: "transient_git_state: background worktree status was unstable across consecutive snapshots.",
+      };
+    }
+
+    const blockedDirtyPaths = backgroundState?.unmanagedDirtyPaths ?? [];
     if (blockedDirtyPaths.length > 0) {
       return {
         ok: false,
@@ -321,48 +393,13 @@ async function syncManagedControlSurfaceFiles(
   return synced;
 }
 
-async function runGitStatus(repoRoot: string): Promise<string[]> {
-  const result = runProcess("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: repoRoot });
-  if (!commandSucceeded(result)) {
-    return [];
+async function refreshGitIndex(repoRoot: string): Promise<void> {
+  const refreshResult = runProcess("git", ["update-index", "--refresh", "--ignore-submodules"], { cwd: repoRoot });
+  if (refreshResult.error && refreshResult.exitCode === null) {
+    throw new Error(
+      `Failed to refresh git index at ${repoRoot}: ${refreshResult.stderr || refreshResult.stdout || refreshResult.error || "unknown error"}`,
+    );
   }
-
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
-}
-
-function extractDirtyPaths(statusLines: readonly string[]): string[] {
-  const paths = new Set<string>();
-
-  for (const statusLine of statusLines) {
-    if (statusLine.length < 4) {
-      continue;
-    }
-
-    const rawContent = statusLine.slice(3).trim();
-    if (!rawContent) {
-      continue;
-    }
-
-    const statusPaths = rawContent.includes(" -> ")
-      ? rawContent.split(" -> ")
-      : [rawContent];
-
-    for (const statusPath of statusPaths) {
-      const normalized = statusPath.replace(/^"+|"+$/g, "").replace(/\\/g, "/").trim();
-      if (normalized) {
-        paths.add(normalized);
-      }
-    }
-  }
-
-  return [...paths];
-}
-
-function isManagedControlSurfacePath(pathValue: string): boolean {
-  return isManagedControlSurfaceRelativePath(pathValue);
 }
 
 async function isEmptyDirectory(targetPath: string): Promise<boolean> {

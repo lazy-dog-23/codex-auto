@@ -12,6 +12,7 @@ import type {
   BlockersDocument,
   GoalsDocument,
   TasksDocument,
+  VerificationDocument,
 } from "../src/contracts/autonomy.js";
 import { buildStatusSummary, runStatusCommand } from "../src/commands/status.js";
 
@@ -66,6 +67,11 @@ describe("status command", () => {
     expect(summary.has_recorded_run).toBe(true);
     expect(summary.results_scope_note).toBeNull();
     expect(summary.auto_continue_state).toBe("stopped");
+    expect(summary.closeout_policy).toBeNull();
+    expect(summary.verification_required).toBe(0);
+    expect(summary.verification_passed).toBe(0);
+    expect(summary.verification_pending).toBe(0);
+    expect(summary.completion_blocked_by_verification).toBe(false);
     expect(summary.next_task_id).toBe("task-b");
     expect(summary.next_task_title).toBe("Wire status report");
     expect(summary.remaining_ready).toBe(1);
@@ -73,8 +79,111 @@ describe("status command", () => {
     expect(summary.next_automation_reason).toContain("open blocker");
     expect(summary.message).toContain("ready_for_automation=no");
     expect(summary.message).toContain("auto_continue_state=stopped");
+    expect(summary.message).toContain("verification_pending=0");
     expect(summary.message).toContain("summary_kind=thread_summary");
     expect(summary.message).toContain("next_automation_reason=There is 1 open blocker(s).");
+  });
+
+  it("surfaces verification closeout gaps even when task execution is otherwise done", () => {
+    const verificationDoc: VerificationDocument = {
+      version: 1,
+      goal_id: "goal-42",
+      policy: "strong_template",
+      axes: [
+        {
+          id: "full_e2e",
+          title: "Run full e2e",
+          required: true,
+          status: "pending",
+          evidence: [],
+          source_task_id: null,
+          last_checked_at: null,
+          reason: "Not run yet.",
+        },
+      ],
+    };
+
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [
+          {
+            id: "task-done",
+            goal_id: "goal-42",
+            title: "Done task",
+            status: "done",
+            priority: "P1",
+            depends_on: [],
+            acceptance: [],
+            file_hints: [],
+            retry_count: 0,
+            last_error: null,
+            updated_at: "2026-01-06T00:00:00Z",
+            commit_hash: null,
+            review_status: "passed",
+            source: "proposal",
+            source_task_id: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-42",
+            title: "Goal 42",
+            objective: "Audit the repo",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "active",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: "goal-42",
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: "sprint",
+        last_planner_run_at: "2026-01-05T00:00:00Z",
+        last_worker_run_at: "2026-01-05T02:00:00Z",
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "planned", goal_id: "goal-42", task_id: null, summary: "planned next task", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null, verification_pending_axes: null },
+        worker: { status: "passed", goal_id: "goal-42", task_id: "task-done", summary: "completed task-done", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed", verification_pending_axes: ["full_e2e"] },
+        review: { status: "passed", goal_id: "goal-42", task_id: "task-done", summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "followup_required", verification_pending_axes: ["full_e2e"] },
+        commit: { status: "passed", goal_id: "goal-42", task_id: "task-done", summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-42/task-done): Done task", review_status: null, verification_pending_axes: null },
+        reporter: { status: "sent", goal_id: "goal-42", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null, verification_pending_axes: ["full_e2e"] },
+      },
+      undefined,
+      verificationDoc,
+    );
+
+    expect(summary.closeout_policy).toBe("strong_template");
+    expect(summary.verification_required).toBe(1);
+    expect(summary.verification_passed).toBe(0);
+    expect(summary.verification_pending).toBe(1);
+    expect(summary.completion_blocked_by_verification).toBe(true);
+    expect(summary.next_automation_reason).toContain("Verification closeout is still pending");
   });
 
   it("reports ready_for_automation when the repo is idle and there is active work", () => {

@@ -54,6 +54,13 @@ export interface GitRepositoryInfo {
   head: string | null;
   dirty: boolean;
   statusLines: string[];
+  stable?: boolean;
+  transient?: boolean;
+  reason?: string;
+  attempts?: number;
+  managedDirtyPaths?: string[];
+  unmanagedDirtyPaths?: string[];
+  managedControlSurfaceOnly?: boolean;
 }
 
 export interface WorktreeSummary {
@@ -64,6 +71,13 @@ export interface WorktreeSummary {
   head: string | null;
   dirty: boolean;
   statusLines: string[];
+  stable?: boolean;
+  transient?: boolean;
+  reason?: string;
+  attempts?: number;
+  managedDirtyPaths?: string[];
+  unmanagedDirtyPaths?: string[];
+  managedControlSurfaceOnly?: boolean;
 }
 
 export interface BackgroundWorktreePreparation {

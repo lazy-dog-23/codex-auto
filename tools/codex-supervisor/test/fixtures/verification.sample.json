@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "goal_id": "goal-alpha",
+  "policy": "strong_template",
+  "axes": [
+    {
+      "id": "build",
+      "title": "Run the build gate",
+      "required": true,
+      "status": "passed",
+      "evidence": [
+        "npm run frontend:build: success"
+      ],
+      "source_task_id": "task-b",
+      "last_checked_at": "2026-01-05T02:12:00Z",
+      "reason": null
+    },
+    {
+      "id": "full_e2e",
+      "title": "Run the full e2e gate",
+      "required": true,
+      "status": "pending",
+      "evidence": [],
+      "source_task_id": null,
+      "last_checked_at": null,
+      "reason": "Not yet executed."
+    }
+  ]
+}

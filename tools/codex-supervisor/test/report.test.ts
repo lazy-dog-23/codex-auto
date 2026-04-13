@@ -12,6 +12,7 @@ import type {
   BlockersDocument,
   GoalsDocument,
   TasksDocument,
+  VerificationDocument,
 } from "../src/contracts/autonomy.js";
 import { runReport } from "../src/commands/report.js";
 
@@ -51,6 +52,7 @@ async function writeControlPlaneFiles(
     state: AutonomyState;
     blockers: BlockersDocument;
     results: AutonomyResults;
+    verification?: VerificationDocument;
   },
 ): Promise<void> {
   await writeFile(join(workspace, "autonomy", "goals.json"), `${JSON.stringify(docs.goals, null, 2)}\n`, "utf8");
@@ -58,6 +60,9 @@ async function writeControlPlaneFiles(
   await writeFile(join(workspace, "autonomy", "state.json"), `${JSON.stringify(docs.state, null, 2)}\n`, "utf8");
   await writeFile(join(workspace, "autonomy", "blockers.json"), `${JSON.stringify(docs.blockers, null, 2)}\n`, "utf8");
   await writeFile(join(workspace, "autonomy", "results.json"), `${JSON.stringify(docs.results, null, 2)}\n`, "utf8");
+  if (docs.verification) {
+    await writeFile(join(workspace, "autonomy", "verification.json"), `${JSON.stringify(docs.verification, null, 2)}\n`, "utf8");
+  }
 }
 
 describe("report command", () => {
@@ -90,6 +95,11 @@ describe("report command", () => {
     expect(report.has_recorded_run).toBe(true);
     expect(report.results_scope_note).toBeNull();
     expect(report.auto_continue_state).toBe("stopped");
+    expect(report.closeout_policy).toBeNull();
+    expect(report.verification_required).toBe(0);
+    expect(report.verification_passed).toBe(0);
+    expect(report.verification_pending).toBe(0);
+    expect(report.completion_blocked_by_verification).toBe(false);
     expect(report.next_task_id).toBe("task-b");
     expect(report.remaining_ready).toBe(1);
     expect(report.last_followup_summary).toBe("Add a regression check for unblock flow.");
@@ -109,7 +119,65 @@ describe("report command", () => {
     expect(report.message).toContain("paused=yes(needs human review)");
     expect(report.message).toContain("goal_transition=none");
     expect(report.message).toContain("auto_continue_state=stopped");
+    expect(report.message).toContain("verification_pending=0");
     expect(report.message).toContain("runtime=warning[not_a_git_repo]");
+  });
+
+  it("reports verification closeout gaps as a first-class stop reason", async () => {
+    const goals = clone(readJsonFixture<GoalsDocument>("goals.sample.json"));
+    const tasks = clone(readJsonFixture<TasksDocument>("tasks.sample.json"));
+    const state = clone(readJsonFixture<AutonomyState>("state.sample.json"));
+    const blockers = clone(readJsonFixture<BlockersDocument>("blockers.sample.json"));
+    const results = clone(readJsonFixture<AutonomyResults>("results.sample.json"));
+    const workspace = await makeTempWorkspace();
+
+    tasks.tasks = [
+      {
+        ...tasks.tasks[0]!,
+        id: "task-done",
+        goal_id: "goal-alpha",
+        title: "Done task",
+        status: "done",
+        review_status: "passed",
+      },
+    ];
+    blockers.blockers = [];
+    state.open_blocker_count = 0;
+    state.current_task_id = null;
+
+    await writeControlPlaneFiles(workspace, {
+      goals,
+      tasks,
+      state,
+      blockers,
+      results,
+      verification: {
+        version: 1,
+        goal_id: "goal-alpha",
+        policy: "strong_template",
+        axes: [
+          {
+            id: "full_e2e",
+            title: "Run full e2e",
+            required: true,
+            status: "pending",
+            evidence: [],
+            source_task_id: null,
+            last_checked_at: null,
+            reason: "Not run yet.",
+          },
+        ],
+      },
+    });
+
+    const report = await runReport(workspace);
+
+    expect(report.closeout_policy).toBe("strong_template");
+    expect(report.verification_required).toBe(1);
+    expect(report.verification_passed).toBe(0);
+    expect(report.verification_pending).toBe(1);
+    expect(report.completion_blocked_by_verification).toBe(true);
+    expect(report.message).toContain("completion_blocked_by_verification=yes");
   });
 
   it("describes a completed goal and the newly active goal when the thread has switched goals", async () => {

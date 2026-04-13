@@ -164,6 +164,35 @@
             "followup_required",
             null
           ]
+        },
+        "next_step_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "continuation_decision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "none",
+            "auto_continued",
+            "needs_confirmation",
+            null
+          ]
+        },
+        "verification_pending_axes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": null
         }
       }
     },
@@ -252,6 +281,35 @@
             "followup_required",
             null
           ]
+        },
+        "next_step_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "continuation_decision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "none",
+            "auto_continued",
+            "needs_confirmation",
+            null
+          ]
+        },
+        "verification_pending_axes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": null
         }
       }
     },
@@ -340,6 +398,35 @@
             "followup_required",
             null
           ]
+        },
+        "next_step_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "continuation_decision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "none",
+            "auto_continued",
+            "needs_confirmation",
+            null
+          ]
+        },
+        "verification_pending_axes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": null
         }
       }
     },
@@ -428,6 +515,35 @@
             "followup_required",
             null
           ]
+        },
+        "next_step_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "continuation_decision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "none",
+            "auto_continued",
+            "needs_confirmation",
+            null
+          ]
+        },
+        "verification_pending_axes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": null
         }
       }
     },
@@ -516,6 +632,35 @@
             "followup_required",
             null
           ]
+        },
+        "next_step_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "continuation_decision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "none",
+            "auto_continued",
+            "needs_confirmation",
+            null
+          ]
+        },
+        "verification_pending_axes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": null
         }
       }
     }

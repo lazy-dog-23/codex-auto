@@ -38,6 +38,18 @@ export const CONTINUATION_DECISIONS = [
   "needs_confirmation"
 ] as const;
 
+export const VERIFICATION_POLICIES = [
+  "strong_template",
+] as const;
+
+export const VERIFICATION_AXIS_STATUSES = [
+  "pending",
+  "passed",
+  "failed",
+  "blocked",
+  "not_applicable",
+] as const;
+
 export const PROPOSAL_STATUSES = [
   "awaiting_confirmation",
   "approved",
@@ -87,6 +99,8 @@ export type RunMode = (typeof RUN_MODES)[number];
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 export type TaskSource = (typeof TASK_SOURCES)[number];
 export type ContinuationDecision = (typeof CONTINUATION_DECISIONS)[number];
+export type VerificationPolicy = (typeof VERIFICATION_POLICIES)[number];
+export type VerificationAxisStatus = (typeof VERIFICATION_AXIS_STATUSES)[number];
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 export type CycleStatus = (typeof CYCLE_STATUSES)[number];
 export type LastResult = (typeof LAST_RESULTS)[number];
@@ -189,6 +203,24 @@ export interface AutonomySettings {
   default_sprint_heartbeat_minutes: number;
 }
 
+export interface VerificationAxis {
+  id: string;
+  title: string;
+  required: boolean;
+  status: VerificationAxisStatus;
+  evidence: string[];
+  source_task_id: string | null;
+  last_checked_at: string | null;
+  reason: string | null;
+}
+
+export interface VerificationDocument {
+  version: number;
+  goal_id: string | null;
+  policy: VerificationPolicy;
+  axes: VerificationAxis[];
+}
+
 export interface ResultEntry {
   status: ResultState;
   goal_id: string | null;
@@ -202,6 +234,7 @@ export interface ResultEntry {
   review_status?: ReviewStatus | null;
   next_step_summary?: string | null;
   continuation_decision?: ContinuationDecision | null;
+  verification_pending_axes?: string[] | null;
 }
 
 export interface AutonomyResults {
@@ -260,7 +293,15 @@ export interface InstallDocument {
   product_version: string;
   installed_at: string;
   managed_paths: string[];
+  managed_files?: ManagedInstallFile[];
   source_repo: string;
+}
+
+export interface ManagedInstallFile {
+  path: string;
+  template_id: string;
+  installed_hash: string;
+  last_reconciled_product_version: string;
 }
 
 export interface RepoPaths {
@@ -276,6 +317,7 @@ export interface RepoPaths {
   settingsFile: string;
   resultsFile: string;
   installFile: string;
+  verificationFile: string;
   journalFile: string;
   goalFile: string;
   cycleLockFile: string;
@@ -346,10 +388,17 @@ export interface StatusSummary extends CommandResult {
   next_automation_reason: string | null;
   auto_continue_state: AutoContinueState;
   continuation_reason: string | null;
+  closeout_policy: VerificationPolicy | null;
+  verification_required: number;
+  verification_passed: number;
+  verification_pending: number;
+  completion_blocked_by_verification: boolean;
   next_task_id: string | null;
   next_task_title: string | null;
   remaining_ready: number;
   last_followup_summary: string | null;
+  upgrade_state: string | null;
+  cli_install_state: string | null;
   results_summary: {
     planner_summary: string | null;
     worker_result: string | null;

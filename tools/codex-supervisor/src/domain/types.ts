@@ -40,6 +40,8 @@ export {
   TASK_PRIORITY_WEIGHT,
   TASK_SOURCES,
   TASK_STATUSES,
+  VERIFICATION_AXIS_STATUSES,
+  VERIFICATION_POLICIES,
 } from "../contracts/autonomy.js";
 
 export type {
@@ -75,6 +77,10 @@ export type {
   ReviewStatus,
   RunMode,
   StatusSummary,
+  VerificationAxis,
+  VerificationAxisStatus,
+  VerificationDocument,
+  VerificationPolicy,
   AutonomyTask,
   TaskPriority,
   TaskSource,

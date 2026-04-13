@@ -221,6 +221,37 @@ describe("task flow", () => {
     expect(result.state.sprint_active).toBe(true);
   });
 
+  it("does not complete the current goal while required verification axes are still pending", () => {
+    const goals = [
+      makeGoal({ id: "goal-a", status: "active" }),
+      makeGoal({ id: "goal-b", status: "approved", run_mode: "sprint", approved_at: "2026-01-02T00:00:00Z" }),
+    ];
+    const tasks = [makeTask({ id: "task-done", goal_id: "goal-a", status: "done" })];
+    const state = makeState({ current_goal_id: "goal-a", run_mode: "cruise" });
+
+    const result = completeCurrentGoalIfEligible(goals, tasks, state, "2026-01-06T05:00:00Z", {
+      version: 1,
+      goal_id: "goal-a",
+      policy: "strong_template",
+      axes: [
+        {
+          id: "full_e2e",
+          title: "Run full e2e",
+          required: true,
+          status: "pending",
+          evidence: [],
+          source_task_id: null,
+          last_checked_at: null,
+          reason: "Not run yet.",
+        },
+      ],
+    });
+
+    expect(result.completedGoalId).toBeNull();
+    expect(result.activatedGoalId).toBeNull();
+    expect(result.state.current_goal_id).toBe("goal-a");
+  });
+
   it("creates a follow-up task once and blocks repeated completed follow-ups from looping", () => {
     const initialTasks = [
       makeTask({ id: "task-source", status: "done" }),

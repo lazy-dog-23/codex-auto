@@ -206,7 +206,9 @@ function Test-TaskCollection {
             'last_error',
             'updated_at',
             'commit_hash',
-            'review_status'
+            'review_status',
+            'source',
+            'source_task_id'
         )) {
             Assert-PropertyExists -Item $task -Name $key -Path $Path -Context 'a task from'
         }
@@ -214,6 +216,7 @@ function Test-TaskCollection {
         Assert-True (@('queued','ready','in_progress','verify_failed','blocked','done') -contains [string]$task.status) "Invalid task status in $Path."
         Assert-True (@('P0','P1','P2','P3') -contains [string]$task.priority) "Invalid task priority in $Path."
         Assert-True (@('not_reviewed','passed','followup_required') -contains [string]$task.review_status) "Invalid review_status in $Path."
+        Assert-True (@('proposal','followup') -contains [string]$task.source) "Invalid task source in $Path."
     }
 }
 
@@ -283,6 +286,8 @@ function Test-SettingsDocument {
         'report_surface',
         'auto_commit',
         'autonomy_branch',
+        'auto_continue_within_goal',
+        'block_on_major_decision',
         'default_cruise_cadence',
         'default_sprint_heartbeat_minutes'
     )) {
@@ -292,6 +297,8 @@ function Test-SettingsDocument {
     Assert-True ([string]$settings.install_source -eq 'local_package') "Invalid install_source in $Path."
     Assert-True ([string]$settings.report_surface -eq 'thread_and_inbox') "Invalid report_surface in $Path."
     Assert-True (@('disabled','autonomy_branch') -contains [string]$settings.auto_commit) "Invalid auto_commit mode in $Path."
+    Assert-True ($settings.auto_continue_within_goal -is [bool]) "auto_continue_within_goal must be a boolean in $Path."
+    Assert-True ($settings.block_on_major_decision -is [bool]) "block_on_major_decision must be a boolean in $Path."
 
     $cadence = $settings.default_cruise_cadence
     foreach ($key in @('planner_hours','worker_hours','reviewer_hours')) {
@@ -335,6 +342,23 @@ function Test-ResultsDocument {
         }
 
         Assert-True (@('not_run','noop','planned','passed','failed','blocked','sent','skipped') -contains [string]$entry.status) "Invalid $entryName result status in $Path."
+    }
+}
+
+function Test-VerificationDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($key in @('version','goal_id','policy','axes')) {
+        Assert-PropertyExists -Item $doc -Name $key -Path $Path
+    }
+
+    Assert-True (@('strong_template') -contains [string]$doc.policy) "Invalid verification policy in $Path."
+    foreach ($axis in @($doc.axes)) {
+        foreach ($key in @('id','title','required','status','evidence','source_task_id','last_checked_at','reason')) {
+            Assert-PropertyExists -Item $axis -Name $key -Path $Path -Context 'a verification axis from'
+        }
+
+        Assert-True (@('pending','passed','failed','blocked','not_applicable') -contains [string]$axis.status) "Invalid verification axis status in $Path."
     }
 }
 
@@ -415,6 +439,7 @@ foreach ($requiredPath in @(
     'autonomy/state.json',
     'autonomy/settings.json',
     'autonomy/results.json',
+    'autonomy/verification.json',
     'autonomy/blockers.json',
     'autonomy/schema/tasks.schema.json',
     'autonomy/schema/goals.schema.json',
@@ -423,6 +448,7 @@ foreach ($requiredPath in @(
     'autonomy/schema/settings.schema.json',
     'autonomy/schema/results.schema.json',
     'autonomy/schema/blockers.schema.json',
+    'autonomy/schema/verification.schema.json',
     'autonomy/locks'
 )) {
     Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $requiredPath)) "Missing required path: $requiredPath"
@@ -532,6 +558,7 @@ Test-GoalCollection -Path (Join-Path $repoRoot 'autonomy/goals.json')
 Test-ProposalCollection -Path (Join-Path $repoRoot 'autonomy/proposals.json')
 Test-SettingsDocument -Path (Join-Path $repoRoot 'autonomy/settings.json')
 Test-ResultsDocument -Path (Join-Path $repoRoot 'autonomy/results.json')
+Test-VerificationDocument -Path (Join-Path $repoRoot 'autonomy/verification.json')
 Test-BlockerCollection -Path (Join-Path $repoRoot 'autonomy/blockers.json')
 
 Invoke-CliHarness

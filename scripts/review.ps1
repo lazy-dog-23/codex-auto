@@ -42,6 +42,7 @@ $smokeScript = Join-Path $repoRoot 'scripts/smoke.ps1'
 $reviewLocalScript = Join-Path $repoRoot 'scripts/review.local.ps1'
 $statePath = Join-Path $repoRoot 'autonomy/state.json'
 $resultsPath = Join-Path $repoRoot 'autonomy/results.json'
+$verificationPath = Join-Path $repoRoot 'autonomy/verification.json'
 $goalsPath = Join-Path $repoRoot 'autonomy/goals.json'
 $tasksPath = Join-Path $repoRoot 'autonomy/tasks.json'
 $settingsPath = Join-Path $repoRoot 'autonomy/settings.json'
@@ -49,6 +50,7 @@ $settingsPath = Join-Path $repoRoot 'autonomy/settings.json'
 Assert-Exists $smokeScript
 Assert-Exists $statePath
 Assert-Exists $resultsPath
+Assert-Exists $verificationPath
 Assert-Exists $goalsPath
 Assert-Exists $tasksPath
 Assert-Exists $settingsPath
@@ -62,6 +64,7 @@ if (-not $?) {
 
 $state = Read-JsonFile -Path $statePath
 $results = Read-JsonFile -Path $resultsPath
+$verification = Read-JsonFile -Path $verificationPath
 $goalsDoc = Read-JsonFile -Path $goalsPath
 $tasksDoc = Read-JsonFile -Path $tasksPath
 $settings = Read-JsonFile -Path $settingsPath
@@ -77,6 +80,10 @@ foreach ($requiredResultKey in @('planner', 'worker', 'review', 'commit', 'repor
     if (-not ($results.PSObject.Properties.Name -contains $requiredResultKey)) {
         throw "Missing required key '$requiredResultKey' in $resultsPath."
     }
+}
+
+if (-not ($verification.PSObject.Properties.Name -contains 'axes')) {
+    throw "Missing required key 'axes' in $verificationPath."
 }
 
 $goals = @($goalsDoc.goals)

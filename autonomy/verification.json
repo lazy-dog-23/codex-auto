@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "goal_id": "goal-system-audit-and-hardening-d9342362",
+  "policy": "strong_template",
+  "axes": [
+    {
+      "id": "git_state",
+      "title": "Validate autonomy branch and worktree state",
+      "required": true,
+      "status": "pending",
+      "evidence": [
+        "Confirm the repo and background worktree are aligned before closing the goal."
+      ],
+      "source_task_id": null,
+      "last_checked_at": null,
+      "reason": null
+    },
+    {
+      "id": "security_review",
+      "title": "Capture a security and risk closeout summary",
+      "required": true,
+      "status": "pending",
+      "evidence": [
+        "Summarize remaining risks, blockers, and sensitive side effects before completion."
+      ],
+      "source_task_id": null,
+      "last_checked_at": null,
+      "reason": null
+    },
+    {
+      "id": "frontend_tests",
+      "title": "Run frontend/unit test coverage for the affected surface",
+      "required": true,
+      "status": "pending",
+      "evidence": [],
+      "source_task_id": null,
+      "last_checked_at": null,
+      "reason": null
+    },
+    {
+      "id": "build",
+      "title": "Run the build or compile gate for the affected workspace",
+      "required": true,
+      "status": "pending",
+      "evidence": [],
+      "source_task_id": null,
+      "last_checked_at": null,
+      "reason": null
+    },
+    {
+      "id": "smoke",
+      "title": "Run the smoke gate and capture the result",
+      "required": true,
+      "status": "pending",
+      "evidence": [],
+      "source_task_id": null,
+      "last_checked_at": null,
+      "reason": null
+    }
+  ]
+}

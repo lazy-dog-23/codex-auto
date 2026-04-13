@@ -12,15 +12,19 @@ import type {
   SummaryKind,
   TaskStatus,
   TasksDocument,
+  VerificationDocument,
 } from "../contracts/autonomy.js";
 import { GOAL_STATUSES, TASK_STATUSES } from "../contracts/autonomy.js";
 import { countOpenBlockers, countReadyTasksForGoal, findNextReadyTask } from "../domain/autonomy.js";
 import { resolveSummarySnapshot, scopeResultsSummary } from "../domain/results.js";
+import { isGoalCompletionBlockedByVerification, summarizeVerification } from "../domain/verification.js";
+import { detectGlobalCliInstall } from "../infra/cli-install.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess } from "../infra/process.js";
 import { isManagedControlSurfaceRelativePath, resolveRepoPaths } from "../shared/paths.js";
 import { createDefaultAutonomySettings } from "../shared/policy.js";
+import { inspectManagedUpgradeState } from "./upgrade-managed.js";
 import {
   loadBlockersDocument,
   loadGoalsDocument,
@@ -28,6 +32,7 @@ import {
   loadSettingsDocument,
   loadStateDocument,
   loadTasksDocument,
+  loadVerificationDocument,
 } from "./control-plane.js";
 
 function createEmptyTaskCounts(): Record<TaskStatus, number> {
@@ -115,9 +120,16 @@ function buildMessage(summary: StatusSummary): string {
     `last_inbox_run_at=${formatNullableText(summary.last_inbox_run_at)}`,
     `auto_continue_state=${summary.auto_continue_state}`,
     `continuation_reason=${formatNullableText(summary.continuation_reason)}`,
+    `closeout_policy=${formatNullableText(summary.closeout_policy)}`,
+    `verification_required=${summary.verification_required}`,
+    `verification_passed=${summary.verification_passed}`,
+    `verification_pending=${summary.verification_pending}`,
+    `completion_blocked_by_verification=${summary.completion_blocked_by_verification ? "yes" : "no"}`,
     `next_task=${summary.next_task_id ? `${summary.next_task_id}${summary.next_task_title ? `(${summary.next_task_title})` : ""}` : "none"}`,
     `remaining_ready=${summary.remaining_ready}`,
     `last_followup_summary=${formatNullableText(summary.last_followup_summary)}`,
+    `upgrade_state=${formatNullableText(summary.upgrade_state)}`,
+    `cli_install_state=${formatNullableText(summary.cli_install_state)}`,
     `next_automation_reason=${formatNullableText(summary.next_automation_reason)}`,
     `ready_for_automation=${summary.ready_for_automation ? "yes" : "no"}`,
   ].join(" ");
@@ -127,6 +139,8 @@ function buildLocalAutomationReason(options: {
   readyForAutomation: boolean;
   actionableTasks: boolean;
   pendingPlanningWork: boolean;
+  verificationPending: number;
+  completionBlockedByVerification: boolean;
   hasReportThread: boolean;
   goalPointerMismatch: boolean;
   multipleActiveGoals: boolean;
@@ -138,6 +152,10 @@ function buildLocalAutomationReason(options: {
 }): string {
   if (options.readyForAutomation) {
     return "Ready for automation: active or planning work is available.";
+  }
+
+  if (options.completionBlockedByVerification) {
+    return `Verification closeout is still pending for ${options.verificationPending} required axis/axes.`;
   }
 
   if (!options.hasReportThread && (options.actionableTasks || options.pendingPlanningWork)) {
@@ -331,6 +349,11 @@ export function buildStatusSummary(
   blockersDoc: BlockersDocument,
   resultsDoc: AutonomyResults,
   settingsDoc: AutonomySettings = createDefaultAutonomySettings(),
+  verificationDoc: VerificationDocument | null = null,
+  options: {
+    upgradeState?: string | null;
+    cliInstallState?: string | null;
+  } = {},
 ): StatusSummary {
   const openBlockerCount = countOpenBlockers(blockersDoc.blockers);
   const tasksByStatus = countTaskStatuses(tasksDoc.tasks);
@@ -354,6 +377,11 @@ export function buildStatusSummary(
   const scopedResults = scopeResultsSummary(resultsDoc, resolvedCurrentGoalId);
   const nextTask = findNextReadyTask(tasksDoc.tasks, resolvedCurrentGoalId);
   const remainingReady = countReadyTasksForGoal(tasksDoc.tasks, resolvedCurrentGoalId);
+  const verificationSummary = summarizeVerification(verificationDoc, resolvedCurrentGoalId);
+  const completionBlockedByVerification = isGoalCompletionBlockedByVerification(verificationDoc, resolvedCurrentGoalId);
+  const closeoutPolicy = resolvedCurrentGoalId && verificationDoc?.goal_id === resolvedCurrentGoalId
+    ? verificationDoc.policy
+    : null;
 
   const warnings =
     [
@@ -402,6 +430,8 @@ export function buildStatusSummary(
     readyForAutomation,
     actionableTasks,
     pendingPlanningWork,
+    verificationPending: verificationSummary.pending,
+    completionBlockedByVerification,
     hasReportThread,
     goalPointerMismatch,
     multipleActiveGoals: activeGoalCount > 1,
@@ -454,10 +484,17 @@ export function buildStatusSummary(
     next_automation_reason: nextAutomationReason,
     auto_continue_state: autoContinueState,
     continuation_reason: continuationReason,
+    closeout_policy: closeoutPolicy,
+    verification_required: verificationSummary.required,
+    verification_passed: verificationSummary.passed,
+    verification_pending: verificationSummary.pending,
+    completion_blocked_by_verification: completionBlockedByVerification,
     next_task_id: nextTask?.id ?? null,
     next_task_title: nextTask?.title ?? null,
     remaining_ready: remainingReady,
     last_followup_summary: scopedResults.nextStepSummary,
+    upgrade_state: options.upgradeState ?? null,
+    cli_install_state: options.cliInstallState ?? null,
     results_summary: {
       planner_summary: scopedResults.plannerSummary,
       worker_result: scopedResults.workerResult,
@@ -478,15 +515,27 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const gitRepo = await detectGitRepository(repoRoot);
   const controlRoot = gitRepo?.path ?? repoRoot;
   const paths = resolveRepoPaths(controlRoot);
-  const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc] = await Promise.all([
+  const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc, verificationDoc] = await Promise.all([
     loadTasksDocument(paths),
     loadGoalsDocument(paths),
     loadStateDocument(paths),
     loadBlockersDocument(paths),
     loadResultsDocument(paths),
     loadSettingsDocument(paths),
+    loadVerificationDocument(paths),
   ]);
-  const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc);
+  const cliInstallState = await detectGlobalCliInstall();
+  let upgradeState: string | null = null;
+  try {
+    const managedUpgradeState = await inspectManagedUpgradeState(controlRoot);
+    upgradeState = managedUpgradeState.state;
+  } catch {
+    upgradeState = "upgrade_probe_failed";
+  }
+  const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc, verificationDoc, {
+    upgradeState,
+    cliInstallState,
+  });
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
   const hasEligibleWork = hasActionableTasks(tasksDoc.tasks, summary.current_goal_id) || hasPlanningWork(goalsDoc.goals);
@@ -497,7 +546,9 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     readyForAutomation = false;
     warnings.push({
       code: "no_actionable_work",
-      message: "No active goal work or proposal generation work is currently available.",
+      message: summary.completion_blocked_by_verification
+        ? `No further task is queued yet, but ${summary.verification_pending} verification axis/axes are still pending.`
+        : "No active goal work or proposal generation work is currently available.",
     });
   }
 
@@ -533,14 +584,53 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     });
   }
 
+  if (upgradeState === "managed_diverged") {
+    pushUniqueWarning(
+      warnings,
+      "managed_diverged",
+      "Managed control-surface files diverged from the current product templates. Run codex-autonomy upgrade-managed --target <repo> to inspect the guided upgrade plan.",
+    );
+  } else if (upgradeState === "metadata_incomplete") {
+    pushUniqueWarning(
+      warnings,
+      "managed_metadata_incomplete",
+      "Managed install metadata is incomplete. Re-run install in detect mode or repair autonomy/install.json before upgrading managed files.",
+    );
+  } else if (upgradeState === "upgrade_probe_failed") {
+    pushUniqueWarning(
+      warnings,
+      "upgrade_probe_failed",
+      "Managed upgrade state could not be determined from autonomy/install.json.",
+    );
+  }
+
   if (!gitRepo) {
     readyForAutomation = false;
     pushUniqueWarning(warnings, "not_a_git_repo", "Current workspace is not a Git repository, so automation cannot run yet.");
   } else {
-    const repositoryDirty = classifyDirtyPaths(gitRepo.statusLines ?? []);
+    const repositoryDirty = {
+      dirtyPaths: gitRepo.managedDirtyPaths || gitRepo.unmanagedDirtyPaths
+        ? [...(gitRepo.managedDirtyPaths ?? []), ...(gitRepo.unmanagedDirtyPaths ?? [])]
+        : classifyDirtyPaths(gitRepo.statusLines ?? []).dirtyPaths,
+      unmanagedDirtyPaths: gitRepo.unmanagedDirtyPaths ?? classifyDirtyPaths(gitRepo.statusLines ?? []).unmanagedDirtyPaths,
+      managedOnly: gitRepo.managedControlSurfaceOnly ?? classifyDirtyPaths(gitRepo.statusLines ?? []).managedOnly,
+    };
+    if (gitRepo.transient) {
+      readyForAutomation = false;
+      pushUniqueWarning(
+        warnings,
+        "transient_git_state",
+        "Repository Git state is still changing between probes; retry once the worktree stabilizes.",
+      );
+    }
     if (gitRepo.dirty) {
       if (repositoryDirty.managedOnly) {
         controlSurfaceDirtyScopes.push("repository");
+        pushUniqueWarning(
+          warnings,
+          "control_surface_dirty_only",
+          buildControlSurfaceDirtyOnlyMessage(["repository"]),
+        );
       } else {
         readyForAutomation = false;
         pushUniqueWarning(
@@ -568,15 +658,34 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
         pushUniqueWarning(warnings, "missing_background_worktree", `Background worktree is missing at ${backgroundPath}.`);
       }
     } else {
-      const backgroundDirty = classifyDirtyPaths(backgroundWorktree.statusLines ?? []);
+      const backgroundDirty = {
+        dirtyPaths: backgroundWorktree.managedDirtyPaths || backgroundWorktree.unmanagedDirtyPaths
+          ? [...(backgroundWorktree.managedDirtyPaths ?? []), ...(backgroundWorktree.unmanagedDirtyPaths ?? [])]
+          : classifyDirtyPaths(backgroundWorktree.statusLines ?? []).dirtyPaths,
+        unmanagedDirtyPaths: backgroundWorktree.unmanagedDirtyPaths ?? classifyDirtyPaths(backgroundWorktree.statusLines ?? []).unmanagedDirtyPaths,
+        managedOnly: backgroundWorktree.managedControlSurfaceOnly ?? classifyDirtyPaths(backgroundWorktree.statusLines ?? []).managedOnly,
+      };
+      if (backgroundWorktree.transient) {
+        readyForAutomation = false;
+        pushUniqueWarning(
+          warnings,
+          "transient_git_state",
+          `Background worktree at ${backgroundPath} is still changing between probes; retry once it stabilizes.`,
+        );
+      }
       if (backgroundWorktree.dirty) {
         if (backgroundDirty.managedOnly) {
           controlSurfaceDirtyScopes.push("background worktree");
+          pushUniqueWarning(
+            warnings,
+            "background_dirty_allowlisted",
+            `Background worktree only contains allowlisted managed control-surface changes at ${backgroundPath}.`,
+          );
         } else {
           readyForAutomation = false;
           pushUniqueWarning(
             warnings,
-            "dirty_background_worktree",
+            "background_dirty_unmanaged",
             backgroundDirty.unmanagedDirtyPaths.length > 0
               ? `Background worktree is dirty outside the managed control surface at ${backgroundPath}: ${backgroundDirty.unmanagedDirtyPaths.join(", ")}.`
               : `Background worktree is dirty at ${backgroundPath}, and Git did not report which unmanaged paths changed.`,
@@ -639,6 +748,14 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   } else if (!codexProcess.running) {
     readyForAutomation = false;
     pushUniqueWarning(warnings, "codex_not_running", "Codex process was not detected.");
+  }
+
+  if (cliInstallState === "global_missing") {
+    pushUniqueWarning(
+      warnings,
+      "cli_missing",
+      "Global codex-autonomy CLI is not installed. Run pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1 from the product source repo.",
+    );
   }
 
   const nextAutomationReason = readyForAutomation

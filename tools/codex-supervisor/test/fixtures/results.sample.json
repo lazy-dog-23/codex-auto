@@ -44,7 +44,10 @@
     "message": null,
     "review_status": "passed",
     "next_step_summary": "Add a regression check for unblock flow.",
-    "continuation_decision": "auto_continued"
+    "continuation_decision": "auto_continued",
+    "verification_pending_axes": [
+      "full_e2e"
+    ]
   },
   "commit": {
     "status": "passed",
@@ -72,6 +75,9 @@
     "message": null,
     "review_status": null,
     "next_step_summary": "Continue with the unblock regression check on the next loop.",
-    "continuation_decision": "auto_continued"
+    "continuation_decision": "auto_continued",
+    "verification_pending_axes": [
+      "full_e2e"
+    ]
   }
 }

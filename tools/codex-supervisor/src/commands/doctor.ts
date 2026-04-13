@@ -3,6 +3,7 @@ import { access } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { Command } from 'commander';
+import { detectGlobalCliInstall } from '../infra/cli-install.js';
 import {
   DEFAULT_BACKGROUND_WORKTREE_BRANCH,
   detectGitRepository,
@@ -22,8 +23,10 @@ import {
   settingsSchema,
   stateSchema,
   tasksSchema,
+  verificationSchema,
 } from '../schemas/index.js';
 import { resolveRepoPaths } from '../shared/paths.js';
+import { inspectManagedUpgradeState } from './upgrade-managed.js';
 import type {
   AutonomyResults,
   AutonomySettings,
@@ -32,6 +35,7 @@ import type {
   GoalsDocument,
   ProposalsDocument,
   TasksDocument,
+  VerificationDocument,
 } from '../contracts/autonomy.js';
 
 export interface DoctorOptions {
@@ -97,6 +101,7 @@ const REQUIRED_PATHS: Array<{ path: string; kind: 'file' | 'directory'; required
   { path: 'autonomy/state.json', kind: 'file', required: true },
   { path: 'autonomy/settings.json', kind: 'file', required: true },
   { path: 'autonomy/results.json', kind: 'file', required: true },
+  { path: 'autonomy/verification.json', kind: 'file', required: true },
   { path: 'autonomy/blockers.json', kind: 'file', required: true },
   { path: 'autonomy/schema', kind: 'directory', required: true },
   { path: 'autonomy/schema/goals.schema.json', kind: 'file', required: true },
@@ -106,6 +111,7 @@ const REQUIRED_PATHS: Array<{ path: string; kind: 'file' | 'directory'; required
   { path: 'autonomy/schema/settings.schema.json', kind: 'file', required: true },
   { path: 'autonomy/schema/results.schema.json', kind: 'file', required: true },
   { path: 'autonomy/schema/blockers.schema.json', kind: 'file', required: true },
+  { path: 'autonomy/schema/verification.schema.json', kind: 'file', required: true },
 ];
 
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -151,12 +157,30 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       path: workspaceRoot,
     });
   } else if (gitRepo.dirty) {
-    issues.push({
-      severity: 'error',
-      code: 'dirty_repository',
-      message: 'Repository working tree is dirty.',
-      path: gitRepo.path,
-    });
+    if (gitRepo.transient) {
+      issues.push({
+        severity: 'warn',
+        code: 'transient_git_state',
+        message: 'Repository Git state is still changing between probes.',
+        path: gitRepo.path,
+      });
+    } else if (gitRepo.managedControlSurfaceOnly) {
+      issues.push({
+        severity: 'info',
+        code: 'control_surface_dirty_only',
+        message: 'Repository only contains managed control-surface changes.',
+        path: gitRepo.path,
+      });
+    } else {
+      issues.push({
+        severity: 'error',
+        code: 'repo_dirty_unmanaged',
+        message: gitRepo.unmanagedDirtyPaths && gitRepo.unmanagedDirtyPaths.length > 0
+          ? `Repository working tree is dirty outside the managed control surface: ${gitRepo.unmanagedDirtyPaths.join(', ')}.`
+          : 'Repository working tree is dirty.',
+        path: gitRepo.path,
+      });
+    }
   }
 
   let backgroundWorktree: WorktreeSummary | null = null;
@@ -181,13 +205,31 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
           path: backgroundPath,
         });
       }
-    } else if (backgroundWorktree.dirty) {
+    } else if (backgroundWorktree.transient) {
       issues.push({
-        severity: 'error',
-        code: 'dirty_background_worktree',
-        message: `Background worktree at ${backgroundPath} is dirty.`,
+        severity: 'warn',
+        code: 'transient_git_state',
+        message: `Background worktree at ${backgroundPath} is still changing between probes.`,
         path: backgroundPath,
       });
+    } else if (backgroundWorktree.dirty) {
+      if (backgroundWorktree.managedControlSurfaceOnly) {
+        issues.push({
+          severity: 'info',
+          code: 'background_dirty_allowlisted',
+          message: `Background worktree at ${backgroundPath} only contains allowlisted managed control-surface changes.`,
+          path: backgroundPath,
+        });
+      } else {
+        issues.push({
+          severity: 'error',
+          code: 'background_dirty_unmanaged',
+          message: backgroundWorktree.unmanagedDirtyPaths && backgroundWorktree.unmanagedDirtyPaths.length > 0
+            ? `Background worktree at ${backgroundPath} is dirty outside the managed control surface: ${backgroundWorktree.unmanagedDirtyPaths.join(', ')}.`
+            : `Background worktree at ${backgroundPath} is dirty.`,
+          path: backgroundPath,
+        });
+      }
     } else if (backgroundWorktree.commonGitDir !== gitRepo.commonGitDir) {
       issues.push({
         severity: 'warn',
@@ -254,6 +296,42 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
 
   await validateAutonomyDocuments(repoPaths, issues);
   await validateCodexConfig(repoPaths.configFile, issues);
+
+  const cliInstallState = await detectGlobalCliInstall();
+  if (cliInstallState === 'global_missing') {
+    issues.push({
+      severity: 'warn',
+      code: 'cli_missing',
+      message: 'Global codex-autonomy CLI is not installed. Run pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1 from the product source repo.',
+      path: workspaceRoot,
+    });
+  }
+
+  try {
+    const upgradeState = await inspectManagedUpgradeState(controlRoot);
+    if (upgradeState.state === 'managed_diverged') {
+      issues.push({
+        severity: 'warn',
+        code: 'managed_diverged',
+        message: 'Managed control-surface files diverged from the current product templates. Run codex-autonomy upgrade-managed --target <repo> to inspect the guided upgrade plan.',
+        path: join(controlRoot, 'autonomy', 'install.json'),
+      });
+    } else if (upgradeState.state === 'metadata_incomplete') {
+      issues.push({
+        severity: 'warn',
+        code: 'managed_metadata_incomplete',
+        message: 'Managed install metadata is incomplete. Repair autonomy/install.json before running upgrade-managed.',
+        path: join(controlRoot, 'autonomy', 'install.json'),
+      });
+    }
+  } catch (error) {
+    issues.push({
+      severity: 'warn',
+      code: 'upgrade_probe_failed',
+      message: error instanceof Error ? error.message : String(error),
+      path: join(controlRoot, 'autonomy', 'install.json'),
+    });
+  }
 
   return {
     ok: !issues.some((issue) => issue.severity === 'error'),
@@ -506,6 +584,12 @@ async function validateAutonomyDocuments(
       code: 'blockers_schema_invalid',
       schema: blockersSchema,
       load: () => readJsonFile<BlockersDocument>(repoPaths.blockersFile),
+    },
+    {
+      path: repoPaths.verificationFile,
+      code: 'verification_schema_invalid',
+      schema: verificationSchema,
+      load: () => readJsonFile<VerificationDocument>(repoPaths.verificationFile),
     },
   ];
 

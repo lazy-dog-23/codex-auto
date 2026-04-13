@@ -102,10 +102,17 @@ export interface RepoAwareProposalSignals {
   goal_style: "system_audit" | "generic";
   agents_path: string | null;
   package_manifest_paths: string[];
+  python_manifest_paths: string[];
+  tooling_config_paths: string[];
   package_script_names: string[];
   documentation_paths: string[];
   matched_paths: string[];
+  candidate_source_paths: string[];
+  candidate_test_paths: string[];
   control_tokens: string[];
+  e2e_frameworks: string[];
+  preferred_validation_action: "full_e2e" | "equivalent_e2e" | "verify";
+  preferred_validation_evidence: string[];
 }
 
 export interface RepoAwareFallbackProposal {
@@ -119,6 +126,16 @@ interface PackageManifestSignals {
   scripts: string[];
 }
 
+interface PythonManifestSignals {
+  path: string;
+  tokens: string[];
+}
+
+interface ValidationStrategy {
+  action: "full_e2e" | "equivalent_e2e" | "verify";
+  evidence: string[];
+}
+
 interface RepoFileRecord {
   absolutePath: string;
   relativePath: string;
@@ -126,7 +143,7 @@ interface RepoFileRecord {
 
 export async function buildRepoAwareFallbackProposal(goal: GoalRecord, repoRoot: string): Promise<RepoAwareFallbackProposal> {
   const resolvedRoot = resolve(repoRoot);
-  const files = await collectRepoFiles(resolvedRoot, 5);
+  const files = await collectRepoFiles(resolvedRoot, 8);
   const signals = await collectRepoAwareSignals(files, goal);
   const taskBlueprints = signals.goal_style === "system_audit"
     ? buildSystemAuditBlueprints(goal, signals)
@@ -145,11 +162,24 @@ async function collectRepoAwareSignals(
   goal: GoalRecord,
 ): Promise<RepoAwareProposalSignals> {
   const packageManifests = await collectPackageManifests(files);
+  const pythonManifests = await collectPythonManifestPaths(files);
+  const toolingConfigPaths = collectToolingConfigPaths(files);
   const packageScriptNames = [...new Set(packageManifests.flatMap((manifest) => manifest.scripts))].sort((left, right) => left.localeCompare(right));
   const documentationPaths = collectDocumentationPaths(files);
   const agentsPath = files.find((file) => file.relativePath === "AGENTS.md")?.relativePath ?? null;
+  const candidateSourcePaths = selectCandidatePaths(files, isSourceLikePath, 14);
+  const candidateTestPaths = selectCandidatePaths(files, isTestLikePath, 14);
+  const e2eFrameworks = collectE2EFrameworks(files, packageManifests, toolingConfigPaths, candidateTestPaths);
+  const preferredValidation = selectValidationStrategy({
+    e2eFrameworks,
+    candidateTestPaths,
+    toolingConfigPaths,
+  });
   const controlTokens = dedupeStrings([
     ...packageScriptNames,
+    ...pythonManifests.flatMap((manifest) => manifest.tokens),
+    ...toolingConfigPaths,
+    ...(await collectConfiguredFileTokens(files, [...toolingConfigPaths, ...pythonManifests.map((manifest) => manifest.path)])),
     ...(await collectDocumentTokens(files)),
   ]);
   const matchedPaths = selectMatchedPaths(files, goal, controlTokens);
@@ -159,10 +189,17 @@ async function collectRepoAwareSignals(
     goal_style,
     agents_path: agentsPath,
     package_manifest_paths: packageManifests.map((manifest) => manifest.path),
+    python_manifest_paths: pythonManifests.map((manifest) => manifest.path),
+    tooling_config_paths: toolingConfigPaths,
     package_script_names: packageScriptNames,
     documentation_paths: documentationPaths,
     matched_paths: matchedPaths,
+    candidate_source_paths: candidateSourcePaths,
+    candidate_test_paths: candidateTestPaths,
     control_tokens: controlTokens,
+    e2e_frameworks: e2eFrameworks,
+    preferred_validation_action: preferredValidation.action,
+    preferred_validation_evidence: preferredValidation.evidence,
   };
 }
 
@@ -188,6 +225,38 @@ async function collectPackageManifests(files: RepoFileRecord[]): Promise<Package
 
   manifests.sort((left, right) => left.path.localeCompare(right.path));
   return manifests;
+}
+
+async function collectPythonManifestPaths(files: RepoFileRecord[]): Promise<PythonManifestSignals[]> {
+  const manifests = files
+    .filter((file) => isPythonManifestPath(file.relativePath))
+    .map(async (file) => {
+      let content = "";
+      try {
+        content = await readTextFile(file.absolutePath);
+      } catch {
+        content = "";
+      }
+
+      return {
+        path: file.relativePath,
+        tokens: dedupeStrings([
+          ...extractGoalTokens(file.relativePath),
+          ...extractGoalTokens(content),
+        ]),
+      };
+    });
+
+  const resolved = await Promise.all(manifests);
+  resolved.sort((left, right) => left.path.localeCompare(right.path));
+  return resolved;
+}
+
+function collectToolingConfigPaths(files: RepoFileRecord[]): string[] {
+  return files
+    .filter((file) => isToolingConfigPath(file.relativePath))
+    .map((file) => file.relativePath)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function collectPackageScripts(scriptsValue: unknown): string[] {
@@ -238,6 +307,149 @@ async function collectDocumentTokens(files: RepoFileRecord[]): Promise<string[]>
   }
 
   return tokens;
+}
+
+async function collectConfiguredFileTokens(files: RepoFileRecord[], targetPaths: string[]): Promise<string[]> {
+  const normalizedTargets = new Set(targetPaths.map((value) => value.replace(/\\/g, "/").toLowerCase()));
+  const tokens: string[] = [];
+
+  for (const file of files) {
+    if (!normalizedTargets.has(file.relativePath.replace(/\\/g, "/").toLowerCase())) {
+      continue;
+    }
+
+    try {
+      const content = await readTextFile(file.absolutePath);
+      tokens.push(...extractGoalTokens(content));
+    } catch {
+      continue;
+    }
+  }
+
+  return tokens;
+}
+
+function selectCandidatePaths(
+  files: RepoFileRecord[],
+  predicate: (pathValue: string) => boolean,
+  limit: number,
+): string[] {
+  return dedupeStrings(
+    files
+      .map((file) => file.relativePath)
+      .filter(predicate)
+      .sort((left, right) => left.localeCompare(right)),
+  ).slice(0, limit);
+}
+
+function collectE2EFrameworks(
+  files: RepoFileRecord[],
+  packageManifests: PackageManifestSignals[],
+  toolingConfigPaths: string[],
+  candidateTestPaths: string[],
+): string[] {
+  const frameworks = new Set<string>();
+  const normalizedPaths = files.map((file) => file.relativePath.toLowerCase());
+
+  for (const manifest of packageManifests) {
+    for (const script of manifest.scripts) {
+      const normalizedScript = script.toLowerCase();
+      if (containsAny(normalizedScript, ["playwright", "pw", "test:e2e", "e2e", "e2e:"] )) {
+        frameworks.add("playwright");
+      }
+      if (containsAny(normalizedScript, ["cypress"])) {
+        frameworks.add("cypress");
+      }
+      if (containsAny(normalizedScript, ["vitest", "jest"])) {
+        frameworks.add("test-runner");
+      }
+    }
+  }
+
+  for (const pathValue of toolingConfigPaths) {
+    const normalized = pathValue.toLowerCase();
+    if (normalized.includes("playwright")) {
+      frameworks.add("playwright");
+    }
+    if (normalized.includes("cypress")) {
+      frameworks.add("cypress");
+    }
+    if (normalized.includes("capacitor")) {
+      frameworks.add("capacitor");
+    }
+  }
+
+  if (normalizedPaths.some((pathValue) => pathValue.includes("playwright.config."))) {
+    frameworks.add("playwright");
+  }
+  if (normalizedPaths.some((pathValue) => pathValue.includes("cypress.config."))) {
+    frameworks.add("cypress");
+  }
+  if (normalizedPaths.some((pathValue) => pathValue.includes("capacitor.config."))) {
+    frameworks.add("capacitor");
+  }
+  if (normalizedPaths.some((pathValue) => pathValue.includes("vitest.config."))) {
+    frameworks.add("vitest");
+  }
+  if (normalizedPaths.some((pathValue) => pathValue.includes("jest.config."))) {
+    frameworks.add("jest");
+  }
+  if (candidateTestPaths.some((pathValue) => pathValue.includes("e2e/") || pathValue.includes("/e2e/") || pathValue.includes(".e2e."))) {
+    frameworks.add("e2e-tests");
+  }
+
+  return [...frameworks].sort((left, right) => left.localeCompare(right));
+}
+
+function selectValidationStrategy(options: {
+  e2eFrameworks: string[];
+  candidateTestPaths: string[];
+  toolingConfigPaths: string[];
+}): ValidationStrategy {
+  const e2eFrameworks = new Set(options.e2eFrameworks);
+  const candidateTests = options.candidateTestPaths.map((pathValue) => pathValue.toLowerCase());
+  const toolingConfigs = options.toolingConfigPaths.map((pathValue) => pathValue.toLowerCase());
+
+  if (e2eFrameworks.has("playwright")) {
+    return {
+      action: "full_e2e",
+      evidence: collectValidationEvidence([
+        "playwright",
+        ...options.toolingConfigPaths.filter((pathValue) => pathValue.toLowerCase().includes("playwright")),
+        ...options.candidateTestPaths.filter((pathValue) => pathValue.includes("e2e/") || pathValue.includes("/e2e/") || pathValue.includes(".e2e.")),
+      ]),
+    };
+  }
+
+  if (e2eFrameworks.has("cypress") || e2eFrameworks.has("capacitor") || candidateTests.some((pathValue) => pathValue.includes("e2e/") || pathValue.includes("/e2e/") || pathValue.includes(".e2e."))) {
+    return {
+      action: "equivalent_e2e",
+      evidence: collectValidationEvidence([
+        ...options.e2eFrameworks,
+        ...options.toolingConfigPaths.filter((pathValue) => /cypress|capacitor/i.test(pathValue)),
+        ...options.candidateTestPaths.filter((pathValue) => pathValue.includes("e2e/") || pathValue.includes("/e2e/") || pathValue.includes(".e2e.")),
+      ]),
+    };
+  }
+
+  if (toolingConfigs.some((pathValue) => pathValue.includes("vitest")) || e2eFrameworks.has("vitest") || e2eFrameworks.has("jest")) {
+    return {
+      action: "verify",
+      evidence: collectValidationEvidence([
+        ...options.toolingConfigPaths.filter((pathValue) => pathValue.includes("vitest") || pathValue.includes("jest")),
+        ...options.candidateTestPaths.slice(0, 3),
+      ]),
+    };
+  }
+
+  return {
+    action: "verify",
+    evidence: collectValidationEvidence([...options.candidateTestPaths.slice(0, 3), ...options.toolingConfigPaths.slice(0, 3)]),
+  };
+}
+
+function collectValidationEvidence(values: string[]): string[] {
+  return dedupeStrings(values).slice(0, 8);
 }
 
 function selectMatchedPaths(files: RepoFileRecord[], goal: GoalRecord, controlTokens: string[]): string[] {
@@ -344,11 +556,11 @@ function buildSystemAuditBlueprints(goal: GoalRecord, signals: RepoAwareProposal
   const auditHints = selectTaskHints(signals.matched_paths, (pathValue) => isCodeLikePath(pathValue), 4);
   const docsHints = selectTaskHints(signals.documentation_paths, () => true, 3);
   const packageHints = signals.package_manifest_paths.slice(0, 2);
-  const verifyHint = mergeHints(["scripts/verify.ps1", "scripts/review.ps1"], controlHints, auditHints);
+  const verification = buildVerificationPlan(signals);
 
   return [
     {
-      key: "audit",
+      key: "surface-audit",
       title: "Audit the repo control surface and rank the highest-risk findings",
       acceptance: [
         `Review AGENTS.md, README/docs, package manifests, and the matched repo paths before changing code.`,
@@ -358,17 +570,17 @@ function buildSystemAuditBlueprints(goal: GoalRecord, signals: RepoAwareProposal
       fileHints: mergeHints(["AGENTS.md", "README.md"], packageHints, docsHints, controlHints, auditHints),
     },
     {
-      key: "reproduce",
-      title: "Reproduce the top issue with a minimal case",
+      key: "reproduce-measure",
+      title: "Reproduce and measure the top issue with a minimal case",
       acceptance: [
         "Capture one minimal reproduction or a precise failing command.",
         "Tie the failure back to a concrete repo path or configuration surface.",
-        "Avoid widening scope while proving the bug.",
+        "Measure the impact enough to choose the narrowest safe repair.",
       ],
-      fileHints: mergeHints(verifyHint, auditHints, packageHints.slice(0, 1)),
+      fileHints: mergeHints(verification.fileHints, auditHints, packageHints.slice(0, 1)),
     },
     {
-      key: "repair",
+      key: "repair-core-issue",
       title: "Repair the narrowest root cause",
       acceptance: [
         "Fix the highest-priority issue with the smallest possible code change.",
@@ -378,17 +590,17 @@ function buildSystemAuditBlueprints(goal: GoalRecord, signals: RepoAwareProposal
       fileHints: mergeHints(auditHints, controlHints, packageHints.slice(0, 1)),
     },
     {
-      key: "verify",
-      title: "Verify the fix and guard the regression",
+      key: "verification-regression",
+      title: `Verify the fix with ${verification.titleSuffix} and guard the regression`,
       acceptance: [
-        "Run scripts/verify.ps1 and any targeted regression tests for the repaired path.",
+        `Run scripts/verify.ps1 and ${verification.acceptanceClause} before closing the loop.`,
         "Confirm the change preserves the repo control surface contract.",
         "Record any remaining follow-up risk explicitly.",
       ],
-      fileHints: mergeHints(["scripts/verify.ps1", "scripts/review.ps1"], selectTaskHints(signals.matched_paths, () => true, 3), selectTaskHints(signals.documentation_paths, () => true, 1)),
+      fileHints: mergeHints(["scripts/verify.ps1", "scripts/review.ps1"], verification.fileHints, selectTaskHints(signals.matched_paths, () => true, 3), selectTaskHints(signals.documentation_paths, () => true, 1)),
     },
     {
-      key: "summarize",
+      key: "summarize-remaining-risk",
       title: "Summarize residual risk and the next safe follow-up",
       acceptance: [
         "Write down the remaining risk, blocked decisions, and any safe next follow-up.",
@@ -410,6 +622,7 @@ function buildGenericBlueprints(goal: GoalRecord, signals: RepoAwareProposalSign
   const matchedCodeHints = selectTaskHints(signals.matched_paths, (pathValue) => isCodeLikePath(pathValue), 4);
   const regressionHints = selectTaskHints(signals.matched_paths, (pathValue) => isTestLikePath(pathValue), 3);
   const docsHints = selectTaskHints(signals.documentation_paths, () => true, 3);
+  const verification = buildVerificationPlan(signals);
 
   return [
     {
@@ -444,15 +657,50 @@ function buildGenericBlueprints(goal: GoalRecord, signals: RepoAwareProposalSign
     },
     {
       key: "verify",
-      title: "Verify the change and close out risk",
+      title: `Verify the change with ${verification.titleSuffix} and close out risk`,
       acceptance: [
-        "Run scripts/verify.ps1 and the narrowest targeted checks available.",
+        `Run scripts/verify.ps1 and ${verification.acceptanceClause} before you close the change.`,
         "Confirm the result matches the original goal.",
         "Record any remaining follow-up as a bounded note, not a new scope expansion.",
       ],
-      fileHints: mergeHints(["scripts/verify.ps1", "scripts/review.ps1"], regressionHints, docsHints),
+      fileHints: mergeHints(["scripts/verify.ps1", "scripts/review.ps1"], verification.fileHints, regressionHints, docsHints),
     },
   ];
+}
+
+function buildVerificationPlan(signals: RepoAwareProposalSignals): {
+  titleSuffix: string;
+  acceptanceClause: string;
+  fileHints: string[];
+} {
+  if (signals.preferred_validation_action === "full_e2e") {
+    return {
+      titleSuffix: "full_e2e validation",
+      acceptanceClause: "the repo's full_e2e validation path",
+      fileHints: mergeHints(
+        signals.candidate_test_paths,
+        signals.tooling_config_paths,
+        signals.e2e_frameworks.includes("playwright") ? ["playwright.config.ts", "playwright.config.js", "playwright.config.mjs", "playwright.config.cjs"] : [],
+      ),
+    };
+  }
+
+  if (signals.preferred_validation_action === "equivalent_e2e") {
+    return {
+      titleSuffix: "equivalent e2e validation",
+      acceptanceClause: "the repo's equivalent e2e validation path",
+      fileHints: mergeHints(
+        signals.candidate_test_paths,
+        signals.tooling_config_paths,
+      ),
+    };
+  }
+
+  return {
+    titleSuffix: "targeted regression checks",
+    acceptanceClause: "the narrowest targeted checks available",
+    fileHints: mergeHints(signals.candidate_test_paths, signals.tooling_config_paths),
+  };
 }
 
 function finalizeBlueprints(goal: GoalRecord, blueprints: Array<{
@@ -467,7 +715,7 @@ function finalizeBlueprints(goal: GoalRecord, blueprints: Array<{
     priority: index === 0 ? "P0" : index === 1 ? "P1" : "P2",
     depends_on: index === 0 ? [] : [buildProposalTaskId(goal.id, blueprints[index - 1]?.key ?? blueprint.key)],
     acceptance: dedupeStrings(blueprint.acceptance),
-    file_hints: dedupeStrings(blueprint.fileHints).slice(0, 5),
+    file_hints: dedupeStrings(blueprint.fileHints).slice(0, 6),
   }));
 }
 
@@ -487,6 +735,17 @@ function buildRepoAwareSummary(goal: GoalRecord, signals: RepoAwareProposalSigna
   }
   if (signals.matched_paths.length > 0) {
     evidence.push(`matched paths (${signals.matched_paths.length})`);
+  }
+  if (signals.candidate_source_paths.length > 0) {
+    evidence.push(`source candidates (${signals.candidate_source_paths.length})`);
+  }
+  if (signals.candidate_test_paths.length > 0) {
+    evidence.push(`test candidates (${signals.candidate_test_paths.length})`);
+  }
+  if (signals.e2e_frameworks.length > 0) {
+    evidence.push(`${signals.preferred_validation_action} via ${signals.e2e_frameworks.join(", ")}`);
+  } else if (signals.preferred_validation_action !== "verify") {
+    evidence.push(signals.preferred_validation_action);
   }
 
   const goalLabel = signals.goal_style === "system_audit" ? "audit" : "fallback";
@@ -519,11 +778,80 @@ function mergeHints(...groups: string[][]): string[] {
 }
 
 function isCodeLikePath(pathValue: string): boolean {
-  return CODE_EXTENSIONS.has(fileExtension(pathValue)) || pathValue.startsWith("src/") || pathValue.startsWith("scripts/");
+  const normalized = pathValue.replace(/\\/g, "/").toLowerCase();
+  return (
+    CODE_EXTENSIONS.has(fileExtension(normalized))
+    || normalized.startsWith("src/")
+    || normalized.startsWith("app/")
+    || normalized.startsWith("lib/")
+    || normalized.startsWith("packages/")
+    || normalized.startsWith("scripts/")
+    || normalized.startsWith("tools/")
+  );
 }
 
 function isTestLikePath(pathValue: string): boolean {
-  return pathValue.startsWith("test/") || pathValue.includes(".test.") || pathValue.includes(".spec.");
+  const normalized = pathValue.replace(/\\/g, "/").toLowerCase();
+  return (
+    normalized.startsWith("test/")
+    || normalized.startsWith("tests/")
+    || normalized.startsWith("e2e/")
+    || normalized.includes("/test/")
+    || normalized.includes("/tests/")
+    || normalized.includes("/e2e/")
+    || normalized.includes(".test.")
+    || normalized.includes(".spec.")
+    || normalized.includes(".e2e.")
+  );
+}
+
+function isSourceLikePath(pathValue: string): boolean {
+  const normalized = pathValue.replace(/\\/g, "/").toLowerCase();
+  return (
+    isCodeLikePath(normalized)
+    && !isTestLikePath(normalized)
+    && !normalized.startsWith("docs/")
+    && !normalized.startsWith("autonomy/")
+  );
+}
+
+function isPythonManifestPath(pathValue: string): boolean {
+  const normalized = pathValue.replace(/\\/g, "/").toLowerCase();
+  if (normalized === "pyproject.toml" || normalized === "pytest.ini") {
+    return true;
+  }
+
+  if (normalized.startsWith("requirements") && normalized.endsWith(".txt")) {
+    return true;
+  }
+
+  return normalized.endsWith("setup.cfg") || normalized.endsWith("tox.ini");
+}
+
+function isToolingConfigPath(pathValue: string): boolean {
+  const normalized = pathValue.replace(/\\/g, "/").toLowerCase();
+  return (
+    normalized.startsWith("playwright.config.")
+    || normalized.startsWith("cypress.config.")
+    || normalized.startsWith("vitest.config.")
+    || normalized.startsWith("jest.config.")
+    || normalized.startsWith("capacitor.config.")
+    || normalized === "tsconfig.json"
+    || normalized.endsWith("tsconfig.base.json")
+    || normalized.endsWith("tsconfig.app.json")
+    || normalized.endsWith("tsconfig.spec.json")
+    || normalized.endsWith("vite.config.ts")
+    || normalized.endsWith("vite.config.js")
+    || normalized.endsWith("vite.config.mjs")
+    || normalized.endsWith("vite.config.cjs")
+    || normalized === "turbo.json"
+    || normalized === "pnpm-workspace.yaml"
+    || normalized === "nx.json"
+  );
+}
+
+function containsAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
 }
 
 function extractGoalTokens(goalText: string): string[] {

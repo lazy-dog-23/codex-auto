@@ -4,7 +4,7 @@ export const installSchema = {
   title: "AutonomyInstallFile",
   type: "object",
   additionalProperties: false,
-  required: ["version", "product_version", "installed_at", "managed_paths", "source_repo"],
+  required: ["version", "product_version", "installed_at", "managed_paths", "managed_files", "source_repo"],
   properties: {
     version: {
       type: "integer",
@@ -26,6 +26,33 @@ export const installSchema = {
       },
       uniqueItems: true,
       default: [],
+    },
+    managed_files: {
+      type: "array",
+      default: [],
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["path", "template_id", "installed_hash", "last_reconciled_product_version"],
+        properties: {
+          path: {
+            type: "string",
+            minLength: 1,
+          },
+          template_id: {
+            type: "string",
+            minLength: 1,
+          },
+          installed_hash: {
+            type: "string",
+            minLength: 1,
+          },
+          last_reconciled_product_version: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+      },
     },
     source_repo: {
       type: "string",

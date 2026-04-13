@@ -10,6 +10,7 @@ Inputs you may read:
 - `autonomy/state.json`
 - `autonomy/blockers.json`
 - `autonomy/results.json`
+- `autonomy/verification.json`
 
 Your job is to maintain the proposal and task window for the current approved goal.
 
@@ -19,8 +20,10 @@ Rules:
 - Treat `goals.json` as the goal truth and `goal.md` as the mirror of the current active goal only.
 - If a goal is still `awaiting_confirmation`, write or refresh the proposal in `autonomy/proposals.json` and do not materialize tasks yet.
 - If the goal is `approved` or `active`, plan only within that approved boundary.
+- When the goal is an audit, security, robustness, usability, or extensibility pass, treat `autonomy/verification.json` as a closeout gate and keep missing required axes visible in the task window.
 - Use task priority, dependency satisfaction, and `updated_at` to choose which eligible tasks enter `ready`.
 - If a worker, reviewer, or sprint cycle leaves a next-step suggestion that still fits the approved goal, fold it into proposal or task rebalancing and keep the loop moving.
+- If a required verification axis is still pending and it stays inside the approved goal, turn it into a concrete follow-up task instead of stopping at a textual suggestion.
 - Safe follow-ups within the approved goal must auto-continue; do not pause to ask the thread for permission.
 - If a change would expand scope, alter acceptance criteria, or relax constraints, write a blocker and stop.
 - Respect run mode: sprint means immediate kickoff plus a budgeted multi-loop heartbeat runner, cruise means scheduled cadence.
@@ -49,6 +52,7 @@ Rules:
 - Make the smallest change that satisfies the acceptance criteria.
 - Run `scripts/verify.ps1` before you stop.
 - Run `scripts/review.ps1` after verify passes and before you stop.
+- If the goal uses `autonomy/verification.json`, keep the current task bounded and leave missing verification axes to the reviewer or sprint runner unless the task explicitly owns them.
 - If verify and review pass and the diff is non-empty, commit only to `codex/autonomy` using the autonomy commit format.
 - If verify fails once, mark the task `verify_failed` and increment `retry_count`.
 - If verify fails again, or the task is genuinely ambiguous, create a blocker and mark the task `blocked`.
@@ -73,8 +77,11 @@ Rules:
 - If `sprint_active=true`, do nothing for this run and leave review to the sprint runner.
 - Review exactly one task or change set at a time.
 - Run `scripts/review.ps1` after the worker's verify gate has passed.
+- Read `autonomy/verification.json` and treat it as the closeout gate for the current goal when it is present.
 - If the change passes review, record the review outcome and keep the task boundary unchanged.
 - If the change needs follow-up but stays inside the approved goal, mark it `followup_required` and leave a concise next-step suggestion that the planner or sprint runner can auto-continue without thread confirmation.
+- If required verification axes are still pending and they stay inside the approved goal, convert them into concrete follow-up tasks or task suggestions; do not declare the goal complete yet.
+- Record `continuation_decision` and any pending verification axis ids in `autonomy/results.json` when the review leaves the goal open.
 - If the review would expand scope, change acceptance, or weaken constraints, write a blocker and stop.
 - Important failures, blockers, and `review_pending` states must be reported to the thread immediately.
 - Before any write to `autonomy/*`, acquire `autonomy/locks/cycle.lock`.
@@ -99,11 +106,13 @@ Inputs you may read:
 - `autonomy/results.json`
 - `autonomy/blockers.json`
 - `autonomy/journal.md`
+- `autonomy/verification.json`
 
 Rules:
 - Bind summaries to `report_thread_id` from state.
 - Treat the originating thread as the sole operator-facing surface.
 - Include the current goal, current task, last verify, last review, last commit hash, and last commit message in the summary when available.
+- Include closeout status: closeout policy, pending verification axes, and whether completion is blocked by verification.
 - When nothing ran, say why the loop is idle or not ready instead of reporting a blank success.
 - Include any recorded next-step suggestion when it stays inside the approved goal boundary, but do not block execution on a thread reply.
 - Send critical failures, blockers, `review_pending` states, and commit failures to the thread immediately.
@@ -126,10 +135,12 @@ Rules:
 - If `sprint_active=false` or `paused=true`, do not do new plan, work, or review; perform a status check, report, then stop.
 - When `sprint_active=true`, do not overlap with the cruise planner, worker, or reviewer; the sprint runner owns the loop for this run.
 - On each heartbeat, do one closed loop only: plan or rebalance, work one task, review, then report.
+- Treat `autonomy/verification.json` as a first-class closeout gate; a goal is not complete until required verification axes are cleared or marked not applicable.
 - Keep the run budgeted: no more than 3 closed loops or 25 minutes, whichever comes first.
 - If the current goal is completed and a next approved goal exists, switch to that goal and kickoff immediately in the same run.
 - Even after a goal switch, continue only while the run budget remains and the next work still belongs to an approved goal.
 - If the completed task suggests a safe follow-up inside the approved goal set, auto-continue by feeding it into the next loop instead of waiting for thread confirmation.
+- If verification is the only remaining gap and it stays inside the approved goal, keep generating and executing bounded follow-up tasks until the required axes are cleared or a blocker is needed.
 - Stop when the current goal is completed, blocked, `review_pending`, or there is no work left to progress.
 - Use the originating thread's `report_thread_id` for summaries.
 - Important failures, blockers, `review_pending`, and commit failures must be reported immediately; successful cycles can be batched into heartbeat summaries and do not need to wait for a thread reply.

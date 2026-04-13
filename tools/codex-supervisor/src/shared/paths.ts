@@ -20,6 +20,7 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   "autonomy/goal.md",
   "autonomy/journal.md",
   "autonomy/install.json",
+  "autonomy/verification.json",
   "autonomy/goals.json",
   "autonomy/proposals.json",
   "autonomy/tasks.json",
@@ -34,6 +35,7 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   "autonomy/schema/settings.schema.json",
   "autonomy/schema/results.schema.json",
   "autonomy/schema/blockers.schema.json",
+  "autonomy/schema/verification.schema.json",
 ] as const;
 
 const NORMALIZED_MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.map((relativePath) =>
@@ -59,6 +61,7 @@ export function resolveRepoPaths(repoRoot = process.cwd()): RepoPaths {
     settingsFile: path.join(autonomyDir, "settings.json"),
     resultsFile: path.join(autonomyDir, "results.json"),
     installFile: path.join(autonomyDir, "install.json"),
+    verificationFile: path.join(autonomyDir, "verification.json"),
     blockersFile: path.join(autonomyDir, "blockers.json"),
     journalFile: path.join(autonomyDir, "journal.md"),
     goalFile: path.join(autonomyDir, "goal.md"),

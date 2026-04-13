@@ -38,7 +38,9 @@
         "last_error",
         "updated_at",
         "commit_hash",
-        "review_status"
+        "review_status",
+        "source",
+        "source_task_id"
       ],
       "properties": {
         "id": {
@@ -125,6 +127,19 @@
             "not_reviewed",
             "passed",
             "followup_required"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "proposal",
+            "followup"
+          ]
+        },
+        "source_task_id": {
+          "type": [
+            "string",
+            "null"
           ]
         }
       }

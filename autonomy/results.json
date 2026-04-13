@@ -15,7 +15,10 @@
     "verify_summary": null,
     "hash": null,
     "message": null,
-    "review_status": null
+    "review_status": null,
+    "next_step_summary": null,
+    "continuation_decision": null,
+    "verification_pending_axes": null
   },
   "worker": {
     "status": "passed",
@@ -27,7 +30,10 @@
     "verify_summary": "npm run build; node ./node_modules/vitest/vitest.mjs run; pwsh -File scripts/verify.ps1",
     "hash": null,
     "message": null,
-    "review_status": "passed"
+    "review_status": "passed",
+    "next_step_summary": null,
+    "continuation_decision": null,
+    "verification_pending_axes": null
   },
   "review": {
     "status": "passed",
@@ -39,7 +45,10 @@
     "verify_summary": "pwsh -File scripts/verify.ps1; pwsh -File scripts/review.ps1",
     "hash": null,
     "message": null,
-    "review_status": "passed"
+    "review_status": "passed",
+    "next_step_summary": null,
+    "continuation_decision": null,
+    "verification_pending_axes": null
   },
   "commit": {
     "status": "skipped",
@@ -51,7 +60,10 @@
     "verify_summary": null,
     "hash": null,
     "message": null,
-    "review_status": null
+    "review_status": null,
+    "next_step_summary": null,
+    "continuation_decision": null,
+    "verification_pending_axes": null
   },
   "reporter": {
     "status": "not_run",
@@ -63,6 +75,9 @@
     "verify_summary": null,
     "hash": null,
     "message": null,
-    "review_status": null
+    "review_status": null,
+    "next_step_summary": null,
+    "continuation_decision": null,
+    "verification_pending_axes": null
   }
 }

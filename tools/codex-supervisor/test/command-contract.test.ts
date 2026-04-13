@@ -1,7 +1,9 @@
+import { Command } from "commander";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -10,15 +12,18 @@ import { runDoctor } from "../src/commands/doctor.js";
 import { runBindThreadCommand } from "../src/commands/bind-thread.js";
 import { runApproveProposal } from "../src/commands/approve-proposal.js";
 import { runGenerateProposal } from "../src/commands/generate-proposal.js";
+import { registerInstallCommand } from "../src/commands/install.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
 import { runMergeAutonomyBranch } from "../src/commands/merge-autonomy-branch.js";
 import { runStatusCommand } from "../src/commands/status.js";
 import { runIntakeGoal } from "../src/commands/intake-goal.js";
 import { runUnblock } from "../src/commands/unblock.js";
+import { registerUpgradeManagedCommand } from "../src/commands/upgrade-managed.js";
 import { pathExists } from "../src/infra/json.js";
 import { inspectAutonomyCommitGate } from "../src/infra/git.js";
 import type { BlockersDocument, TasksDocument } from "../src/contracts/autonomy.js";
 
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const tempRoots: string[] = [];
 
 afterEach(async () => {
@@ -42,10 +47,36 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 
 describe("command integration contracts", () => {
   it("keeps README command examples aligned with the CLI contract", async () => {
-    const readme = await readFile(join(process.cwd(), "README.md"), "utf8");
+    const readme = await readFile(join(repoRoot, "README.md"), "utf8");
 
+    expect(readme).toContain("codex-autonomy install --target <repoB>");
+    expect(readme).toContain("codex-autonomy bind-thread --report-thread-id <thread-id>");
     expect(readme).toContain("codex-autonomy approve-proposal --goal-id <goalId>");
+    expect(readme).toContain("pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1");
+    expect(readme).toContain("## 开发者回退");
+    expect(readme).toContain("node tools/codex-supervisor/dist/cli.js <command>");
+    expect(readme.split("## 开发者回退")[0]).not.toContain("node tools/codex-supervisor/dist/cli.js");
     expect(readme).not.toContain("codex-autonomy approve-proposal <goal-id>");
+  });
+
+  it("keeps the global install helper and package script aligned", async () => {
+    const packageJson = JSON.parse(await readFile(join(repoRoot, "tools/codex-supervisor", "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.["install:global"]).toBe(
+      "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/install-global.ps1",
+    );
+    await expect(pathExists(join(repoRoot, "scripts", "install-global.ps1"))).resolves.toBe(true);
+  });
+
+  it("registers install and upgrade-managed exactly once in the shared CLI program", () => {
+    const program = new Command();
+
+    expect(() => {
+      registerInstallCommand(program);
+      registerUpgradeManagedCommand(program);
+    }).not.toThrow();
   });
 
   it("bootstrap creates the repo control surface and warns in a non-git workspace", async () => {

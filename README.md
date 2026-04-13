@@ -7,20 +7,20 @@
 ## 快速开始
 
 1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。
-2. 在本仓库运行 `npm --prefix tools/codex-supervisor run build` 生成 `dist/cli.js`。
-3. 任选一种方式准备本机 CLI：在源码仓库里直接用 `node tools/codex-supervisor/dist/cli.js ...`，或者先把 `tools/codex-supervisor` 作为本机本地包安装后使用 `codex-autonomy ...`。
-4. 把控制面安装到目标仓库：`node tools/codex-supervisor/dist/cli.js install --target <repoB>` 或 `codex-autonomy install --target <repoB>`。
-5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。
-6. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
-7. 在目标仓库运行 `codex-autonomy doctor` 查看环境与控制面健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree` 创建专用 background worktree。
-8. 初次本地闭环推荐先显式绑定线程，再走目标流：`codex-autonomy bind-thread --report-thread-id <thread-id>` -> `codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。
+2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀。
+3. 在目标仓库优先使用 `codex-autonomy ...`。例如：`codex-autonomy install --target <repoB>`。
+4. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。
+5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
+6. 在目标仓库运行 `codex-autonomy doctor` 查看环境与控制面健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree` 创建专用 background worktree。
+7. 初次本地闭环推荐先显式绑定线程，再走目标流：`codex-autonomy bind-thread --report-thread-id <thread-id>` -> `codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。
 
 ## 日常命令
 
-- 源码仓库内：`node tools/codex-supervisor/dist/cli.js <command>`。
-- 目标仓库内：`codex-autonomy <command>`。
+- 标准路径：`codex-autonomy <command>`。
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
+- `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
 - `codex-autonomy bind-thread --report-thread-id <threadId>`：把目标仓库的原线程绑定为唯一汇报线程。
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`：构建并安装 `codex-autonomy` 到全局 npm 前缀。
 - `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。
 - `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
@@ -36,6 +36,11 @@
 - `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。
 - `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。
 
+## 开发者回退
+
+- 如果还没做全局安装，或者只是在源码仓库里临时验证，可以先构建再用源码入口：`npm --prefix tools/codex-supervisor run build` 后执行 `node tools/codex-supervisor/dist/cli.js <command>`。
+- 这是回退路径，不是日常标准路径；标准安装后应优先使用 `codex-autonomy <command>`。
+
 ## Repo 控制面
 
 - `AGENTS.md`：硬规则与运行约定。
@@ -43,6 +48,7 @@
 - `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。
 - `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
 - `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
+- `autonomy/verification.json`：goal 级 closeout gate；体检、安全、健壮性类 goal 只有在 required verification axis 清零后才能真正完成。
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
 - `autonomy/journal.md`：每次 run 只追加一条记录。
 - `scripts/verify.ps1`：唯一验收门。

@@ -48,6 +48,14 @@ const resultEntrySchema = {
       type: ["string", "null"],
       enum: [...CONTINUATION_DECISIONS, null],
     },
+    verification_pending_axes: {
+      type: ["array", "null"],
+      items: {
+        type: "string",
+        minLength: 1,
+      },
+      default: null,
+    },
   },
 } as const;
 

@@ -59,10 +59,17 @@ export interface ReportResult {
   next_automation_reason: string | null;
   auto_continue_state: string;
   continuation_reason: string | null;
+  closeout_policy: string | null;
+  verification_required: number;
+  verification_passed: number;
+  verification_pending: number;
+  completion_blocked_by_verification: boolean;
   next_task_id: string | null;
   next_task_title: string | null;
   remaining_ready: number;
   last_followup_summary: string | null;
+  upgrade_state: string | null;
+  cli_install_state: string | null;
   runtime_reason: string | null;
   healthy_runtime: boolean;
   runtime_warnings: ReportWarning[];
@@ -126,10 +133,17 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     nextAutomationReason,
     autoContinueState: status.auto_continue_state,
     continuationReason: status.continuation_reason,
+    closeoutPolicy: status.closeout_policy,
+    verificationRequired: status.verification_required,
+    verificationPassed: status.verification_passed,
+    verificationPending: status.verification_pending,
+    completionBlockedByVerification: status.completion_blocked_by_verification,
     nextTaskId: status.next_task_id,
     nextTaskTitle: status.next_task_title,
     remainingReady: status.remaining_ready,
     lastFollowupSummary: status.last_followup_summary,
+    upgradeState: status.upgrade_state,
+    cliInstallState: status.cli_install_state,
     runtimeWarnings,
   });
 
@@ -159,10 +173,17 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     next_automation_reason: nextAutomationReason,
     auto_continue_state: status.auto_continue_state,
     continuation_reason: status.continuation_reason,
+    closeout_policy: status.closeout_policy,
+    verification_required: status.verification_required,
+    verification_passed: status.verification_passed,
+    verification_pending: status.verification_pending,
+    completion_blocked_by_verification: status.completion_blocked_by_verification,
     next_task_id: status.next_task_id,
     next_task_title: status.next_task_title,
     remaining_ready: status.remaining_ready,
     last_followup_summary: status.last_followup_summary,
+    upgrade_state: status.upgrade_state,
+    cli_install_state: status.cli_install_state,
     runtime_reason: nextAutomationReason,
     healthy_runtime: healthyRuntime,
     runtime_warnings: runtimeWarnings,
@@ -204,10 +225,17 @@ function buildReportMessage(
     nextAutomationReason: string | null;
     autoContinueState: string;
     continuationReason: string | null;
+    closeoutPolicy: string | null;
+    verificationRequired: number;
+    verificationPassed: number;
+    verificationPending: number;
+    completionBlockedByVerification: boolean;
     nextTaskId: string | null;
     nextTaskTitle: string | null;
     remainingReady: number;
     lastFollowupSummary: string | null;
+    upgradeState: string | null;
+    cliInstallState: string | null;
     runtimeWarnings: readonly ReportWarning[];
   },
 ): string {
@@ -232,9 +260,16 @@ function buildReportMessage(
   const inboxRunAtPart = `last_inbox_run_at=${formatNullableValue(options.lastInboxRunAt)}`;
   const autoContinueStatePart = `auto_continue_state=${formatNullableValue(options.autoContinueState)}`;
   const continuationReasonPart = `continuation_reason=${formatNullableValue(options.continuationReason)}`;
+  const closeoutPolicyPart = `closeout_policy=${formatNullableValue(options.closeoutPolicy)}`;
+  const verificationRequiredPart = `verification_required=${options.verificationRequired}`;
+  const verificationPassedPart = `verification_passed=${options.verificationPassed}`;
+  const verificationPendingPart = `verification_pending=${options.verificationPending}`;
+  const completionBlockedByVerificationPart = `completion_blocked_by_verification=${options.completionBlockedByVerification ? "yes" : "no"}`;
   const nextTaskPart = `next_task=${options.nextTaskId ? `${options.nextTaskId}${options.nextTaskTitle ? `(${options.nextTaskTitle})` : ""}` : "none"}`;
   const remainingReadyPart = `remaining_ready=${options.remainingReady}`;
   const lastFollowupSummaryPart = `last_followup_summary=${formatNullableValue(options.lastFollowupSummary)}`;
+  const upgradeStatePart = `upgrade_state=${formatNullableValue(options.upgradeState)}`;
+  const cliInstallStatePart = `cli_install_state=${formatNullableValue(options.cliInstallState)}`;
   const nextAutomationReasonPart = `next_automation_reason=${formatNullableValue(options.nextAutomationReason)}`;
   const runtimePart = formatRuntimeWarnings(options.runtimeWarnings);
   return [
@@ -257,9 +292,16 @@ function buildReportMessage(
     inboxRunAtPart,
     autoContinueStatePart,
     continuationReasonPart,
+    closeoutPolicyPart,
+    verificationRequiredPart,
+    verificationPassedPart,
+    verificationPendingPart,
+    completionBlockedByVerificationPart,
     nextTaskPart,
     remainingReadyPart,
     lastFollowupSummaryPart,
+    upgradeStatePart,
+    cliInstallStatePart,
     nextAutomationReasonPart,
     runtimePart,
   ].join(" ");

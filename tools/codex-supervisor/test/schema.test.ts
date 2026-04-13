@@ -13,6 +13,7 @@ import { resultsSchema } from "../src/schemas/results.schema.js";
 import { settingsSchema } from "../src/schemas/settings.schema.js";
 import { stateSchema } from "../src/schemas/state.schema.js";
 import { tasksSchema } from "../src/schemas/tasks.schema.js";
+import { verificationSchema } from "../src/schemas/verification.schema.js";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(testDir, "fixtures");
@@ -91,6 +92,14 @@ describe("schema fixtures", () => {
   it("accepts the sample install document", () => {
     const validate = createValidator(installSchema);
     const data = readJsonFixture("install.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts the sample verification document", () => {
+    const validate = createValidator(verificationSchema);
+    const data = readJsonFixture("verification.sample.json");
 
     expect(validate(data)).toBe(true);
     expect(validate.errors).toBeNull();

@@ -11,6 +11,9 @@ import {
 } from "../infra/git.js";
 import { pathExists } from "../infra/json.js";
 import { commandSucceeded, discoverPowerShellExecutable, runProcess } from "../infra/process.js";
+import { resolveRepoPaths } from "../shared/paths.js";
+import { listPendingRequiredVerificationAxes, summarizeVerification } from "../domain/verification.js";
+import { loadGoalsDocument, loadStateDocument, loadVerificationDocument } from "./control-plane.js";
 
 export interface ReviewCommandIssue {
   code: "not_a_git_repo" | "dirty_worktree" | "branch_drift" | "non_allowlisted_changes" | "review_script_missing" | "review_failed";
@@ -35,6 +38,14 @@ export interface ReviewCommandResult extends CommandResult {
   commit_ready: boolean;
   commit_skipped_reason: "no_diff" | "dirty_worktree" | "branch_drift" | "non_allowlisted_changes" | "review_failed" | "review_script_missing" | null;
   review_script: ReviewScriptRun;
+  closeout_policy: string | null;
+  verification_required: number;
+  verification_passed: number;
+  verification_pending: number;
+  verification_pending_axes: string[];
+  completion_blocked_by_verification: boolean;
+  next_step_summary: string | null;
+  continuation_decision: "none" | "auto_continued" | "needs_confirmation";
   issues: ReviewCommandIssue[];
 }
 
@@ -68,7 +79,22 @@ export async function runReviewCommand(
   options?: { expectedBranch?: string },
 ): Promise<ReviewCommandResult> {
   const expectedBranch = options?.expectedBranch ?? DEFAULT_AUTONOMY_BRANCH;
-  const gitRepo = await detectGitRepository(repoRoot);
+  const gitProbe = await detectGitRepository(repoRoot);
+  const controlRoot = gitProbe?.path ?? repoRoot;
+  const paths = resolveRepoPaths(controlRoot);
+  const [stateDoc, goalsDoc, verificationDoc] = await Promise.all([
+    loadStateDocument(paths),
+    loadGoalsDocument(paths),
+    loadVerificationDocument(paths),
+  ]);
+  const currentGoalId = stateDoc.current_goal_id ?? goalsDoc.goals.find((goal) => goal.status === "active")?.id ?? null;
+  const verificationSummary = summarizeVerification(verificationDoc, currentGoalId);
+  const verificationPendingAxes = listPendingRequiredVerificationAxes(verificationDoc, currentGoalId);
+  const nextStepSummary = verificationPendingAxes.length > 0
+    ? `Verification closeout is still pending for: ${verificationPendingAxes.map((axis) => axis.id).join(", ")}.`
+    : null;
+  const continuationDecision = verificationPendingAxes.length > 0 ? "auto_continued" as const : "none" as const;
+  const gitRepo = gitProbe;
   if (!gitRepo) {
     return {
       ok: false,
@@ -88,6 +114,14 @@ export async function runReviewCommand(
         stdout: "",
         stderr: "",
       },
+      closeout_policy: verificationDoc.goal_id === currentGoalId ? verificationDoc.policy : null,
+      verification_required: verificationSummary.required,
+      verification_passed: verificationSummary.passed,
+      verification_pending: verificationSummary.pending,
+      verification_pending_axes: verificationPendingAxes.map((axis) => axis.id),
+      completion_blocked_by_verification: verificationPendingAxes.length > 0,
+      next_step_summary: nextStepSummary,
+      continuation_decision: continuationDecision,
       issues: [
         {
           code: "not_a_git_repo",
@@ -150,6 +184,14 @@ export async function runReviewCommand(
       commit_ready: false,
       commit_skipped_reason: branchDriftReason ?? reviewScriptMissingReason ?? null,
       review_script: reviewScript,
+      closeout_policy: verificationDoc.goal_id === currentGoalId ? verificationDoc.policy : null,
+      verification_required: verificationSummary.required,
+      verification_passed: verificationSummary.passed,
+      verification_pending: verificationSummary.pending,
+      verification_pending_axes: verificationPendingAxes.map((axis) => axis.id),
+      completion_blocked_by_verification: verificationPendingAxes.length > 0,
+      next_step_summary: nextStepSummary,
+      continuation_decision: continuationDecision,
       issues,
     };
   }
@@ -193,6 +235,14 @@ export async function runReviewCommand(
     commit_ready: commitReady,
     commit_skipped_reason: commitReady ? null : skipReason,
     review_script: reviewScript,
+    closeout_policy: verificationDoc.goal_id === currentGoalId ? verificationDoc.policy : null,
+    verification_required: verificationSummary.required,
+    verification_passed: verificationSummary.passed,
+    verification_pending: verificationSummary.pending,
+    verification_pending_axes: verificationPendingAxes.map((axis) => axis.id),
+    completion_blocked_by_verification: verificationPendingAxes.length > 0,
+    next_step_summary: nextStepSummary,
+    continuation_decision: continuationDecision,
     issues,
   };
 }

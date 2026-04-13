@@ -1,6 +1,7 @@
 import { basename, dirname, join, resolve } from 'node:path';
 import { runProcess, commandSucceeded } from './process.js';
 import { assertDirectPathBoundary, listDirectoryEntries, pathExists } from './json.js';
+import { extractGitStatusPaths, normalizeGitStatusPath, probeWorktreeState } from './worktree-state.js';
 import type { CommandExecution } from './types.js';
 import type {
   BackgroundWorktreePreparation,
@@ -59,33 +60,25 @@ export function getBackgroundWorktreePath(repoRoot: string): string {
 }
 
 export async function detectGitRepository(startPath: string): Promise<GitRepositoryInfo | null> {
-  const probe = runProcess('git', ['rev-parse', '--show-toplevel'], { cwd: startPath });
-  if (!commandSucceeded(probe)) {
+  const probe = await probeWorktreeState(startPath);
+  if (!probe) {
     return null;
   }
-
-  const repoRoot = probe.stdout.trim();
-  if (!repoRoot) {
-    return null;
-  }
-
-  const gitDirProbe = runProcess('git', ['rev-parse', '--git-dir'], { cwd: repoRoot });
-  const commonGitDirProbe = runProcess('git', ['rev-parse', '--git-common-dir'], { cwd: repoRoot });
-  const headProbe = runProcess('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
-  const statusProbe = runProcess('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: repoRoot });
 
   return {
-    path: repoRoot,
-    gitDir: gitDirProbe.stdout.trim() || '',
-    commonGitDir: commandSucceeded(commonGitDirProbe)
-      ? resolve(repoRoot, commonGitDirProbe.stdout.trim() || '.git')
-      : resolve(repoRoot, '.git'),
-    head: commandSucceeded(headProbe) ? headProbe.stdout.trim() || null : null,
-    dirty: Boolean(statusProbe.stdout.trim()),
-    statusLines: statusProbe.stdout
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter(Boolean),
+    path: probe.repoRoot,
+    gitDir: probe.gitDir,
+    commonGitDir: probe.commonGitDir,
+    head: probe.head,
+    dirty: probe.dirty,
+    statusLines: probe.statusLines,
+    stable: probe.stable,
+    transient: probe.transient,
+    reason: probe.reason,
+    attempts: probe.attempts,
+    managedDirtyPaths: probe.managedDirtyPaths,
+    unmanagedDirtyPaths: probe.unmanagedDirtyPaths,
+    managedControlSurfaceOnly: probe.managedControlSurfaceOnly,
   };
 }
 
@@ -99,54 +92,25 @@ export async function getRepositoryHead(repoRoot: string): Promise<string | null
 }
 
 export async function getRepositoryStatus(repoRoot: string): Promise<string[]> {
-  const result = runProcess('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: repoRoot });
-  if (!commandSucceeded(result)) {
+  const probe = await probeWorktreeState(repoRoot);
+  if (!probe) {
     return [];
   }
 
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
+  return probe.statusLines;
 }
 
 export async function getCurrentGitBranch(repoRoot: string): Promise<string | null> {
-  const result = runProcess('git', ['branch', '--show-current'], { cwd: repoRoot });
-  if (!commandSucceeded(result)) {
-    return null;
-  }
-
-  const branch = result.stdout.trim();
-  return branch.length > 0 ? branch : null;
+  const probe = await probeWorktreeState(repoRoot);
+  return probe?.branch ?? null;
 }
 
 export function stageAllRepositoryChanges(repoRoot: string): CommandExecution {
   return runProcess('git', ['add', '-A'], { cwd: repoRoot });
 }
 
-function normalizeStatusPath(pathValue: string): string {
-  return pathValue.replace(/^"+|"+$/g, '').replace(/\\/g, '/').trim();
-}
-
 function normalizeAllowlistPath(pathValue: string): string {
-  return normalizeStatusPath(pathValue).toLowerCase();
-}
-
-function extractStatusPaths(statusLine: string): string[] {
-  if (statusLine.length < 4) {
-    return [];
-  }
-
-  const content = statusLine.slice(3).trim();
-  if (!content) {
-    return [];
-  }
-
-  const paths = content.includes(' -> ')
-    ? content.split(' -> ').map((part) => normalizeStatusPath(part))
-    : [normalizeStatusPath(content)];
-
-  return paths.filter(Boolean);
+  return normalizeGitStatusPath(pathValue).toLowerCase();
 }
 
 export function isAllowlistedAutonomyCommitPath(pathValue: string): boolean {
@@ -170,7 +134,7 @@ function analyzeAutonomyCommitScope(statusLines: string[]): {
   const blockedStatusLines: string[] = [];
 
   for (const statusLine of statusLines) {
-    const paths = extractStatusPaths(statusLine);
+    const paths = extractGitStatusPaths(statusLine);
     if (paths.length === 0) {
       blockedStatusLines.push(statusLine);
       continue;
@@ -180,18 +144,18 @@ function analyzeAutonomyCommitScope(statusLines: string[]): {
     if (statusAllowed) {
       allowedStatusLines.push(statusLine);
       for (const pathValue of paths) {
-        allowedPaths.add(normalizeStatusPath(pathValue));
+        allowedPaths.add(normalizeGitStatusPath(pathValue));
       }
       continue;
     }
 
-    blockedStatusLines.push(statusLine);
-    for (const pathValue of paths) {
-      if (!isAllowlistedAutonomyCommitPath(pathValue)) {
-        blockedPaths.add(normalizeStatusPath(pathValue));
+      blockedStatusLines.push(statusLine);
+      for (const pathValue of paths) {
+        if (!isAllowlistedAutonomyCommitPath(pathValue)) {
+          blockedPaths.add(normalizeGitStatusPath(pathValue));
+        }
       }
     }
-  }
 
   return {
     allowedPaths: [...allowedPaths],
@@ -427,26 +391,26 @@ export function ensureGitSafeDirectory(targetPath: string, cwd = process.cwd()):
 
 export async function getWorktreeSummary(worktreePath: string): Promise<WorktreeSummary | null> {
   await assertDirectPathBoundary(worktreePath);
-  const repoInfo = await detectGitRepository(worktreePath);
-  if (!repoInfo) {
+  const probe = await probeWorktreeState(worktreePath);
+  if (!probe) {
     return null;
   }
 
-  const branchProbe = runProcess('git', ['branch', '--show-current'], { cwd: worktreePath });
-  const headProbe = runProcess('git', ['rev-parse', 'HEAD'], { cwd: worktreePath });
-  const statusProbe = runProcess('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: worktreePath });
-
   return {
     path: worktreePath,
-    repoRoot: repoInfo.path,
-    commonGitDir: repoInfo.commonGitDir,
-    branch: commandSucceeded(branchProbe) ? branchProbe.stdout.trim() || null : null,
-    head: commandSucceeded(headProbe) ? headProbe.stdout.trim() || null : null,
-    dirty: Boolean(statusProbe.stdout.trim()),
-    statusLines: statusProbe.stdout
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter(Boolean),
+    repoRoot: probe.repoRoot,
+    commonGitDir: probe.commonGitDir,
+    branch: probe.branch,
+    head: probe.head,
+    dirty: probe.dirty,
+    statusLines: probe.statusLines,
+    stable: probe.stable,
+    transient: probe.transient,
+    reason: probe.reason,
+    attempts: probe.attempts,
+    managedDirtyPaths: probe.managedDirtyPaths,
+    unmanagedDirtyPaths: probe.unmanagedDirtyPaths,
+    managedControlSurfaceOnly: probe.managedControlSurfaceOnly,
   };
 }
 

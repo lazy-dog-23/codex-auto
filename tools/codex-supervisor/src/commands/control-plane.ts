@@ -14,6 +14,7 @@ import type {
   ResultEntry,
   RunMode,
   TasksDocument,
+  VerificationDocument,
 } from "../contracts/autonomy.js";
 import {
   DEFAULT_AUTONOMY_BRANCH,
@@ -35,6 +36,7 @@ function emptyResultEntry(): ResultEntry {
     review_status: null,
     next_step_summary: null,
     continuation_decision: null,
+    verification_pending_axes: null,
   };
 }
 
@@ -62,7 +64,17 @@ export function createDefaultInstallDocument(now: string, sourceRepo: string): I
     product_version: "0.1.0",
     installed_at: now,
     managed_paths: [],
+    managed_files: [],
     source_repo: sourceRepo,
+  };
+}
+
+export function createDefaultVerificationDocument(): VerificationDocument {
+  return {
+    version: 1,
+    goal_id: null,
+    policy: "strong_template",
+    axes: [],
   };
 }
 
@@ -222,6 +234,10 @@ export async function loadResultsDocument(paths: RepoPaths): Promise<AutonomyRes
   return loadOptionalJson(paths.resultsFile, createDefaultResultsDocument);
 }
 
+export async function loadVerificationDocument(paths: RepoPaths): Promise<VerificationDocument> {
+  return loadOptionalJson(paths.verificationFile, createDefaultVerificationDocument);
+}
+
 export async function persistGoalMirror(paths: RepoPaths, goal: GoalRecord | null): Promise<void> {
   await writeTextFileAtomic(paths.goalFile, formatGoalMarkdown(goal));
 }
@@ -244,6 +260,10 @@ export async function writeResultsDocument(paths: RepoPaths, document: AutonomyR
 
 export async function writeTasksDocument(paths: RepoPaths, document: TasksDocument): Promise<void> {
   await writeJsonAtomic(paths.tasksFile, document);
+}
+
+export async function writeVerificationDocument(paths: RepoPaths, document: VerificationDocument): Promise<void> {
+  await writeJsonAtomic(paths.verificationFile, document);
 }
 
 export function getActiveGoal(goals: readonly GoalRecord[], state: AutonomyState): GoalRecord | null {

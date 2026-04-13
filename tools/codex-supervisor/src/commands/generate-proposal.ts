@@ -69,14 +69,14 @@ export async function runGenerateProposal(
       ...resultsDoc,
       last_inbox_run_at: now,
       last_summary_kind: "normal_success" as const,
-      last_summary_reason: `Generated repo-aware fallback proposal for ${targetGoal.id} without materializing tasks.json.`,
+      last_summary_reason: `Generated repo-aware fallback proposal for ${targetGoal.id} without materializing tasks.json. Validation focus: ${proposalPlan.signals.preferred_validation_action}.`,
       latest_goal_transition: null,
       planner: {
         ...resultsDoc.planner,
         status: "planned" as const,
         goal_id: targetGoal.id,
         task_id: null,
-        summary: `Generated repo-aware fallback proposal for ${targetGoal.id} with ${tasks.length} task(s).`,
+        summary: `Generated repo-aware fallback proposal for ${targetGoal.id} with ${tasks.length} task(s) and ${proposalPlan.signals.preferred_validation_action} validation focus.`,
         happened_at: now,
         sent_at: null,
         verify_summary: null,
@@ -93,14 +93,14 @@ export async function runGenerateProposal(
       actor: "supervisor",
       taskId: targetGoal.id,
       result: "planned",
-      summary: `Generated repo-aware fallback proposal with ${tasks.length} task(s): ${summary}.`,
+      summary: `Generated repo-aware fallback proposal with ${tasks.length} task(s) and ${proposalPlan.signals.preferred_validation_action} validation focus: ${summary}.`,
       verify: "not run (codex-autonomy generate-proposal)",
       blocker: "none",
     });
 
     return {
       ok: true,
-      message: `Generated repo-aware proposal for ${targetGoal.id} with ${tasks.length} task(s).`,
+      message: `Generated repo-aware proposal for ${targetGoal.id} with ${tasks.length} task(s); validation focus: ${proposalPlan.signals.preferred_validation_action}.`,
     };
   } finally {
     await releaseCycleLock(paths.cycleLockFile, lock);

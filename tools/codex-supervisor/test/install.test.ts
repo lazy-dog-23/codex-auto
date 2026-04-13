@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -9,6 +10,7 @@ import { runInstallCommand } from "../src/commands/install.js";
 import { getLegacyReviewScriptTemplates } from "../src/scaffold/templates.js";
 
 const tempRoots: string[] = [];
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 afterEach(async () => {
   while (tempRoots.length > 0) {
@@ -28,7 +30,7 @@ async function makeTempGitRepo(): Promise<string> {
 
 describe("install scaffold", () => {
   it("exposes the codex-autonomy entrypoint with a codex-supervisor alias", async () => {
-    const packageJson = JSON.parse(await readFile(join(process.cwd(), "tools", "codex-supervisor", "package.json"), "utf8")) as {
+    const packageJson = JSON.parse(await readFile(join(repoRoot, "tools", "codex-supervisor", "package.json"), "utf8")) as {
       name: string;
       bin: Record<string, string>;
     };
@@ -38,7 +40,7 @@ describe("install scaffold", () => {
     expect(packageJson.bin["codex-supervisor"]).toBe("dist/cli.js");
   });
 
-  it("installs the repo control surface into the target repository without overwriting existing files", async () => {
+  it("installs the repo control surface in detect-only mode without overwriting existing files", async () => {
     const workspace = await makeTempGitRepo();
     const existingAgents = "# existing sentinel\n";
     await writeFile(join(workspace, "AGENTS.md"), existingAgents, "utf8");
@@ -52,13 +54,13 @@ describe("install scaffold", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.message).toContain("Environment prerequisites are ready");
+    expect(result.message).toContain("left untouched");
     expect(result.summary.target_path).toBe(workspace);
     expect(result.summary.is_git_repo).toBe(true);
     expect(result.summary.automation_ready).toBe(true);
     expect(result.summary.codex_process_detected).toBe(true);
     expect(result.summary.background_worktree_prereqs).toBe(true);
-    expect(result.summary.warning).toContain("Bind report_thread_id");
+    expect(result.summary.warning).toContain("upgrade-managed");
     expect(result.summary.control_surface_files_created).toBeGreaterThan(0);
     expect(result.summary.install_metadata_path).toBe(join(workspace, "autonomy", "install.json"));
     expect(result.summary.install_metadata_written).toBe(true);
@@ -90,9 +92,19 @@ describe("install scaffold", () => {
     );
     expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("No active goal.");
     expect(await readFile(join(workspace, "autonomy", "journal.md"), "utf8")).toContain("Append one entry per run");
-    expect(await readFile(join(workspace, "autonomy", "install.json"), "utf8")).toContain('"product_version": "0.1.0"');
-    expect(await readFile(join(workspace, "autonomy", "install.json"), "utf8")).toContain('"source_repo": "."');
-    expect(await readFile(join(workspace, "autonomy", "install.json"), "utf8")).toContain('"managed_paths"');
+    const installMetadata = JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8")) as {
+      product_version: string;
+      source_repo: string;
+      managed_paths: string[];
+      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string }>;
+    };
+    expect(installMetadata.product_version).toBe("0.1.0");
+    expect(installMetadata.source_repo).toBe(".");
+    expect(installMetadata.managed_paths).toContain("autonomy/install.json");
+    expect(installMetadata.managed_files.length).toBeGreaterThan(0);
+    expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.template_id).toBe("agents_markdown");
+    expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.installed_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.last_reconciled_product_version).toBe("0.1.0");
     expect(await readFile(join(workspace, "autonomy", "goals.json"), "utf8")).toContain('"goals"');
     expect(await readFile(join(workspace, "autonomy", "settings.json"), "utf8")).toContain('"autonomy_branch"');
     expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain('"reporter"');
@@ -101,7 +113,7 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('model = "gpt-5.4"');
   });
 
-  it("marks a non-Git target as not ready while still installing the scaffold", async () => {
+  it("marks a non-Git target as not ready while still installing the scaffold in detect-only mode", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "codex-autonomy-install-nongit-"));
     tempRoots.push(workspace);
 
@@ -119,7 +131,7 @@ describe("install scaffold", () => {
     expect(result.summary.automation_ready).toBe(false);
     expect(result.summary.codex_process_detected).toBe(false);
     expect(result.summary.background_worktree_prereqs).toBe(false);
-    expect(result.summary.warning).toContain("not a Git repository");
+    expect(result.summary.warning).toContain("detect-only mode");
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "non_git_repo" }),
@@ -132,7 +144,7 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("No active goal.");
   });
 
-  it("migrates legacy control-plane documents to the latest contract", async () => {
+  it("detects legacy control-plane documents without mutating them", async () => {
     const workspace = await makeTempGitRepo();
     await mkdir(join(workspace, "autonomy"), { recursive: true });
     await writeFile(
@@ -273,7 +285,7 @@ describe("install scaffold", () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "control_plane_migrated" }),
+        expect.objectContaining({ code: "managed_paths_diverged" }),
       ]),
     );
 
@@ -285,30 +297,23 @@ describe("install scaffold", () => {
     const proposals = JSON.parse(await readFile(join(workspace, "autonomy", "proposals.json"), "utf8")) as { proposals: Array<Record<string, unknown>> };
     const blockers = JSON.parse(await readFile(join(workspace, "autonomy", "blockers.json"), "utf8")) as { blockers: Array<Record<string, unknown>> };
 
-    expect(state.last_thread_summary_sent_at).toBeNull();
-    expect(state.last_inbox_run_at).toBeNull();
-    expect(settings.default_sprint_heartbeat_minutes).toBe(15);
-    expect(results.last_thread_summary_sent_at).toBeNull();
-    expect(results.last_inbox_run_at).toBeNull();
-    expect(results.last_summary_kind).toBeNull();
-    expect(results.last_summary_reason).toBeNull();
-    expect((results.reporter as Record<string, unknown>).sent_at).toBeNull();
-    expect((results.worker as Record<string, unknown>).verify_summary).toBeNull();
-    expect(tasks.tasks[0]?.goal_id).toBe("goal-legacy");
-    expect(tasks.tasks[0]?.commit_hash).toBeNull();
-    expect(tasks.tasks[0]?.review_status).toBe("not_reviewed");
-    expect(goals.goals[0]?.run_mode).toBe("cruise");
-    expect(goals.goals[0]?.approved_at).toBe("2026-01-01T00:00:00Z");
-    expect(goals.goals[0]?.completed_at).toBeNull();
-    expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("Keep legacy goal running");
-    expect(proposals.proposals[0]?.goal_id).toBe("goal-legacy");
-    expect(proposals.proposals[0]?.status).toBe("awaiting_confirmation");
-    expect(((proposals.proposals[0]?.tasks as Array<Record<string, unknown>>)[0])?.id).toBe("proposal-task-1");
-    expect(blockers.blockers[0]?.resolution).toBeNull();
-    expect(blockers.blockers[0]?.resolved_at).toBeNull();
+    expect(state.cycle_status).toBe("idle");
+    expect(state.current_goal_id).toBe("goal-legacy");
+    expect(settings.default_sprint_heartbeat_minutes).toBeUndefined();
+    expect(results.last_summary_kind).toBeUndefined();
+    expect(tasks.tasks[0]?.goal_id).toBeUndefined();
+    expect(tasks.tasks[0]?.commit_hash).toBeUndefined();
+    expect(tasks.tasks[0]?.review_status).toBeUndefined();
+    expect(goals.goals[0]?.run_mode).toBeUndefined();
+    expect(goals.goals[0]?.approved_at).toBeUndefined();
+    expect(goals.goals[0]?.completed_at).toBeUndefined();
+    expect(proposals.proposals[0]?.goal_id).toBeUndefined();
+    expect(proposals.proposals[0]?.status).toBeUndefined();
+    expect(blockers.blockers[0]?.resolution).toBeUndefined();
+    expect(blockers.blockers[0]?.resolved_at).toBeUndefined();
   });
 
-  it("blocks synthesized placeholder goals instead of treating them as approved work", async () => {
+  it("leaves placeholder-goal references untouched in detect-only mode", async () => {
     const workspace = await makeTempGitRepo();
     await mkdir(join(workspace, "autonomy"), { recursive: true });
     await writeFile(
@@ -380,25 +385,23 @@ describe("install scaffold", () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "placeholder_goals_blocked" }),
+        expect.objectContaining({ code: "managed_paths_diverged" }),
       ]),
     );
-    expect(goals.goals[0]?.id).toBe("goal-missing");
-    expect(goals.goals[0]?.status).toBe("blocked");
-    expect(goals.goals[0]?.approved_at).toBeNull();
-    expect(state.current_goal_id).toBeNull();
-    expect(state.cycle_status).toBe("blocked");
-    expect(state.last_result).toBe("blocked");
-    expect(state.needs_human_review).toBe(true);
-    expect(state.sprint_active).toBe(false);
-    expect(state.open_blocker_count).toBeGreaterThan(0);
-    expect(tasks.tasks[0]?.status).toBe("blocked");
-    expect(tasks.tasks[0]?.last_error).toBe("Referenced goal goal-missing is missing from goals.json and requires human review.");
-    expect(blockers.blockers[0]?.task_id).toBe("legacy-task-missing-goal");
-    expect(blockers.blockers[0]?.question).toContain("goal-missing");
+    expect(goals.goals).toHaveLength(0);
+    expect(state.current_goal_id).toBe("goal-missing");
+    expect(state.cycle_status).toBe("idle");
+    expect(state.last_result).toBe("noop");
+    expect(state.needs_human_review).toBe(false);
+    expect(state.sprint_active).toBe(true);
+    expect(state.open_blocker_count).toBe(0);
+    expect(tasks.tasks).toHaveLength(1);
+    expect(tasks.tasks[0]?.status).toBe("ready");
+    expect(tasks.tasks[0]?.last_error).toBeNull();
+    expect(blockers.blockers).toHaveLength(0);
   });
 
-  it("migrates the legacy generated review script without overwriting user-owned files", async () => {
+  it("leaves the legacy generated review script untouched in detect-only mode", async () => {
     const workspace = await makeTempGitRepo();
     await mkdir(join(workspace, "scripts"), { recursive: true });
     await writeFile(join(workspace, "scripts", "review.ps1"), getLegacyReviewScriptTemplates()[0], "utf8");
@@ -415,11 +418,10 @@ describe("install scaffold", () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "control_plane_migrated" }),
+        expect.objectContaining({ code: "managed_paths_diverged" }),
       ]),
     );
-    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("Review checks passed.");
-    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("review.local.ps1");
+    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toBe(getLegacyReviewScriptTemplates()[0]);
     expect(await readFile(join(workspace, "AGENTS.md"), "utf8")).toBe("# user owned\n");
   });
 
@@ -453,7 +455,7 @@ describe("install scaffold", () => {
     expect(JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8"))).toEqual(divergedInstallMetadata);
   });
 
-  it("refreshes generated schema files when the installed contract changes", async () => {
+  it("leaves generated schema files untouched when the installed contract changes", async () => {
     const workspace = await makeTempGitRepo();
     await mkdir(join(workspace, "autonomy", "schema"), { recursive: true });
     await writeFile(
@@ -576,10 +578,10 @@ describe("install scaffold", () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "control_plane_migrated" }),
+        expect.objectContaining({ code: "managed_paths_diverged" }),
       ]),
     );
-    expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain(
+    expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).not.toContain(
       '"latest_goal_transition"',
     );
   });

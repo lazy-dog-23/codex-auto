@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +19,7 @@ import {
   settingsSchema,
   stateSchema,
   tasksSchema,
+  verificationSchema,
 } from "../schemas/index.js";
 import {
   getAgentsMarkdown,
@@ -43,6 +45,7 @@ import {
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
   createDefaultState,
+  createDefaultVerificationDocument,
   formatGoalMarkdown,
   getActiveGoal,
   persistGoalMirror,
@@ -76,6 +79,30 @@ const DEFAULT_BLOCKERS: BlockersDocument = {
   version: 1,
   blockers: [],
 };
+
+interface ManagedControlSurfaceSpec {
+  path: string;
+  relative_path: string;
+  template_id: string;
+  kind: "text" | "json";
+  content: string;
+}
+
+interface ManagedInstallFileRecord {
+  path: string;
+  template_id: string;
+  installed_hash: string;
+  last_reconciled_product_version: string;
+}
+
+interface InstallMetadataDocument {
+  version: number;
+  product_version: string;
+  installed_at: string;
+  managed_paths: string[];
+  source_repo: string;
+  managed_files: ManagedInstallFileRecord[];
+}
 
 const LEGACY_RESULTS_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -255,42 +282,11 @@ export async function runInstallCommand(
   const isGitRepo = repoRoot !== targetPath || (await pathExists(path.join(targetPath, ".git")));
   const paths = resolveRepoPaths(repoRoot);
   const installMetadataPath = getInstallMetadataPath(repoRoot);
-  const installMetadataExpectation = createInstallMetadataExpectation(".");
+  const managedSpecs = buildManagedControlSurfaceSpecs(paths);
+  const installMetadataExpectation = createInstallMetadataExpectation(".", managedSpecs);
   const created: string[] = [];
-  const textFiles: Array<[string, string]> = [
-    [paths.agentsFile, getAgentsMarkdown() + "\n"],
-    [path.join(repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md"), getAutonomyPlanSkillMarkdown() + "\n"],
-    [path.join(repoRoot, ".agents", "skills", "$autonomy-work", "SKILL.md"), getAutonomyWorkSkillMarkdown() + "\n"],
-    [path.join(repoRoot, ".agents", "skills", "$autonomy-intake", "SKILL.md"), getAutonomyIntakeSkillMarkdown() + "\n"],
-    [path.join(repoRoot, ".agents", "skills", "$autonomy-review", "SKILL.md"), getAutonomyReviewSkillMarkdown() + "\n"],
-    [path.join(repoRoot, ".agents", "skills", "$autonomy-report", "SKILL.md"), getAutonomyReportSkillMarkdown() + "\n"],
-    [path.join(repoRoot, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), getAutonomySprintSkillMarkdown() + "\n"],
-    [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
-    [paths.configFile, getConfigTomlTemplate() + "\n"],
-    [paths.setupScript, getSetupWindowsScriptTemplate()],
-    [paths.verifyScript, getInstallVerifyScriptTemplate()],
-    [paths.smokeScript, getSmokeScriptTemplate()],
-    [path.join(paths.scriptsDir, "review.ps1"), getReviewScriptTemplate()],
-    [paths.goalFile, formatGoalMarkdown(null) + "\n"],
-    [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
-  ];
-
-  const jsonFiles: Array<[string, unknown]> = [
-    [paths.tasksFile, DEFAULT_TASKS],
-    [paths.goalsFile, createDefaultGoalsDocument()],
-    [paths.proposalsFile, createDefaultProposalsDocument()],
-    [paths.stateFile, createDefaultState()],
-    [paths.settingsFile, createDefaultSettingsDocument()],
-    [paths.resultsFile, createDefaultResultsDocument()],
-    [paths.blockersFile, DEFAULT_BLOCKERS],
-    [path.join(paths.schemaDir, "tasks.schema.json"), tasksSchema],
-    [path.join(paths.schemaDir, "goals.schema.json"), goalsSchema],
-    [path.join(paths.schemaDir, "proposals.schema.json"), proposalsSchema],
-    [path.join(paths.schemaDir, "state.schema.json"), stateSchema],
-    [path.join(paths.schemaDir, "settings.schema.json"), settingsSchema],
-    [path.join(paths.schemaDir, "results.schema.json"), resultsSchema],
-    [path.join(paths.schemaDir, "blockers.schema.json"), blockersSchema],
-  ];
+  const textFiles = managedSpecs.filter((spec) => spec.kind === "text").map((spec) => [spec.path, spec.content] as [string, string]);
+  const jsonFiles = managedSpecs.filter((spec) => spec.kind === "json").map((spec) => [spec.path, JSON.parse(spec.content)] as [string, unknown]);
 
   const installPreflight = await inspectInstallPreflight({
     textFiles,
@@ -354,25 +350,18 @@ export async function runInstallCommand(
       }
     }
 
-    const installMetadataWritten = await ensureInstallMetadataFile(
-      installMetadataPath,
-      installPreflight,
-      installMetadataExpectation,
-    );
-
-    const normalization = await normalizeInstalledControlPlane(paths);
-    const migratedFiles = normalization.migratedFiles;
+    const installMetadataWritten = await ensureInstallMetadataFile(installMetadataPath, installPreflight, installMetadataExpectation);
 
     const codexProcessDetected = await (dependencies.detectCodexProcess ?? detectCodexProcess)();
     const backgroundWorktreePrereqs = isGitRepo && (await hasBackgroundWorktreePrerequisites(paths, installMetadataPath));
     const automationReady = isGitRepo && backgroundWorktreePrereqs && codexProcessDetected;
     const warning = !isGitRepo
-      ? `Target ${repoRoot} is not a Git repository; install completed as scaffolding only.`
+      ? `Target ${repoRoot} is not a Git repository; install completed in detect-only mode.`
       : automationReady
-        ? "Environment checks passed. Bind report_thread_id with codex-autonomy bind-thread and create goal work before status can turn ready_for_automation."
+        ? "Environment checks passed. Existing managed files were left untouched. Use codex-autonomy upgrade-managed for a guided reconcile plan."
         : codexProcessDetected
-          ? "Background worktree prerequisites are not yet satisfied."
-          : "Codex process was not detected, so automation is not ready yet.";
+          ? "Background worktree prerequisites are not yet satisfied. Existing managed files were left untouched."
+          : "Codex process was not detected, so automation is not ready yet. Existing managed files were left untouched.";
 
     const warnings = [
       !isGitRepo ? { code: "non_git_repo", message: `Target ${repoRoot} is not a Git repository.` } : null,
@@ -387,18 +376,7 @@ export async function runInstallCommand(
             message: `Preflight found existing managed file(s) that differ from the generated scaffold: ${installPreflight.managed_diverged_paths.join(", ")}.`,
           }
         : null,
-      migratedFiles > 0 ? { code: "control_plane_migrated", message: `Updated ${migratedFiles} existing control-plane document(s) to the latest contract.` } : null,
-      normalization.placeholderGoalIds.length > 0
-        ? {
-            code: "placeholder_goals_blocked",
-            message: `Legacy references created blocked placeholder goal(s) that need human review: ${normalization.placeholderGoalIds.join(", ")}.`,
-          }
-        : null,
     ].filter((value): value is { code: string; message: string } => value !== null);
-
-    const normalizedGoals = await loadJsonFile<GoalsDocument>(paths.goalsFile);
-    const normalizedState = await loadJsonFile<AutonomyState>(paths.stateFile);
-    await persistGoalMirror(paths, getActiveGoal(normalizedGoals.goals, normalizedState));
 
     return {
       ok: true,
@@ -458,13 +436,7 @@ async function inspectInstallPreflight(options: {
   textFiles: ReadonlyArray<InstallFileEntry | [string, string]>;
   jsonFiles: ReadonlyArray<InstallJsonEntry | [string, unknown]>;
   installMetadataPath: string;
-  installMetadataExpectation: {
-    version: number;
-    product_version: string;
-    installed_at: string;
-    managed_paths: string[];
-    source_repo: string;
-  };
+  installMetadataExpectation: InstallMetadataDocument;
 }): Promise<InstallPreflightSummary> {
   const textEntries = options.textFiles.map(normalizeTextEntry);
   const jsonEntries = options.jsonFiles.map(normalizeJsonEntry);
@@ -512,13 +484,7 @@ async function inspectInstallPreflight(options: {
 async function ensureInstallMetadataFile(
   filePath: string,
   preflight: InstallPreflightSummary,
-  expectation: {
-    version: number;
-    product_version: string;
-    installed_at: string;
-    managed_paths: string[];
-    source_repo: string;
-  },
+  expectation: InstallMetadataDocument,
 ): Promise<boolean> {
   if (await pathExists(filePath)) {
     return false;
@@ -582,13 +548,7 @@ async function inspectTargetFileState(
 
 async function inspectInstallMetadataState(
   filePath: string,
-  expectation: {
-    version: number;
-    product_version: string;
-    installed_at: string;
-    managed_paths: string[];
-    source_repo: string;
-  },
+  expectation: InstallMetadataDocument,
 ): Promise<"managed_match" | "missing" | "managed_diverged" | "foreign_occupied"> {
   try {
     const stats = await fs.lstat(filePath);
@@ -614,13 +574,7 @@ async function inspectInstallMetadataState(
 
 function matchesManagedInstallMetadata(
   value: unknown,
-  expectation: {
-    version: number;
-    product_version: string;
-    installed_at: string;
-    managed_paths: string[];
-    source_repo: string;
-  },
+  expectation: InstallMetadataDocument,
 ): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -659,22 +613,304 @@ function matchesManagedInstallMetadata(
     return false;
   }
 
-  return existingManagedPaths.every((pathValue, index) => pathValue === expectedManagedPaths[index]);
+  if (!Array.isArray(record.managed_files)) {
+    return false;
+  }
+
+  const existingManagedFiles = record.managed_files
+    .filter((item): item is ManagedInstallFileRecord => isManagedInstallFileRecord(item))
+    .map((item) => normalizeManagedInstallFileRecord(item))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const expectedManagedFiles = expectation.managed_files
+    .map((item) => normalizeManagedInstallFileRecord(item))
+    .sort((left, right) => left.path.localeCompare(right.path));
+
+  if (existingManagedFiles.length !== expectedManagedFiles.length) {
+    return false;
+  }
+
+  return existingManagedPaths.every((pathValue, index) => pathValue === expectedManagedPaths[index]) &&
+    existingManagedFiles.every((entry, index) => {
+      const expected = expectedManagedFiles[index];
+      if (!expected) {
+        return false;
+      }
+      return entry.path === expected.path
+        && entry.template_id === expected.template_id
+        && entry.installed_hash === expected.installed_hash
+        && entry.last_reconciled_product_version === expected.last_reconciled_product_version;
+    });
 }
 
-function createInstallMetadataExpectation(sourceRepo: string): {
-  version: number;
-  product_version: string;
-  installed_at: string;
-  managed_paths: string[];
-  source_repo: string;
-} {
-  const document = createDefaultInstallDocument("1970-01-01T00:00:00.000Z", sourceRepo);
+function createInstallMetadataExpectation(sourceRepo: string, managedFiles: ManagedControlSurfaceSpec[]): InstallMetadataDocument {
   return {
-    ...document,
+    version: 1,
     product_version: PRODUCT_VERSION,
+    installed_at: "1970-01-01T00:00:00.000Z",
+    source_repo: sourceRepo,
     managed_paths: getManagedControlSurfaceRelativePaths(),
+    managed_files: buildManagedInstallFileRecords(managedFiles),
   };
+}
+
+function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPaths>): ManagedControlSurfaceSpec[] {
+  return [
+    {
+      path: paths.agentsFile,
+      relative_path: "AGENTS.md",
+      template_id: "agents_markdown",
+      kind: "text",
+      content: `${getAgentsMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-plan/SKILL.md",
+      template_id: "autonomy_plan_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyPlanSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-work", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-work/SKILL.md",
+      template_id: "autonomy_work_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyWorkSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-intake", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-intake/SKILL.md",
+      template_id: "autonomy_intake_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyIntakeSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-review", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-review/SKILL.md",
+      template_id: "autonomy_review_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyReviewSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-report", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-report/SKILL.md",
+      template_id: "autonomy_report_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyReportSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-sprint", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-sprint/SKILL.md",
+      template_id: "autonomy_sprint_skill_markdown",
+      kind: "text",
+      content: `${getAutonomySprintSkillMarkdown()}\n`,
+    },
+    {
+      path: paths.environmentFile,
+      relative_path: ".codex/environments/environment.toml",
+      template_id: "environment_toml",
+      kind: "text",
+      content: `${getEnvironmentTomlTemplate()}\n`,
+    },
+    {
+      path: paths.configFile,
+      relative_path: ".codex/config.toml",
+      template_id: "config_toml",
+      kind: "text",
+      content: `${getConfigTomlTemplate()}\n`,
+    },
+    {
+      path: paths.setupScript,
+      relative_path: "scripts/setup.windows.ps1",
+      template_id: "setup_windows_ps1",
+      kind: "text",
+      content: getSetupWindowsScriptTemplate(),
+    },
+    {
+      path: paths.verifyScript,
+      relative_path: "scripts/verify.ps1",
+      template_id: "verify_ps1",
+      kind: "text",
+      content: getInstallVerifyScriptTemplate(),
+    },
+    {
+      path: paths.smokeScript,
+      relative_path: "scripts/smoke.ps1",
+      template_id: "smoke_ps1",
+      kind: "text",
+      content: getSmokeScriptTemplate(),
+    },
+    {
+      path: path.join(paths.scriptsDir, "review.ps1"),
+      relative_path: "scripts/review.ps1",
+      template_id: "review_ps1",
+      kind: "text",
+      content: getReviewScriptTemplate(),
+    },
+    {
+      path: paths.goalFile,
+      relative_path: "autonomy/goal.md",
+      template_id: "goal_markdown",
+      kind: "text",
+      content: `${formatGoalMarkdown(null)}\n`,
+    },
+    {
+      path: paths.journalFile,
+      relative_path: "autonomy/journal.md",
+      template_id: "journal_markdown",
+      kind: "text",
+      content: `${getDefaultJournalMarkdown()}\n`,
+    },
+    {
+      path: paths.tasksFile,
+      relative_path: "autonomy/tasks.json",
+      template_id: "tasks_json",
+      kind: "json",
+      content: `${JSON.stringify(DEFAULT_TASKS, null, 2)}\n`,
+    },
+    {
+      path: paths.goalsFile,
+      relative_path: "autonomy/goals.json",
+      template_id: "goals_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultGoalsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.proposalsFile,
+      relative_path: "autonomy/proposals.json",
+      template_id: "proposals_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultProposalsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.stateFile,
+      relative_path: "autonomy/state.json",
+      template_id: "state_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultState(), null, 2)}\n`,
+    },
+    {
+      path: paths.settingsFile,
+      relative_path: "autonomy/settings.json",
+      template_id: "settings_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultSettingsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.resultsFile,
+      relative_path: "autonomy/results.json",
+      template_id: "results_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultResultsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.verificationFile,
+      relative_path: "autonomy/verification.json",
+      template_id: "verification_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultVerificationDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.blockersFile,
+      relative_path: "autonomy/blockers.json",
+      template_id: "blockers_json",
+      kind: "json",
+      content: `${JSON.stringify(DEFAULT_BLOCKERS, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "tasks.schema.json"),
+      relative_path: "autonomy/schema/tasks.schema.json",
+      template_id: "tasks_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(tasksSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "goals.schema.json"),
+      relative_path: "autonomy/schema/goals.schema.json",
+      template_id: "goals_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(goalsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "proposals.schema.json"),
+      relative_path: "autonomy/schema/proposals.schema.json",
+      template_id: "proposals_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(proposalsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "state.schema.json"),
+      relative_path: "autonomy/schema/state.schema.json",
+      template_id: "state_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(stateSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "settings.schema.json"),
+      relative_path: "autonomy/schema/settings.schema.json",
+      template_id: "settings_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(settingsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "results.schema.json"),
+      relative_path: "autonomy/schema/results.schema.json",
+      template_id: "results_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(resultsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "blockers.schema.json"),
+      relative_path: "autonomy/schema/blockers.schema.json",
+      template_id: "blockers_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(blockersSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "verification.schema.json"),
+      relative_path: "autonomy/schema/verification.schema.json",
+      template_id: "verification_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(verificationSchema, null, 2)}\n`,
+    },
+  ];
+}
+
+function buildManagedInstallFileRecords(specs: ManagedControlSurfaceSpec[]): ManagedInstallFileRecord[] {
+  return specs.map((spec) => ({
+    path: spec.relative_path,
+    template_id: spec.template_id,
+    installed_hash: hashContent(spec.content),
+    last_reconciled_product_version: PRODUCT_VERSION,
+  }));
+}
+
+function normalizeManagedInstallFileRecord(value: ManagedInstallFileRecord): ManagedInstallFileRecord {
+  return {
+    path: value.path.replace(/\\/g, "/"),
+    template_id: value.template_id,
+    installed_hash: value.installed_hash,
+    last_reconciled_product_version: value.last_reconciled_product_version,
+  };
+}
+
+function isManagedInstallFileRecord(value: unknown): value is ManagedInstallFileRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.path === "string"
+    && record.path.trim().length > 0
+    && typeof record.template_id === "string"
+    && record.template_id.trim().length > 0
+    && typeof record.installed_hash === "string"
+    && record.installed_hash.trim().length > 0
+    && typeof record.last_reconciled_product_version === "string"
+    && record.last_reconciled_product_version.trim().length > 0;
+}
+
+function hashContent(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRepoPaths>): Promise<{
@@ -1406,6 +1642,7 @@ async function hasBackgroundWorktreePrerequisites(
     paths.stateFile,
     paths.settingsFile,
     paths.resultsFile,
+    paths.verificationFile,
     paths.blockersFile,
     path.join(paths.schemaDir, "tasks.schema.json"),
     path.join(paths.schemaDir, "goals.schema.json"),
@@ -1414,6 +1651,7 @@ async function hasBackgroundWorktreePrerequisites(
     path.join(paths.schemaDir, "settings.schema.json"),
     path.join(paths.schemaDir, "results.schema.json"),
     path.join(paths.schemaDir, "blockers.schema.json"),
+    path.join(paths.schemaDir, "verification.schema.json"),
     installMetadataPath,
   ];
 
@@ -1439,14 +1677,14 @@ function buildInstallMessage(
     : "";
 
   if (!isGitRepo) {
-    return `${base}${preflightNote} Warning: target is not a Git repository, so install is not automation-ready.`;
+    return `${base}${preflightNote} Warning: target is not a Git repository, so install stayed in detect-only mode.`;
   }
 
   if (!automationReady) {
-    return `${base}${preflightNote} Warning: install completed, but automation is not ready yet. Use codex-autonomy inside the target repo after worktree and Codex runtime prerequisites are satisfied.`;
+    return `${base}${preflightNote} Warning: install completed in detect-only mode. Existing managed files were left untouched. Use codex-autonomy upgrade-managed for a guided reconcile plan.`;
   }
 
-  return `${base}${preflightNote} Environment prerequisites are ready. Bind report_thread_id with codex-autonomy bind-thread and create goal work before status can become ready_for_automation.`;
+  return `${base}${preflightNote} Environment prerequisites are ready. Existing managed files were left untouched. Use codex-autonomy upgrade-managed for a guided reconcile plan.`;
 }
 
 function buildNextAutomationSuggestions(isGitRepo: boolean): Array<{ name: string; purpose: string }> {

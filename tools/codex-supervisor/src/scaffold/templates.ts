@@ -26,6 +26,7 @@ export function getAgentsMarkdown(): string {
     "- `sprint_active=false` 或 `paused=true` 时只做状态检查和汇报，不做新的 plan/work/review 推进。",
     "- Sprint runner 遇到 blocker、review_pending 或无任务时停下。",
     "- Worker、Reviewer 或 Sprint runner 如果生成了“下一步建议”，只允许目标内 follow-up 自动入队；一旦改变验收、约束或范围，必须写 blocker 等线程确认。",
+    "- `autonomy/verification.json` 是 closeout gate；体检/安全/健壮性类 goal 在 required verification axis 清零前不得完成。",
     "- 非 Git 目录允许 `bootstrap`，但不允许进入可运行 automation 态。",
     "",
     "## 线程入口",
@@ -62,7 +63,7 @@ export function getAutonomyPlanSkillMarkdown(): string {
     "",
     "## Responsibilities",
     "",
-    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/proposals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.",
+    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/proposals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, `autonomy/results.json`, and `autonomy/verification.json`.",
     "- Keep at most 5 tasks in `ready` for the current active goal.",
     "- If a goal is still `awaiting_confirmation`, update only `autonomy/proposals.json` and do not materialize tasks yet.",
     "- If the goal is `approved` or `active`, rebalance only inside that approved boundary.",
@@ -166,9 +167,10 @@ export function getAutonomyReviewSkillMarkdown(): string {
     "",
     "## Responsibilities",
     "",
-    "- Read the current goal, task, and latest verification context.",
+    "- Read the current goal, task, latest verification context, and `autonomy/verification.json` closeout state.",
     "- Run `scripts/review.ps1` and interpret the result in plain language.",
     "- Record whether the change is acceptable or needs follow-up, and leave a concise next-step suggestion when the follow-up stays inside the approved goal.",
+    "- If required verification axes are still pending, keep the goal open and convert that gap into follow-up work instead of calling the goal complete.",
     "- Keep the review bounded to the current task.",
     "",
     "## Guardrails",
@@ -529,7 +531,9 @@ function Test-TaskCollection {
             'last_error',
             'updated_at',
             'commit_hash',
-            'review_status'
+            'review_status',
+            'source',
+            'source_task_id'
         )) {
             Assert-PropertyExists -Item $task -Name $key -Path $Path -Context 'a task from'
         }
@@ -537,6 +541,7 @@ function Test-TaskCollection {
         Assert-True (@('queued','ready','in_progress','verify_failed','blocked','done') -contains [string]$task.status) "Invalid task status in $Path."
         Assert-True (@('P0','P1','P2','P3') -contains [string]$task.priority) "Invalid task priority in $Path."
         Assert-True (@('not_reviewed','passed','followup_required') -contains [string]$task.review_status) "Invalid review_status in $Path."
+        Assert-True (@('proposal','followup') -contains [string]$task.source) "Invalid task source in $Path."
     }
 }
 
@@ -606,6 +611,8 @@ function Test-SettingsDocument {
         'report_surface',
         'auto_commit',
         'autonomy_branch',
+        'auto_continue_within_goal',
+        'block_on_major_decision',
         'default_cruise_cadence',
         'default_sprint_heartbeat_minutes'
     )) {
@@ -615,6 +622,8 @@ function Test-SettingsDocument {
     Assert-True ([string]$settings.install_source -eq 'local_package') "Invalid install_source in $Path."
     Assert-True ([string]$settings.report_surface -eq 'thread_and_inbox') "Invalid report_surface in $Path."
     Assert-True (@('disabled','autonomy_branch') -contains [string]$settings.auto_commit) "Invalid auto_commit mode in $Path."
+    Assert-True ($settings.auto_continue_within_goal -is [bool]) "auto_continue_within_goal must be a boolean in $Path."
+    Assert-True ($settings.block_on_major_decision -is [bool]) "block_on_major_decision must be a boolean in $Path."
 
     $cadence = $settings.default_cruise_cadence
     foreach ($key in @('planner_hours','worker_hours','reviewer_hours')) {
@@ -658,6 +667,24 @@ function Test-ResultsDocument {
         }
 
         Assert-True (@('not_run','noop','planned','passed','failed','blocked','sent','skipped') -contains [string]$entry.status) "Invalid $entryName result status in $Path."
+    }
+}
+
+function Test-VerificationDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'goal_id' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'policy' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'axes' -Path $Path
+
+    Assert-True (@('strong_template') -contains [string]$doc.policy) "Invalid verification policy in $Path."
+    foreach ($axis in @($doc.axes)) {
+        foreach ($key in @('id','title','required','status','evidence','source_task_id','last_checked_at','reason')) {
+            Assert-PropertyExists -Item $axis -Name $key -Path $Path -Context 'a verification axis from'
+        }
+
+        Assert-True (@('pending','passed','failed','blocked','not_applicable') -contains [string]$axis.status) "Invalid verification axis status in $Path."
     }
 }
 
@@ -738,6 +765,7 @@ foreach ($requiredPath in @(
     'autonomy/state.json',
     'autonomy/settings.json',
     'autonomy/results.json',
+    'autonomy/verification.json',
     'autonomy/blockers.json',
     'autonomy/schema/tasks.schema.json',
     'autonomy/schema/goals.schema.json',
@@ -746,6 +774,7 @@ foreach ($requiredPath in @(
     'autonomy/schema/settings.schema.json',
     'autonomy/schema/results.schema.json',
     'autonomy/schema/blockers.schema.json',
+    'autonomy/schema/verification.schema.json',
     'autonomy/locks'
 )) {
     Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $requiredPath)) "Missing required path: $requiredPath"
@@ -853,6 +882,7 @@ Test-GoalCollection -Path (Join-Path $repoRoot 'autonomy/goals.json')
 Test-ProposalCollection -Path (Join-Path $repoRoot 'autonomy/proposals.json')
 Test-SettingsDocument -Path (Join-Path $repoRoot 'autonomy/settings.json')
 Test-ResultsDocument -Path (Join-Path $repoRoot 'autonomy/results.json')
+Test-VerificationDocument -Path (Join-Path $repoRoot 'autonomy/verification.json')
 Test-BlockerCollection -Path (Join-Path $repoRoot 'autonomy/blockers.json')
 
 Invoke-CliHarness
@@ -1006,24 +1036,25 @@ export function getReadmeMarkdown(): string {
     "## 快速开始",
     "",
     "1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。",
-    "2. 在本仓库运行 `npm --prefix tools/codex-supervisor run build` 生成 `dist/cli.js`。",
-    "3. 任选一种方式准备本机 CLI：在源码仓库里直接用 `node tools/codex-supervisor/dist/cli.js ...`，或者先把 `tools/codex-supervisor` 作为本机本地包安装后使用 `codex-autonomy ...`。",
-    "4. 用 `node tools/codex-supervisor/dist/cli.js install --target <repoB>` 或 `codex-autonomy install --target <repoB>` 把控制面安装到目标仓库。",
-    "5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。",
-    "6. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。",
-    "7. 在目标仓库运行 `codex-autonomy doctor` 查看健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree`。",
-    "8. 初次本地闭环可以直接走：`codex-autonomy intake-goal --report-thread-id <thread-id> ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal <goal-id>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。",
+    "2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀。",
+    "3. 在目标仓库优先使用 `codex-autonomy ...`。例如：`codex-autonomy install --target <repoB>`。",
+    "4. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。",
+    "5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。",
+    "6. 在目标仓库运行 `codex-autonomy doctor` 查看健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree`。",
+    "7. 初次本地闭环推荐先显式绑定线程，再走目标流：`codex-autonomy bind-thread --report-thread-id <thread-id>` -> `codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。",
     "",
     "## 日常命令",
     "",
-    "- 源码仓库内：`node tools/codex-supervisor/dist/cli.js <command>`。",
-    "- 目标仓库内：`codex-autonomy <command>`。",
+    "- 标准路径：`codex-autonomy <command>`。",
+    "- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`：构建并安装 `codex-autonomy` 到全局 npm 前缀。",
     "- `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。",
+    "- `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。",
     "- `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。",
+    "- `codex-autonomy bind-thread --report-thread-id <threadId>`：把目标仓库的原线程绑定为唯一汇报线程。",
     "- `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。",
     "- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。",
     "- `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。",
-    "- `codex-autonomy approve-proposal <goal-id>`：把提案物化为任务并激活该 goal。",
+    "- `codex-autonomy approve-proposal --goal-id <goalId>`：把提案物化为任务并激活该 goal。",
     "- `codex-autonomy status`：汇总 goal、任务、blocker、最近一次 verify/review/commit，以及是否适合下一轮 automation。",
     "- `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；主仓库或 background worktree dirty 时会拒绝继续。",
     "- `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。",
@@ -1033,6 +1064,11 @@ export function getReadmeMarkdown(): string {
     "- `codex-autonomy emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner prompts 与建议 cadence。",
     "- `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。",
     "- `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。",
+    "",
+    "## 开发者回退",
+    "",
+    "- 如果还没做全局安装，或者只是在源码仓库里临时验证，可以先构建再用源码入口：`npm --prefix tools/codex-supervisor run build` 后执行 `node tools/codex-supervisor/dist/cli.js <command>`。",
+    "- 这是回退路径，不是日常标准路径；标准安装后应优先使用 `codex-autonomy <command>`。",
     "",
     "## Repo 控制面",
     "",
@@ -1255,6 +1291,7 @@ $smokeScript = Join-Path $repoRoot 'scripts/smoke.ps1'
 $reviewLocalScript = Join-Path $repoRoot 'scripts/review.local.ps1'
 $statePath = Join-Path $repoRoot 'autonomy/state.json'
 $resultsPath = Join-Path $repoRoot 'autonomy/results.json'
+$verificationPath = Join-Path $repoRoot 'autonomy/verification.json'
 $goalsPath = Join-Path $repoRoot 'autonomy/goals.json'
 $tasksPath = Join-Path $repoRoot 'autonomy/tasks.json'
 $settingsPath = Join-Path $repoRoot 'autonomy/settings.json'
@@ -1262,6 +1299,7 @@ $settingsPath = Join-Path $repoRoot 'autonomy/settings.json'
 Assert-Exists $smokeScript
 Assert-Exists $statePath
 Assert-Exists $resultsPath
+Assert-Exists $verificationPath
 Assert-Exists $goalsPath
 Assert-Exists $tasksPath
 Assert-Exists $settingsPath
@@ -1277,6 +1315,7 @@ if (-not $?) {
 
 $state = Read-JsonFile -Path $statePath
 $results = Read-JsonFile -Path $resultsPath
+$verification = Read-JsonFile -Path $verificationPath
 $goalsDoc = Read-JsonFile -Path $goalsPath
 $tasksDoc = Read-JsonFile -Path $tasksPath
 $settings = Read-JsonFile -Path $settingsPath
@@ -1292,6 +1331,10 @@ foreach ($requiredResultKey in @('planner', 'worker', 'review', 'commit', 'repor
     if (-not ($results.PSObject.Properties.Name -contains $requiredResultKey)) {
         throw "Missing required key '$requiredResultKey' in $resultsPath."
     }
+}
+
+if (-not ($verification.PSObject.Properties.Name -contains 'axes')) {
+    throw "Missing required key 'axes' in $verificationPath."
 }
 
 $goals = @($goalsDoc.goals)

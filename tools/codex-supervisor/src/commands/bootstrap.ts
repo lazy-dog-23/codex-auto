@@ -15,6 +15,7 @@ import {
   settingsSchema,
   stateSchema,
   tasksSchema,
+  verificationSchema,
 } from "../schemas/index.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import {
@@ -40,6 +41,7 @@ import {
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
   createDefaultState,
+  createDefaultVerificationDocument,
   formatGoalMarkdown,
 } from "./control-plane.js";
 
@@ -90,6 +92,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const settingsSchemaFile = path.join(paths.schemaDir, "settings.schema.json");
   const resultsSchemaFile = path.join(paths.schemaDir, "results.schema.json");
   const blockersSchemaFile = path.join(paths.schemaDir, "blockers.schema.json");
+  const verificationSchemaFile = path.join(paths.schemaDir, "verification.schema.json");
   const cycleLockKeepFile = path.join(paths.locksDir, ".gitkeep");
 
   const repoDirectories = [
@@ -154,6 +157,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [paths.stateFile, createDefaultState()],
       [paths.settingsFile, createDefaultSettingsDocument()],
       [paths.resultsFile, createDefaultResultsDocument()],
+      [paths.verificationFile, createDefaultVerificationDocument()],
       [paths.blockersFile, DEFAULT_BLOCKERS],
       [tasksSchemaFile, tasksSchema],
       [goalsSchemaFile, goalsSchema],
@@ -162,6 +166,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [settingsSchemaFile, settingsSchema],
       [resultsSchemaFile, resultsSchema],
       [blockersSchemaFile, blockersSchema],
+      [verificationSchemaFile, verificationSchema],
     ];
 
     for (const [filePath, value] of jsonFileEntries) {

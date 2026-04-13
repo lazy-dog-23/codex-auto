@@ -18,6 +18,7 @@ import {
   type UnblockRecoveryResult,
   type UnblockRestorationDecision,
   type UnblockRestorationOptions,
+  type VerificationDocument,
   type WorkerStartResult,
   type WorkerSuccessOptions,
   type WorkerSuccessResult,
@@ -616,6 +617,7 @@ export function completeCurrentGoalIfEligible(
   tasks: readonly TaskRecord[],
   state: AutonomyState,
   now: string,
+  verification?: VerificationDocument | null,
 ): GoalCompletionResult {
   const currentGoalId = state.current_goal_id;
   if (!currentGoalId) {
@@ -628,7 +630,13 @@ export function completeCurrentGoalIfEligible(
   }
 
   const currentGoalTasks = tasks.filter((task) => task.goal_id === currentGoalId);
-  if (currentGoalTasks.length === 0 || currentGoalTasks.some((task) => task.status !== "done")) {
+  const verificationPending = Boolean(
+    verification
+    && verification.goal_id === currentGoalId
+    && verification.axes.some((axis) => axis.required && axis.status !== "passed" && axis.status !== "not_applicable"),
+  );
+
+  if (currentGoalTasks.length === 0 || currentGoalTasks.some((task) => task.status !== "done") || verificationPending) {
     return {
       goals: [...goals],
       state,

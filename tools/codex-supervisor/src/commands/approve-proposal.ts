@@ -7,6 +7,7 @@ import { detectGitRepository } from "../infra/git.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
 import { completeCurrentGoalIfEligible, materializeProposal, rebalanceTaskWindow } from "../domain/autonomy.js";
+import { createEmptyVerificationDocument, ensureGoalVerificationDocument } from "../domain/verification.js";
 import {
   getActiveGoal,
   getAwaitingProposalGoal,
@@ -15,12 +16,14 @@ import {
   loadResultsDocument,
   loadStateDocument,
   loadTasksDocument,
+  loadVerificationDocument,
   persistGoalMirror,
   writeGoalsDocument,
   writeProposalsDocument,
   writeResultsDocument,
   writeStateDocument,
   writeTasksDocument,
+  writeVerificationDocument,
 } from "./control-plane.js";
 
 export async function runApproveProposal(goalId: string | undefined, repoRoot = process.cwd()): Promise<CommandResult> {
@@ -34,7 +37,10 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
     const proposalsDoc = await loadProposalsDocument(paths);
     const tasksDoc = await loadTasksDocument(paths);
     const state = await loadStateDocument(paths);
-    const resultsDoc = await loadResultsDocument(paths);
+    const [resultsDoc, existingVerificationDoc] = await Promise.all([
+      loadResultsDocument(paths),
+      loadVerificationDocument(paths),
+    ]);
 
     const targetGoal =
       (goalId ? goalsDoc.goals.find((goal) => goal.id === goalId) : null)
@@ -66,6 +72,7 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
         last_result: "planned",
       },
       now,
+      existingVerificationDoc,
     );
 
     const updatedTasks: TasksDocument = {
@@ -86,6 +93,10 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
       last_planner_run_at: now,
       last_result: "planned" as const,
     };
+    const activeGoal = updatedGoals.goals.find((goal) => goal.id === updatedState.current_goal_id) ?? null;
+    const updatedVerification = activeGoal
+      ? await ensureGoalVerificationDocument(activeGoal, paths.repoRoot, existingVerificationDoc)
+      : createEmptyVerificationDocument();
     const updatedResults = {
       ...resultsDoc,
       last_summary_kind: goalCompletion.completedGoalId && goalCompletion.activatedGoalId
@@ -114,6 +125,7 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
     await writeProposalsDocument(paths, updatedProposals);
     await writeTasksDocument(paths, updatedTasks);
     await writeStateDocument(paths, updatedState);
+    await writeVerificationDocument(paths, updatedVerification);
     await writeResultsDocument(paths, updatedResults);
     await persistGoalMirror(paths, getActiveGoal(updatedGoals.goals, updatedState));
     await appendJournalEntry(paths.journalFile, {

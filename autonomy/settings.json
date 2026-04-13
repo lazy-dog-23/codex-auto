@@ -10,5 +10,7 @@
     "worker_hours": 2,
     "reviewer_hours": 6
   },
-  "default_sprint_heartbeat_minutes": 15
+  "default_sprint_heartbeat_minutes": 15,
+  "auto_continue_within_goal": true,
+  "block_on_major_decision": true
 }

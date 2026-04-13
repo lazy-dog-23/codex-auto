@@ -1,0 +1,944 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { Command } from "commander";
+
+import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
+import { isDirectory, loadJsonFile, pathExists, writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
+import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
+import { getInstallMetadataPath, resolveRepoPaths } from "../shared/paths.js";
+import {
+  getAgentsMarkdown,
+  getAutonomyIntakeSkillMarkdown,
+  getAutonomyPlanSkillMarkdown,
+  getAutonomyReportSkillMarkdown,
+  getAutonomyReviewSkillMarkdown,
+  getAutonomySprintSkillMarkdown,
+  getAutonomyWorkSkillMarkdown,
+  getConfigTomlTemplate,
+  getEnvironmentTomlTemplate,
+  getInstallVerifyScriptTemplate,
+  getReviewScriptTemplate,
+  getSetupWindowsScriptTemplate,
+  getSmokeScriptTemplate,
+  getDefaultJournalMarkdown,
+} from "../scaffold/templates.js";
+import {
+  createDefaultGoalsDocument,
+  createDefaultProposalsDocument,
+  createDefaultResultsDocument,
+  createDefaultSettingsDocument,
+  createDefaultState,
+  createDefaultVerificationDocument,
+  formatGoalMarkdown,
+} from "./control-plane.js";
+import {
+  blockersSchema,
+  goalsSchema,
+  proposalsSchema,
+  resultsSchema,
+  settingsSchema,
+  stateSchema,
+  tasksSchema,
+  verificationSchema,
+} from "../schemas/index.js";
+
+const PRODUCT_VERSION = "0.1.0";
+
+type UpgradeDecision = "managed_match" | "safe_replace" | "auto_merge" | "manual_conflict" | "foreign_occupied";
+
+interface UpgradeManagedOptions {
+  target?: string;
+  apply?: boolean;
+  json?: boolean;
+}
+
+interface ManagedControlSurfaceSpec {
+  path: string;
+  relative_path: string;
+  template_id: string;
+  kind: "text" | "json";
+  content: string;
+}
+
+interface ManagedInstallFileRecord {
+  path: string;
+  template_id: string;
+  installed_hash: string;
+  last_reconciled_product_version: string;
+}
+
+interface InstallMetadataDocument {
+  version: number;
+  product_version: string;
+  installed_at: string;
+  managed_paths: string[];
+  source_repo: string;
+  managed_files: ManagedInstallFileRecord[];
+}
+
+interface ManagedUpgradePlanEntry {
+  path: string;
+  relative_path: string;
+  template_id: string;
+  status: UpgradeDecision;
+  reason: string;
+  installed_hash: string | null;
+  current_hash: string | null;
+  desired_hash: string;
+  last_reconciled_product_version: string | null;
+  action: "skip" | "replace" | "merge" | "manual";
+}
+
+interface UpgradeManagedSummary {
+  target_path: string;
+  install_metadata_path: string;
+  apply: boolean;
+  managed_match: number;
+  safe_replace: number;
+  auto_merge: number;
+  manual_conflict: number;
+  foreign_occupied: number;
+  applied_paths: string[];
+  pending_paths: string[];
+}
+
+interface UpgradeManagedResult {
+  ok: boolean;
+  message: string;
+  summary: UpgradeManagedSummary;
+  plan: ManagedUpgradePlanEntry[];
+  warnings?: Array<{ code: string; message: string }>;
+}
+
+interface ManagedInstallMetadataState {
+  path: string;
+  document: InstallMetadataDocument;
+}
+
+export interface ManagedUpgradeStateSummary {
+  state: "not_installed" | "managed_match" | "managed_diverged" | "metadata_incomplete";
+  summary: UpgradeManagedSummary | null;
+}
+
+export async function inspectManagedUpgradeState(targetPath: string): Promise<ManagedUpgradeStateSummary> {
+  const repoRoot = path.resolve(targetPath);
+  const installMetadataPath = getInstallMetadataPath(repoRoot);
+
+  if (!(await pathExists(installMetadataPath))) {
+    return {
+      state: "not_installed",
+      summary: null,
+    };
+  }
+
+  let metadata: ManagedInstallMetadataState;
+  try {
+    metadata = await loadManagedInstallMetadata(installMetadataPath);
+  } catch (error) {
+    if (error instanceof CliError) {
+      return {
+        state: "metadata_incomplete",
+        summary: null,
+      };
+    }
+    throw error;
+  }
+
+  if (!Array.isArray(metadata.document.managed_files) || metadata.document.managed_files.length === 0) {
+    return {
+      state: "metadata_incomplete",
+      summary: null,
+    };
+  }
+
+  const plan = await buildManagedUpgradePlan(buildManagedControlSurfaceSpecs(resolveRepoPaths(repoRoot)), metadata.document);
+  const summary = summarizeManagedUpgradePlan(repoRoot, installMetadataPath, false, plan);
+  const hasDivergence = plan.some((entry) => entry.status !== "managed_match");
+
+  return {
+    state: hasDivergence ? "managed_diverged" : "managed_match",
+    summary,
+  };
+}
+
+export async function runUpgradeManagedCommand(options: UpgradeManagedOptions = {}): Promise<UpgradeManagedResult> {
+  const targetInput = options.target?.trim() || process.cwd();
+  const targetPath = path.resolve(targetInput);
+
+  if (!(await isDirectory(targetPath))) {
+    throw new CliError(`Upgrade target is not a directory: ${targetPath}`, CLI_EXIT_CODES.validation);
+  }
+
+  const paths = resolveRepoPaths(targetPath);
+  const installMetadataPath = getInstallMetadataPath(targetPath);
+  const metadata = await loadManagedInstallMetadata(installMetadataPath);
+  const specs = buildManagedControlSurfaceSpecs(paths);
+  const plan = await buildManagedUpgradePlan(specs, metadata.document);
+  const summary = summarizeManagedUpgradePlan(targetPath, installMetadataPath, options.apply === true, plan);
+
+  if (!options.apply) {
+    return {
+      ok: true,
+      message: buildPlanMessage(summary),
+      summary,
+      plan,
+      warnings: buildPlanWarnings(plan),
+    };
+  }
+
+  const lock = await acquireCycleLock(paths.cycleLockFile, {
+    command: "codex-autonomy upgrade-managed",
+  });
+
+  try {
+    const appliedPaths = await applyManagedUpgradePlan(metadata.path, metadata.document, plan, specs);
+    summary.applied_paths = appliedPaths;
+    summary.pending_paths = plan
+      .filter((entry) => entry.status === "manual_conflict" || entry.status === "foreign_occupied")
+      .map((entry) => entry.relative_path);
+
+    return {
+      ok: true,
+      message: buildApplyMessage(summary),
+      summary,
+      plan,
+      warnings: buildApplyWarnings(plan, appliedPaths),
+    };
+  } finally {
+    await releaseCycleLock(paths.cycleLockFile, lock);
+  }
+}
+
+export function registerUpgradeManagedCommand(program: Command): void {
+  program
+    .command("upgrade-managed")
+    .requiredOption("--target <path>", "Target repository root")
+    .option("--apply", "Apply safe_replace and auto_merge entries")
+    .option("--json", "Emit machine-readable JSON output")
+    .description("Generate or apply a guided upgrade plan for managed control-surface files")
+    .action(async (options: UpgradeManagedOptions) => {
+      const result = await runUpgradeManagedCommand({
+        target: options.target,
+        apply: options.apply === true,
+        json: options.json === true,
+      });
+
+      if (options.json === true) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(result.message);
+      for (const entry of result.plan) {
+        console.log(`${entry.status}: ${entry.relative_path} (${entry.reason})`);
+      }
+      if (result.warnings && result.warnings.length > 0) {
+        for (const warning of result.warnings) {
+          console.log(`warning: ${warning.message}`);
+        }
+      }
+    });
+}
+
+async function loadManagedInstallMetadata(filePath: string): Promise<ManagedInstallMetadataState> {
+  if (!(await pathExists(filePath))) {
+    throw new CliError(`Missing install metadata: ${filePath}`, CLI_EXIT_CODES.validation);
+  }
+
+  const document = normalizeInstallMetadataDocument(await loadJsonFile<unknown>(filePath));
+  if (!Array.isArray(document.managed_files) || document.managed_files.length === 0) {
+    throw new CliError(`Install metadata does not include managed_files: ${filePath}`, CLI_EXIT_CODES.validation);
+  }
+
+  return {
+    path: filePath,
+    document,
+  };
+}
+
+function normalizeInstallMetadataDocument(value: unknown): InstallMetadataDocument {
+  const input = isPlainObject(value) ? value : {};
+  const managedFiles = Array.isArray(input.managed_files)
+    ? input.managed_files.filter((item): item is ManagedInstallFileRecord => isManagedInstallFileRecord(item)).map(normalizeManagedInstallFileRecord)
+    : [];
+
+  return {
+    version: normalizeInteger(input.version, 1),
+    product_version: typeof input.product_version === "string" && input.product_version.trim().length > 0
+      ? input.product_version.trim()
+      : PRODUCT_VERSION,
+    installed_at: typeof input.installed_at === "string" && input.installed_at.trim().length > 0
+      ? input.installed_at.trim()
+      : new Date(0).toISOString(),
+    managed_paths: Array.isArray(input.managed_paths)
+      ? input.managed_paths.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map(normalizeRepoRelativePath)
+      : [],
+    source_repo: typeof input.source_repo === "string" && input.source_repo.trim().length > 0 ? input.source_repo.trim() : ".",
+    managed_files: managedFiles.sort((left, right) => left.path.localeCompare(right.path)),
+  };
+}
+
+async function buildManagedUpgradePlan(
+  specs: ManagedControlSurfaceSpec[],
+  metadata: InstallMetadataDocument,
+): Promise<ManagedUpgradePlanEntry[]> {
+  const recordMap = new Map(metadata.managed_files.map((record) => [normalizeRepoRelativePath(record.path), record]));
+  const plan: ManagedUpgradePlanEntry[] = [];
+
+  for (const spec of specs) {
+    const record = recordMap.get(spec.relative_path);
+    if (!record) {
+      plan.push({
+        path: spec.path,
+        relative_path: spec.relative_path,
+        template_id: spec.template_id,
+        status: "foreign_occupied",
+        reason: "No managed metadata record exists for this path.",
+        installed_hash: null,
+        current_hash: null,
+        desired_hash: hashContent(spec.content),
+        last_reconciled_product_version: null,
+        action: "manual",
+      });
+      continue;
+    }
+
+    plan.push(await classifyManagedFile(spec, record));
+  }
+
+  return plan;
+}
+
+async function classifyManagedFile(
+  spec: ManagedControlSurfaceSpec,
+  record: ManagedInstallFileRecord,
+): Promise<ManagedUpgradePlanEntry> {
+  const desiredHash = hashContent(spec.content);
+
+  try {
+    const stats = await fs.lstat(spec.path);
+    if (!stats.isFile()) {
+      return {
+        path: spec.path,
+        relative_path: spec.relative_path,
+        template_id: spec.template_id,
+        status: "foreign_occupied",
+        reason: "Managed path is occupied by a non-file entry.",
+        installed_hash: record.installed_hash,
+        current_hash: null,
+        desired_hash: desiredHash,
+        last_reconciled_product_version: record.last_reconciled_product_version,
+        action: "manual",
+      };
+    }
+  } catch (error) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      status: "safe_replace",
+      reason: "Managed file is missing and can be recreated from the template.",
+      installed_hash: record.installed_hash,
+      current_hash: null,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: record.last_reconciled_product_version,
+      action: "replace",
+    };
+  }
+
+  const currentContent = await fs.readFile(spec.path, "utf8");
+  const currentHash = hashContent(currentContent);
+
+  if (currentHash === record.installed_hash) {
+    if (contentMatchesTemplate(spec.kind, currentContent, spec.content)) {
+      return {
+        path: spec.path,
+        relative_path: spec.relative_path,
+        template_id: spec.template_id,
+        status: "managed_match",
+        reason: "Managed file already matches the current template.",
+        installed_hash: record.installed_hash,
+        current_hash: currentHash,
+        desired_hash: desiredHash,
+        last_reconciled_product_version: record.last_reconciled_product_version,
+        action: "skip",
+      };
+    }
+
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      status: "safe_replace",
+      reason: "Managed file is unchanged since install and can be replaced safely.",
+      installed_hash: record.installed_hash,
+      current_hash: currentHash,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: record.last_reconciled_product_version,
+      action: "replace",
+    };
+  }
+
+  if (contentMatchesTemplate(spec.kind, currentContent, spec.content)) {
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      status: "managed_match",
+      reason: "Managed file already matches the current template after local formatting or equivalent updates.",
+      installed_hash: record.installed_hash,
+      current_hash: currentHash,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: record.last_reconciled_product_version,
+      action: "skip",
+    };
+  }
+
+  if (spec.kind === "json") {
+    const merged = tryMergeManagedJson(currentContent, spec.content);
+    if (merged) {
+      return {
+        path: spec.path,
+        relative_path: spec.relative_path,
+        template_id: spec.template_id,
+        status: "auto_merge",
+        reason: "Managed JSON file can be merged additively without conflicting changes.",
+        installed_hash: record.installed_hash,
+        current_hash: currentHash,
+        desired_hash: desiredHash,
+        last_reconciled_product_version: record.last_reconciled_product_version,
+        action: "merge",
+      };
+    }
+  }
+
+  return {
+    path: spec.path,
+    relative_path: spec.relative_path,
+    template_id: spec.template_id,
+    status: "manual_conflict",
+    reason: "Managed file diverged from the installed baseline and cannot be safely reconciled automatically.",
+    installed_hash: record.installed_hash,
+    current_hash: currentHash,
+    desired_hash: desiredHash,
+    last_reconciled_product_version: record.last_reconciled_product_version,
+    action: "manual",
+  };
+}
+
+async function applyManagedUpgradePlan(
+  metadataPath: string,
+  metadata: InstallMetadataDocument,
+  plan: ManagedUpgradePlanEntry[],
+  specs: ManagedControlSurfaceSpec[],
+): Promise<string[]> {
+  const specMap = new Map(specs.map((spec) => [spec.relative_path, spec]));
+  const appliedPaths: string[] = [];
+
+  for (const entry of plan) {
+    if (entry.status !== "safe_replace" && entry.status !== "auto_merge") {
+      continue;
+    }
+
+    const spec = specMap.get(entry.relative_path);
+    if (!spec) {
+      continue;
+    }
+
+    await ensureParentDirectory(spec.path);
+    if (entry.status === "safe_replace") {
+      await writeManagedFile(spec.path, spec.content, spec.kind);
+      appliedPaths.push(entry.relative_path);
+      continue;
+    }
+
+    const currentContent = await fs.readFile(spec.path, "utf8");
+    const merged = tryMergeManagedJson(currentContent, spec.content);
+    if (!merged) {
+      continue;
+    }
+
+    await writeManagedFile(spec.path, merged.content, spec.kind);
+    appliedPaths.push(entry.relative_path);
+  }
+
+  const refreshedRecords = await Promise.all(metadata.managed_files.map(async (record) => {
+    const spec = specMap.get(normalizeRepoRelativePath(record.path));
+    if (!spec) {
+      return record;
+    }
+
+    const shouldRefresh = appliedPaths.includes(spec.relative_path)
+      || plan.some((entry) => entry.relative_path === spec.relative_path && entry.status === "managed_match");
+    if (!shouldRefresh) {
+      return record;
+    }
+
+    return {
+      path: spec.relative_path,
+      template_id: spec.template_id,
+      installed_hash: hashContent(await fs.readFile(spec.path, "utf8")),
+      last_reconciled_product_version: PRODUCT_VERSION,
+    };
+  }));
+
+  await writeJsonAtomic(metadataPath, {
+    ...metadata,
+    product_version: PRODUCT_VERSION,
+    managed_files: refreshedRecords.sort((left, right) => left.path.localeCompare(right.path)),
+  });
+
+  return appliedPaths;
+}
+
+function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPaths>): ManagedControlSurfaceSpec[] {
+  return [
+    {
+      path: paths.agentsFile,
+      relative_path: "AGENTS.md",
+      template_id: "agents_markdown",
+      kind: "text",
+      content: `${getAgentsMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-plan/SKILL.md",
+      template_id: "autonomy_plan_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyPlanSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-work", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-work/SKILL.md",
+      template_id: "autonomy_work_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyWorkSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-intake", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-intake/SKILL.md",
+      template_id: "autonomy_intake_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyIntakeSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-review", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-review/SKILL.md",
+      template_id: "autonomy_review_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyReviewSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-report", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-report/SKILL.md",
+      template_id: "autonomy_report_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyReportSkillMarkdown()}\n`,
+    },
+    {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-sprint", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-sprint/SKILL.md",
+      template_id: "autonomy_sprint_skill_markdown",
+      kind: "text",
+      content: `${getAutonomySprintSkillMarkdown()}\n`,
+    },
+    {
+      path: paths.environmentFile,
+      relative_path: ".codex/environments/environment.toml",
+      template_id: "environment_toml",
+      kind: "text",
+      content: `${getEnvironmentTomlTemplate()}\n`,
+    },
+    {
+      path: paths.configFile,
+      relative_path: ".codex/config.toml",
+      template_id: "config_toml",
+      kind: "text",
+      content: `${getConfigTomlTemplate()}\n`,
+    },
+    {
+      path: paths.setupScript,
+      relative_path: "scripts/setup.windows.ps1",
+      template_id: "setup_windows_ps1",
+      kind: "text",
+      content: getSetupWindowsScriptTemplate(),
+    },
+    {
+      path: paths.verifyScript,
+      relative_path: "scripts/verify.ps1",
+      template_id: "verify_ps1",
+      kind: "text",
+      content: getInstallVerifyScriptTemplate(),
+    },
+    {
+      path: paths.smokeScript,
+      relative_path: "scripts/smoke.ps1",
+      template_id: "smoke_ps1",
+      kind: "text",
+      content: getSmokeScriptTemplate(),
+    },
+    {
+      path: path.join(paths.scriptsDir, "review.ps1"),
+      relative_path: "scripts/review.ps1",
+      template_id: "review_ps1",
+      kind: "text",
+      content: getReviewScriptTemplate(),
+    },
+    {
+      path: paths.goalFile,
+      relative_path: "autonomy/goal.md",
+      template_id: "goal_markdown",
+      kind: "text",
+      content: `${formatGoalMarkdown(null)}\n`,
+    },
+    {
+      path: paths.journalFile,
+      relative_path: "autonomy/journal.md",
+      template_id: "journal_markdown",
+      kind: "text",
+      content: `${getDefaultJournalMarkdown()}\n`,
+    },
+    {
+      path: paths.tasksFile,
+      relative_path: "autonomy/tasks.json",
+      template_id: "tasks_json",
+      kind: "json",
+      content: `${JSON.stringify({ version: 1, tasks: [] }, null, 2)}\n`,
+    },
+    {
+      path: paths.goalsFile,
+      relative_path: "autonomy/goals.json",
+      template_id: "goals_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultGoalsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.proposalsFile,
+      relative_path: "autonomy/proposals.json",
+      template_id: "proposals_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultProposalsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.stateFile,
+      relative_path: "autonomy/state.json",
+      template_id: "state_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultState(), null, 2)}\n`,
+    },
+    {
+      path: paths.settingsFile,
+      relative_path: "autonomy/settings.json",
+      template_id: "settings_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultSettingsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.resultsFile,
+      relative_path: "autonomy/results.json",
+      template_id: "results_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultResultsDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.verificationFile,
+      relative_path: "autonomy/verification.json",
+      template_id: "verification_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultVerificationDocument(), null, 2)}\n`,
+    },
+    {
+      path: paths.blockersFile,
+      relative_path: "autonomy/blockers.json",
+      template_id: "blockers_json",
+      kind: "json",
+      content: `${JSON.stringify({ version: 1, blockers: [] }, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "tasks.schema.json"),
+      relative_path: "autonomy/schema/tasks.schema.json",
+      template_id: "tasks_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(tasksSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "goals.schema.json"),
+      relative_path: "autonomy/schema/goals.schema.json",
+      template_id: "goals_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(goalsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "proposals.schema.json"),
+      relative_path: "autonomy/schema/proposals.schema.json",
+      template_id: "proposals_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(proposalsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "state.schema.json"),
+      relative_path: "autonomy/schema/state.schema.json",
+      template_id: "state_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(stateSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "settings.schema.json"),
+      relative_path: "autonomy/schema/settings.schema.json",
+      template_id: "settings_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(settingsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "results.schema.json"),
+      relative_path: "autonomy/schema/results.schema.json",
+      template_id: "results_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(resultsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "blockers.schema.json"),
+      relative_path: "autonomy/schema/blockers.schema.json",
+      template_id: "blockers_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(blockersSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "verification.schema.json"),
+      relative_path: "autonomy/schema/verification.schema.json",
+      template_id: "verification_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(verificationSchema, null, 2)}\n`,
+    },
+  ];
+}
+
+function buildPlanWarnings(plan: ManagedUpgradePlanEntry[]): Array<{ code: string; message: string }> {
+  const conflicts = plan.filter((entry) => entry.status === "manual_conflict" || entry.status === "foreign_occupied");
+  return conflicts.length > 0
+    ? [{
+        code: "upgrade_requires_manual_review",
+        message: `Managed upgrade plan contains ${conflicts.length} path(s) that need manual review.`,
+      }]
+    : [];
+}
+
+function buildApplyWarnings(plan: ManagedUpgradePlanEntry[], appliedPaths: string[]): Array<{ code: string; message: string }> {
+  const warnings = buildPlanWarnings(plan);
+  if (appliedPaths.length > 0) {
+    warnings.push({ code: "upgrade_applied", message: `Applied ${appliedPaths.length} managed file(s).` });
+  }
+
+  return warnings;
+}
+
+function summarizeManagedUpgradePlan(
+  repoRoot: string,
+  installMetadataPath: string,
+  apply: boolean,
+  plan: ManagedUpgradePlanEntry[],
+): UpgradeManagedSummary {
+  const counts = countManagedUpgradePlan(plan);
+  return {
+    target_path: repoRoot,
+    install_metadata_path: installMetadataPath,
+    apply,
+    managed_match: counts.managed_match,
+    safe_replace: counts.safe_replace,
+    auto_merge: counts.auto_merge,
+    manual_conflict: counts.manual_conflict,
+    foreign_occupied: counts.foreign_occupied,
+    applied_paths: [],
+    pending_paths: plan
+      .filter((entry) => entry.status === "manual_conflict" || entry.status === "foreign_occupied")
+      .map((entry) => entry.relative_path),
+  };
+}
+
+function buildPlanMessage(summary: UpgradeManagedSummary): string {
+  return [
+    `Generated upgrade plan for ${summary.target_path}.`,
+    `managed_match=${summary.managed_match}, safe_replace=${summary.safe_replace}, auto_merge=${summary.auto_merge}, manual_conflict=${summary.manual_conflict}, foreign_occupied=${summary.foreign_occupied}.`,
+    summary.pending_paths.length > 0 ? `Pending manual review: ${summary.pending_paths.join(", ")}.` : "No manual review is required.",
+  ].join(" ");
+}
+
+function buildApplyMessage(summary: UpgradeManagedSummary): string {
+  return [
+    `Applied guided managed upgrade for ${summary.target_path}.`,
+    `applied=${summary.applied_paths.length}, manual_conflict=${summary.manual_conflict}, foreign_occupied=${summary.foreign_occupied}.`,
+    summary.pending_paths.length > 0 ? `Skipped: ${summary.pending_paths.join(", ")}.` : "All managed paths were reconciled.",
+  ].join(" ");
+}
+
+function countManagedUpgradePlan(plan: ManagedUpgradePlanEntry[]): Record<UpgradeDecision, number> {
+  const counts: Record<UpgradeDecision, number> = {
+    managed_match: 0,
+    safe_replace: 0,
+    auto_merge: 0,
+    manual_conflict: 0,
+    foreign_occupied: 0,
+  };
+
+  for (const entry of plan) {
+    counts[entry.status] += 1;
+  }
+
+  return counts;
+}
+
+async function ensureParentDirectory(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+}
+
+async function writeManagedFile(filePath: string, content: string, kind: ManagedControlSurfaceSpec["kind"]): Promise<void> {
+  if (kind === "json") {
+    await writeJsonAtomic(filePath, JSON.parse(content));
+    return;
+  }
+
+  await writeTextFileAtomic(filePath, content);
+}
+
+function contentMatchesTemplate(kind: ManagedControlSurfaceSpec["kind"], currentContent: string, desiredContent: string): boolean {
+  if (kind === "json") {
+    try {
+      return deepEqualJson(JSON.parse(currentContent), JSON.parse(desiredContent));
+    } catch {
+      return false;
+    }
+  }
+
+  return normalizeText(currentContent) === normalizeText(desiredContent);
+}
+
+function tryMergeManagedJson(currentContent: string, desiredContent: string): { content: string } | null {
+  let currentJson: unknown;
+  let desiredJson: unknown;
+  try {
+    currentJson = JSON.parse(currentContent);
+    desiredJson = JSON.parse(desiredContent);
+  } catch {
+    return null;
+  }
+
+  if (!isPlainObject(currentJson) || !isPlainObject(desiredJson)) {
+    return null;
+  }
+
+  const merged = mergeJsonObjects(currentJson, desiredJson);
+  if (!merged) {
+    return null;
+  }
+
+  return {
+    content: `${JSON.stringify(merged, null, 2)}\n`,
+  };
+}
+
+function mergeJsonObjects(current: Record<string, unknown>, desired: Record<string, unknown>): Record<string, unknown> | null {
+  const merged: Record<string, unknown> = cloneJsonValue(current) as Record<string, unknown>;
+
+  for (const [key, desiredValue] of Object.entries(desired)) {
+    if (!(key in current)) {
+      merged[key] = cloneJsonValue(desiredValue);
+      continue;
+    }
+
+    const currentValue = current[key];
+    if (deepEqualJson(currentValue, desiredValue)) {
+      continue;
+    }
+
+    if (isPlainObject(currentValue) && isPlainObject(desiredValue)) {
+      const nested = mergeJsonObjects(currentValue, desiredValue);
+      if (!nested) {
+        return null;
+      }
+
+      merged[key] = nested;
+      continue;
+    }
+
+    return null;
+  }
+
+  return merged;
+}
+
+function deepEqualJson(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+
+    return left.every((item, index) => deepEqualJson(item, right[index]));
+  }
+
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
+
+    return leftKeys.every((key, index) => key === rightKeys[index] && deepEqualJson(left[key], right[key]));
+  }
+
+  return false;
+}
+
+function cloneJsonValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function hashContent(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\r\n/g, "\n").trimEnd();
+}
+
+function normalizeRepoRelativePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "").trim();
+}
+
+function normalizeManagedInstallFileRecord(value: ManagedInstallFileRecord): ManagedInstallFileRecord {
+  return {
+    path: normalizeRepoRelativePath(value.path),
+    template_id: value.template_id,
+    installed_hash: value.installed_hash,
+    last_reconciled_product_version: value.last_reconciled_product_version,
+  };
+}
+
+function isManagedInstallFileRecord(value: unknown): value is ManagedInstallFileRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.path === "string"
+    && typeof record.template_id === "string"
+    && typeof record.installed_hash === "string"
+    && typeof record.last_reconciled_product_version === "string";
+}
+
+function normalizeInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
