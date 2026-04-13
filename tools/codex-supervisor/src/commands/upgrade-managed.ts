@@ -54,6 +54,11 @@ interface UpgradeManagedOptions {
   json?: boolean;
 }
 
+interface RebaselineManagedOptions {
+  target?: string;
+  json?: boolean;
+}
+
 interface ManagedControlSurfaceSpec {
   path: string;
   relative_path: string;
@@ -115,6 +120,22 @@ interface UpgradeManagedResult {
   message: string;
   summary: UpgradeManagedSummary;
   plan: ManagedUpgradePlanEntry[];
+  warnings?: Array<{ code: string; message: string }>;
+}
+
+interface RebaselineManagedSummary {
+  target_path: string;
+  install_metadata_path: string;
+  advisory_candidates: number;
+  rebaselined_paths: string[];
+  skipped_paths: string[];
+  blocking_paths: string[];
+}
+
+interface RebaselineManagedResult {
+  ok: boolean;
+  message: string;
+  summary: RebaselineManagedSummary;
   warnings?: Array<{ code: string; message: string }>;
 }
 
@@ -222,6 +243,60 @@ export async function runUpgradeManagedCommand(options: UpgradeManagedOptions = 
   }
 }
 
+export async function runRebaselineManagedCommand(
+  options: RebaselineManagedOptions = {},
+): Promise<RebaselineManagedResult> {
+  const targetInput = options.target?.trim() || process.cwd();
+  const targetPath = path.resolve(targetInput);
+
+  if (!(await isDirectory(targetPath))) {
+    throw new CliError(`Rebaseline target is not a directory: ${targetPath}`, CLI_EXIT_CODES.validation);
+  }
+
+  const paths = resolveRepoPaths(targetPath);
+  const installMetadataPath = getInstallMetadataPath(targetPath);
+  const metadata = await loadManagedInstallMetadata(installMetadataPath);
+  const specs = buildManagedControlSurfaceSpecs(paths);
+  const plan = await buildManagedUpgradePlan(specs, metadata.document);
+  const summary = summarizeManagedRebaselinePlan(targetPath, installMetadataPath, plan);
+
+  if (summary.advisory_candidates === 0) {
+    return {
+      ok: true,
+      message: `No advisory managed drift needs rebaselining in ${targetPath}.`,
+      summary,
+      warnings: summary.blocking_paths.length > 0
+        ? [{
+            code: "blocking_drift_present",
+            message: `Blocking managed drift is still present: ${summary.blocking_paths.join(", ")}.`,
+          }]
+        : undefined,
+    };
+  }
+
+  const lock = await acquireCycleLock(paths.cycleLockFile, {
+    command: "codex-autonomy rebaseline-managed",
+  });
+
+  try {
+    const { rebaselinedPaths, skippedPaths } = await rebaselineManagedMetadata(metadata.path, metadata.document, plan);
+    const resultSummary: RebaselineManagedSummary = {
+      ...summary,
+      rebaselined_paths: rebaselinedPaths,
+      skipped_paths: skippedPaths,
+    };
+
+    return {
+      ok: true,
+      message: buildRebaselineMessage(resultSummary),
+      summary: resultSummary,
+      warnings: buildRebaselineWarnings(resultSummary),
+    };
+  } finally {
+    await releaseCycleLock(paths.cycleLockFile, lock);
+  }
+}
+
 export function registerUpgradeManagedCommand(program: Command): void {
   program
     .command("upgrade-managed")
@@ -249,6 +324,30 @@ export function registerUpgradeManagedCommand(program: Command): void {
         for (const warning of result.warnings) {
           console.log(`warning: ${warning.message}`);
         }
+      }
+    });
+}
+
+export function registerRebaselineManagedCommand(program: Command): void {
+  program
+    .command("rebaseline-managed")
+    .requiredOption("--target <path>", "Target repository root")
+    .option("--json", "Emit machine-readable JSON output")
+    .description("Accept advisory managed drift as the current repo-specific baseline without overwriting files")
+    .action(async (options: RebaselineManagedOptions) => {
+      const result = await runRebaselineManagedCommand({
+        target: options.target,
+        json: options.json === true,
+      });
+
+      if (options.json === true) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(result.message);
+      for (const warning of result.warnings ?? []) {
+        console.log(`warning: ${warning.message}`);
       }
     });
 }
@@ -379,6 +478,23 @@ async function classifyManagedFile(
   const currentHash = hashContent(currentContent);
 
   if (currentHash === record.installed_hash) {
+    if (!upgradeBlocking && record.last_reconciled_product_version === PRODUCT_VERSION) {
+      return {
+        path: spec.path,
+        relative_path: spec.relative_path,
+        template_id: spec.template_id,
+        management_class: record.management_class,
+        upgrade_blocking: false,
+        status: "managed_match",
+        reason: "Managed file matches the currently accepted repo-specific baseline for its non-blocking management class.",
+        installed_hash: record.installed_hash,
+        current_hash: currentHash,
+        desired_hash: desiredHash,
+        last_reconciled_product_version: record.last_reconciled_product_version,
+        action: "skip",
+      };
+    }
+
     if (contentMatchesTemplate(spec.kind, currentContent, spec.content)) {
       return {
         path: spec.path,
@@ -539,6 +655,62 @@ async function applyManagedUpgradePlan(
   });
 
   return appliedPaths;
+}
+
+async function rebaselineManagedMetadata(
+  metadataPath: string,
+  metadata: InstallMetadataDocument,
+  plan: ManagedUpgradePlanEntry[],
+): Promise<{
+  rebaselinedPaths: string[];
+  skippedPaths: string[];
+}> {
+  const rebaselinedPaths: string[] = [];
+  const skippedPaths: string[] = [];
+  const eligiblePaths = new Set(
+    plan
+      .filter((entry) => !entry.upgrade_blocking && entry.current_hash && entry.status !== "foreign_occupied")
+      .map((entry) => entry.relative_path),
+  );
+
+  const refreshedRecords = metadata.managed_files.map((record) => {
+    const relativePath = normalizeRepoRelativePath(record.path);
+    if (!eligiblePaths.has(relativePath)) {
+      return record;
+    }
+
+    const entry = plan.find((candidate) => candidate.relative_path === relativePath);
+    if (!entry?.current_hash) {
+      skippedPaths.push(relativePath);
+      return record;
+    }
+
+    rebaselinedPaths.push(relativePath);
+    return {
+      ...record,
+      installed_hash: entry.current_hash,
+      last_reconciled_product_version: PRODUCT_VERSION,
+    };
+  });
+
+  const skippedSet = new Set(skippedPaths);
+  for (const entry of plan) {
+    if (!entry.upgrade_blocking && entry.status !== "managed_match" && !rebaselinedPaths.includes(entry.relative_path) && !skippedSet.has(entry.relative_path)) {
+      skippedPaths.push(entry.relative_path);
+      skippedSet.add(entry.relative_path);
+    }
+  }
+
+  await writeJsonAtomic(metadataPath, {
+    ...metadata,
+    product_version: PRODUCT_VERSION,
+    managed_files: refreshedRecords.sort((left, right) => left.path.localeCompare(right.path)),
+  });
+
+  return {
+    rebaselinedPaths: rebaselinedPaths.sort(),
+    skippedPaths: skippedPaths.sort(),
+  };
 }
 
 function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPaths>): ManagedControlSurfaceSpec[] {
@@ -787,6 +959,32 @@ function buildApplyWarnings(plan: ManagedUpgradePlanEntry[], appliedPaths: strin
   return warnings;
 }
 
+function buildRebaselineWarnings(summary: RebaselineManagedSummary): Array<{ code: string; message: string }> {
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (summary.rebaselined_paths.length > 0) {
+    warnings.push({
+      code: "advisory_drift_rebaselined",
+      message: `Accepted ${summary.rebaselined_paths.length} advisory managed file(s) as the new repo-specific baseline.`,
+    });
+  }
+
+  if (summary.skipped_paths.length > 0) {
+    warnings.push({
+      code: "rebaseline_skipped_paths",
+      message: `Skipped ${summary.skipped_paths.length} advisory path(s) during rebaseline.`,
+    });
+  }
+
+  if (summary.blocking_paths.length > 0) {
+    warnings.push({
+      code: "blocking_drift_present",
+      message: `Blocking managed drift still exists for ${summary.blocking_paths.length} path(s): ${summary.blocking_paths.join(", ")}.`,
+    });
+  }
+
+  return warnings;
+}
+
 function summarizeManagedUpgradePlan(
   repoRoot: string,
   installMetadataPath: string,
@@ -814,6 +1012,23 @@ function summarizeManagedUpgradePlan(
   };
 }
 
+function summarizeManagedRebaselinePlan(
+  repoRoot: string,
+  installMetadataPath: string,
+  plan: ManagedUpgradePlanEntry[],
+): RebaselineManagedSummary {
+  return {
+    target_path: repoRoot,
+    install_metadata_path: installMetadataPath,
+    advisory_candidates: plan.filter((entry) => !entry.upgrade_blocking && entry.current_hash && entry.status !== "managed_match" && entry.status !== "foreign_occupied").length,
+    rebaselined_paths: [],
+    skipped_paths: [],
+    blocking_paths: plan
+      .filter((entry) => entry.upgrade_blocking && entry.status !== "managed_match")
+      .map((entry) => entry.relative_path),
+  };
+}
+
 function buildPlanMessage(summary: UpgradeManagedSummary): string {
   return [
     `Generated upgrade plan for ${summary.target_path}.`,
@@ -828,6 +1043,21 @@ function buildApplyMessage(summary: UpgradeManagedSummary): string {
     `applied=${summary.applied_paths.length}, manual_conflict=${summary.manual_conflict}, foreign_occupied=${summary.foreign_occupied}.`,
     summary.pending_paths.length > 0 ? `Skipped: ${summary.pending_paths.join(", ")}.` : "All managed paths were reconciled.",
   ].join(" ");
+}
+
+function buildRebaselineMessage(summary: RebaselineManagedSummary): string {
+  const parts = [
+    `Rebaselined ${summary.rebaselined_paths.length} advisory managed file(s) in ${summary.target_path}.`,
+    summary.blocking_paths.length > 0
+      ? `Blocking drift still exists for ${summary.blocking_paths.length} path(s).`
+      : "No blocking managed drift remains.",
+  ];
+
+  if (summary.skipped_paths.length > 0) {
+    parts.push(`Skipped ${summary.skipped_paths.length} path(s): ${summary.skipped_paths.join(", ")}.`);
+  }
+
+  return parts.join(" ");
 }
 
 function countManagedUpgradePlan(plan: ManagedUpgradePlanEntry[]): Record<UpgradeDecision, number> {

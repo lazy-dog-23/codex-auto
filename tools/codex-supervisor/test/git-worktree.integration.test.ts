@@ -167,13 +167,17 @@ describe("git/worktree integration", () => {
     expect(secondPrepare.head).toBe(secondHead);
     expect(secondPrepare.backgroundPath).toBe(firstPrepare.backgroundPath);
 
+    const statusAfterAlign = await runStatusCommand(workspace);
+    expect((statusAfterAlign.warnings ?? []).some((warning) => warning.code === "background_worktree_head_mismatch")).toBe(false);
+    expect((statusAfterAlign.warnings ?? []).some((warning) => warning.code === "transient_git_state")).toBe(false);
+
     if (!secondPrepare.backgroundPath) {
       throw new Error("Expected prepare-worktree to return a background path.");
     }
 
     const alignedHead = runGit(secondPrepare.backgroundPath, ["rev-parse", "HEAD"]);
     expect(alignedHead).toBe(secondHead);
-  });
+  }, 10000);
 
   it("allows prepare-worktree when the repo is dirty only in managed control surface files and syncs them", async () => {
     const workspace = await makeTempWorkspace();
@@ -209,6 +213,55 @@ describe("git/worktree integration", () => {
 
     const backgroundJournal = await readFile(join(prepare.backgroundPath, "autonomy", "journal.md"), "utf8");
     expect(backgroundJournal).toContain("allowlisted sync marker");
+  });
+
+  it("treats repo guidance files as allowlisted runtime drift and syncs them without making them commit-eligible", async () => {
+    const workspace = await makeTempWorkspace();
+    const externalHome = await makeTempWorkspace();
+    const gitHome = join(externalHome, "git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    const bootstrap = await runBootstrapCommand(workspace);
+    expect(bootstrap.ok).toBe(true);
+
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    await writeFile(join(workspace, "AGENTS.override.md"), "# local override\n", "utf8");
+    await writeFile(join(workspace, "TEAM_GUIDE.md"), "# team guide\n", "utf8");
+
+    const prepare = await runPrepareWorktree({ workspaceRoot: workspace });
+    expect(prepare.ok).toBe(true);
+    expect(prepare.message).toContain("allowlisted autonomy runtime");
+    if (!prepare.backgroundPath) {
+      throw new Error("Expected a background worktree path.");
+    }
+
+    await expect(readFile(join(prepare.backgroundPath, "AGENTS.override.md"), "utf8")).resolves.toContain("local override");
+    await expect(readFile(join(prepare.backgroundPath, "TEAM_GUIDE.md"), "utf8")).resolves.toContain("team guide");
+
+    const gateWithoutCodeDiff = await inspectAutonomyCommitGate(workspace);
+    expect(gateWithoutCodeDiff.blockedPaths).toEqual([]);
+    expect(gateWithoutCodeDiff.ignoredPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
+    expect(gateWithoutCodeDiff.hasDiff).toBe(false);
+    expect(gateWithoutCodeDiff.reason).toBe("no_diff");
+
+    await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- commit with ambient runtime drift -->\n", "utf8");
+    const gateWithCodeDiff = await inspectAutonomyCommitGate(workspace);
+    expect(gateWithCodeDiff.commitReady).toBe(true);
+    expect(gateWithCodeDiff.allowedPaths).toContain("autonomy/journal.md");
+    expect(gateWithCodeDiff.ignoredPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
+    expect(gateWithCodeDiff.blockedPaths).toEqual([]);
   });
 
   it("probes a managed-only dirty worktree with forward-slash normalized status paths", async () => {

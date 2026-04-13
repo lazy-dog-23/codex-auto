@@ -76,7 +76,7 @@ export async function runPrepareWorktree(options: PrepareWorktreeOptions = {}): 
       backgroundPath,
       branch: DEFAULT_BACKGROUND_WORKTREE_BRANCH,
       dirtyRepository: true,
-      message: `Repository is dirty outside the managed control surface: ${blockedDirtyPaths.join(", ")}. Refusing to prepare the background worktree.`,
+      message: `Repository is dirty outside the allowlisted autonomy runtime files: ${blockedDirtyPaths.join(", ")}. Refusing to prepare the background worktree.`,
     };
   }
 
@@ -171,10 +171,10 @@ export async function runPrepareWorktree(options: PrepareWorktreeOptions = {}): 
     backgroundPath,
     branch: worktreeResult.branch,
     action: worktreeResult.action,
-    head: repoHead,
-    dirtyRepository: repoDirty,
-    message: repoDirty
-      ? `Background worktree prepared and synchronized ${syncedPaths.length} managed control surface file(s) despite allowlisted repo changes.`
+      head: repoHead,
+      dirtyRepository: repoDirty,
+      message: repoDirty
+      ? `Background worktree prepared and synchronized ${syncedPaths.length} allowlisted autonomy runtime file(s) despite local repo guidance drift.`
       : `Background worktree ${worktreeResult.action}: ${backgroundPath}`,
   };
 }
@@ -300,7 +300,7 @@ async function createOrAlignBackgroundWorktree(
       return {
         ok: false,
         branch,
-        message: `Background worktree at ${backgroundPath} is dirty outside the managed control surface: ${blockedDirtyPaths.join(", ")}.`,
+        message: `Background worktree at ${backgroundPath} is dirty outside the allowlisted autonomy runtime files: ${blockedDirtyPaths.join(", ")}.`,
       };
     }
 
@@ -316,7 +316,7 @@ async function createOrAlignBackgroundWorktree(
       ok: true,
       action: "validated",
       branch: backgroundSummary.branch ?? branch,
-      message: `Background worktree at ${backgroundPath} already contains allowlisted managed changes.`,
+      message: `Background worktree at ${backgroundPath} already contains allowlisted autonomy runtime changes.`,
     };
   }
 

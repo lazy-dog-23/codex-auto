@@ -19,7 +19,7 @@ import { registerReviewCommand } from "./commands/review.js";
 import { registerSetRunModeCommand } from "./commands/set-run-mode.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerUnblockCommand } from "./commands/unblock.js";
-import { registerUpgradeManagedCommand } from "./commands/upgrade-managed.js";
+import { registerRebaselineManagedCommand, registerUpgradeManagedCommand } from "./commands/upgrade-managed.js";
 import { toCliError } from "./shared/errors.js";
 
 async function main(): Promise<void> {
@@ -43,6 +43,7 @@ async function main(): Promise<void> {
   registerMergeAutonomyBranchCommand(program);
   registerPrepareWorktreeCommand(program);
   registerUpgradeManagedCommand(program);
+  registerRebaselineManagedCommand(program);
   registerEmitAutomationPromptsCommand(program);
   registerUnblockCommand(program);
 

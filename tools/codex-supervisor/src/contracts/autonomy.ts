@@ -92,6 +92,17 @@ export const AUTO_CONTINUE_STATES = [
   "needs_confirmation",
 ] as const;
 
+export const AUTOMATION_STATES = [
+  "ready",
+  "in_progress",
+  "paused",
+  "review_pending",
+  "needs_confirmation",
+  "blocked",
+  "idle_completed",
+  "idle_no_work",
+] as const;
+
 export const MANAGED_FILE_CLASSES = [
   "static_template",
   "repo_customized",
@@ -118,6 +129,7 @@ export type AutoCommitMode = (typeof AUTO_COMMIT_MODES)[number];
 export type ResultState = (typeof RESULT_STATES)[number];
 export type SummaryKind = (typeof SUMMARY_KINDS)[number];
 export type AutoContinueState = (typeof AUTO_CONTINUE_STATES)[number];
+export type AutomationState = (typeof AUTOMATION_STATES)[number];
 export type ManagedFileClass = (typeof MANAGED_FILE_CLASSES)[number];
 
 export interface GoalTransitionSnapshot {
@@ -394,6 +406,7 @@ export interface StatusSummary extends CommandResult {
   has_recorded_run: boolean;
   results_scope_note: string | null;
   next_automation_reason: string | null;
+  automation_state: AutomationState;
   auto_continue_state: AutoContinueState;
   continuation_reason: string | null;
   closeout_policy: VerificationPolicy | null;
@@ -406,6 +419,8 @@ export interface StatusSummary extends CommandResult {
   remaining_ready: number;
   last_followup_summary: string | null;
   upgrade_state: string | null;
+  upgrade_blocking: boolean;
+  upgrade_hint: string | null;
   cli_install_state: string | null;
   results_summary: {
     planner_summary: string | null;

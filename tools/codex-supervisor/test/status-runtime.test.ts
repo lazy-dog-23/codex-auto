@@ -457,7 +457,10 @@ describe("status runtime gates", () => {
     const summary = await runStatusCommand("C:/repo");
 
     expect(summary.ready_for_automation).toBe(true);
+    expect(summary.automation_state).toBe("ready");
     expect(summary.upgrade_state).toBe("managed_advisory_drift");
+    expect(summary.upgrade_blocking).toBe(false);
+    expect(summary.upgrade_hint).toContain("rebaseline-managed");
     expect(summary.warnings?.some((warning) => warning.code === "managed_advisory_drift")).toBe(true);
     expect(summary.next_automation_reason).toContain("Ready for");
   });
@@ -693,5 +696,52 @@ describe("status runtime gates", () => {
     expect(probe?.attempts).toBe(4);
     expect(probe?.normalizedStatusLines).toEqual([" M README.md"]);
     expect(probe?.managedControlSurfaceOnly).toBe(false);
+  });
+
+  it("stabilizes HEAD together with status before reporting a worktree snapshot", async () => {
+    const headSnapshots = ["abc123\n", "def456\n", "def456\n"];
+    let headIndex = 0;
+
+    runProcessMock.mockImplementation((command: string, args: string[], options?: { cwd?: string }) => {
+      const cwd = options?.cwd ?? "C:/repo";
+      const key = `${command} ${args.join(" ")}`;
+
+      if (key === "git rev-parse --show-toplevel") {
+        return { command, args, cwd, exitCode: 0, stdout: "C:/repo\n", stderr: "", error: undefined };
+      }
+
+      if (key === "git rev-parse --git-dir") {
+        return { command, args, cwd, exitCode: 0, stdout: ".git\n", stderr: "", error: undefined };
+      }
+
+      if (key === "git rev-parse --git-common-dir") {
+        return { command, args, cwd, exitCode: 0, stdout: ".git\n", stderr: "", error: undefined };
+      }
+
+      if (key === "git branch --show-current") {
+        return { command, args, cwd, exitCode: 0, stdout: "codex/background\n", stderr: "", error: undefined };
+      }
+
+      if (key === "git rev-parse HEAD") {
+        const stdout = headSnapshots[Math.min(headIndex, headSnapshots.length - 1)];
+        headIndex += 1;
+        return { command, args, cwd, exitCode: 0, stdout, stderr: "", error: undefined };
+      }
+
+      if (key === "git status --porcelain=v1 --untracked-files=all") {
+        return { command, args, cwd, exitCode: 0, stdout: "", stderr: "", error: undefined };
+      }
+
+      throw new Error(`Unexpected git command: ${key}`);
+    });
+
+    const { probeWorktreeState } = await import("../src/infra/worktree-state.js");
+    const probe = await probeWorktreeState("C:/repo", { debounceMs: 0, maxAttempts: 4 });
+
+    expect(probe).not.toBeNull();
+    expect(probe?.stable).toBe(true);
+    expect(probe?.transient).toBe(false);
+    expect(probe?.head).toBe("def456");
+    expect(probe?.attempts).toBe(3);
   });
 });

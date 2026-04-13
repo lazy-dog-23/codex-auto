@@ -7,7 +7,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runInstallCommand } from "../src/commands/install.js";
-import { inspectManagedUpgradeState, runUpgradeManagedCommand } from "../src/commands/upgrade-managed.js";
+import {
+  inspectManagedUpgradeState,
+  runRebaselineManagedCommand,
+  runUpgradeManagedCommand,
+} from "../src/commands/upgrade-managed.js";
 import { getLegacyReviewScriptTemplates } from "../src/scaffold/templates.js";
 
 const tempRoots: string[] = [];
@@ -181,5 +185,51 @@ describe("upgrade-managed", () => {
     expect(plan.plan.find((entry) => entry.relative_path === "AGENTS.md")?.upgrade_blocking).toBe(false);
     expect(plan.plan.find((entry) => entry.relative_path === "autonomy/results.json")?.management_class).toBe("runtime_state");
     expect(plan.plan.find((entry) => entry.relative_path === "autonomy/results.json")?.upgrade_blocking).toBe(false);
+  });
+
+  it("rebaselines advisory drift without overwriting repo-customized or runtime-state files", async () => {
+    const workspace = await makeTempGitRepo();
+
+    const installResult = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+    expect(installResult.ok).toBe(true);
+
+    const agentsPath = join(workspace, "AGENTS.md");
+    const journalPath = join(workspace, "autonomy", "journal.md");
+    const installMetadataPath = join(workspace, "autonomy", "install.json");
+
+    await writeFile(agentsPath, "# repo specific rules\n", "utf8");
+    await writeFile(journalPath, "## journal\n\ncustom runtime note\n", "utf8");
+
+    const beforeAgents = await readFile(agentsPath, "utf8");
+    const beforeJournal = await readFile(journalPath, "utf8");
+
+    const advisoryState = await inspectManagedUpgradeState(workspace);
+    expect(advisoryState.state).toBe("managed_advisory_drift");
+
+    const result = await runRebaselineManagedCommand({ target: workspace });
+    expect(result.ok).toBe(true);
+    expect(result.summary.rebaselined_paths).toEqual(expect.arrayContaining(["AGENTS.md", "autonomy/journal.md"]));
+    expect(result.summary.blocking_paths).toHaveLength(0);
+
+    expect(await readFile(agentsPath, "utf8")).toBe(beforeAgents);
+    expect(await readFile(journalPath, "utf8")).toBe(beforeJournal);
+
+    const installMetadata = JSON.parse(await readFile(installMetadataPath, "utf8")) as {
+      product_version: string;
+      managed_files: Array<{ path: string; installed_hash: string; last_reconciled_product_version: string }>;
+    };
+    expect(installMetadata.product_version).toBe("0.1.0");
+    expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.installed_hash).toBe(hashText(beforeAgents));
+    expect(installMetadata.managed_files.find((item) => item.path === "autonomy/journal.md")?.installed_hash).toBe(hashText(beforeJournal));
+    expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.last_reconciled_product_version).toBe("0.1.0");
+
+    const afterState = await inspectManagedUpgradeState(workspace);
+    expect(afterState.state).toBe("managed_match");
   });
 });

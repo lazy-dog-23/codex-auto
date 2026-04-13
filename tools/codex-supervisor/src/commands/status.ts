@@ -3,13 +3,13 @@ import { Command } from "commander";
 import type {
   AutonomyResults,
   AutonomySettings,
+  AutomationState,
   AutoContinueState,
   AutonomyState,
   BlockersDocument,
   GoalStatus,
   GoalsDocument,
   StatusSummary,
-  SummaryKind,
   TaskStatus,
   TasksDocument,
   VerificationDocument,
@@ -22,7 +22,7 @@ import { detectGlobalCliInstall } from "../infra/cli-install.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess } from "../infra/process.js";
-import { isManagedControlSurfaceRelativePath, resolveRepoPaths } from "../shared/paths.js";
+import { isAutonomyRuntimeAllowlistedPath, resolveRepoPaths } from "../shared/paths.js";
 import { createDefaultAutonomySettings } from "../shared/policy.js";
 import { inspectManagedUpgradeState } from "./upgrade-managed.js";
 import {
@@ -63,6 +63,36 @@ function countGoalStatuses(goals: GoalsDocument["goals"]): Record<GoalStatus, nu
     counts[goal.status] += 1;
   }
   return counts;
+}
+
+function hasOnlyCompletedIdleWork(goalsByStatus: Record<GoalStatus, number>): boolean {
+  return goalsByStatus.completed > 0
+    && goalsByStatus.active === 0
+    && goalsByStatus.awaiting_confirmation === 0
+    && goalsByStatus.approved === 0
+    && goalsByStatus.blocked === 0
+    && goalsByStatus.draft === 0;
+}
+
+function buildNoWorkReason(options: {
+  goalsByStatus: Record<GoalStatus, number>;
+  completionBlockedByVerification: boolean;
+  verificationPending: number;
+}): string {
+  if (options.completionBlockedByVerification) {
+    return `Verification closeout is still pending for ${options.verificationPending} required axis/axes.`;
+  }
+
+  if (hasOnlyCompletedIdleWork(options.goalsByStatus)) {
+    return "All approved goal work is complete. Automation is idle until a new goal or proposal is created.";
+  }
+
+  const totalGoals = GOAL_STATUSES.reduce((count, status) => count + options.goalsByStatus[status], 0);
+  if (totalGoals === 0) {
+    return "No goal has been created yet. Create or intake a goal before automation can run.";
+  }
+
+  return "No active goal work or proposal generation work is currently available.";
 }
 
 function hasActionableTasks(tasks: TasksDocument["tasks"], currentGoalId: string | null): boolean {
@@ -118,6 +148,7 @@ function buildMessage(summary: StatusSummary): string {
     `results_scope_note=${formatNullableText(summary.results_scope_note)}`,
     `last_thread_summary_sent_at=${formatNullableText(summary.last_thread_summary_sent_at)}`,
     `last_inbox_run_at=${formatNullableText(summary.last_inbox_run_at)}`,
+    `automation_state=${summary.automation_state}`,
     `auto_continue_state=${summary.auto_continue_state}`,
     `continuation_reason=${formatNullableText(summary.continuation_reason)}`,
     `closeout_policy=${formatNullableText(summary.closeout_policy)}`,
@@ -129,6 +160,8 @@ function buildMessage(summary: StatusSummary): string {
     `remaining_ready=${summary.remaining_ready}`,
     `last_followup_summary=${formatNullableText(summary.last_followup_summary)}`,
     `upgrade_state=${formatNullableText(summary.upgrade_state)}`,
+    `upgrade_blocking=${summary.upgrade_blocking ? "yes" : "no"}`,
+    `upgrade_hint=${formatNullableText(summary.upgrade_hint)}`,
     `cli_install_state=${formatNullableText(summary.cli_install_state)}`,
     `next_automation_reason=${formatNullableText(summary.next_automation_reason)}`,
     `ready_for_automation=${summary.ready_for_automation ? "yes" : "no"}`,
@@ -139,6 +172,7 @@ function buildLocalAutomationReason(options: {
   readyForAutomation: boolean;
   actionableTasks: boolean;
   pendingPlanningWork: boolean;
+  goalsByStatus: Record<GoalStatus, number>;
   verificationPending: number;
   completionBlockedByVerification: boolean;
   hasReportThread: boolean;
@@ -152,10 +186,6 @@ function buildLocalAutomationReason(options: {
 }): string {
   if (options.readyForAutomation) {
     return "Ready for automation: active or planning work is available.";
-  }
-
-  if (options.completionBlockedByVerification) {
-    return `Verification closeout is still pending for ${options.verificationPending} required axis/axes.`;
   }
 
   if (!options.hasReportThread && (options.actionableTasks || options.pendingPlanningWork)) {
@@ -187,10 +217,63 @@ function buildLocalAutomationReason(options: {
   }
 
   if (!options.actionableTasks && !options.pendingPlanningWork) {
-    return "No active goal work or proposal generation work is currently available.";
+    return buildNoWorkReason({
+      goalsByStatus: options.goalsByStatus,
+      completionBlockedByVerification: options.completionBlockedByVerification,
+      verificationPending: options.verificationPending,
+    });
   }
 
   return "Eligible work is available, but runtime checks need to pass before the next automation run.";
+}
+
+function resolveLocalAutomationState(options: {
+  readyForAutomation: boolean;
+  continuationDecision: "auto_continued" | "none" | "needs_confirmation" | null;
+  paused: boolean;
+  needsHumanReview: boolean;
+  cycleStatus: StatusSummary["cycle_status"];
+  completionBlockedByVerification: boolean;
+  openBlockerCount: number;
+  multipleActiveGoals: boolean;
+  goalPointerMismatch: boolean;
+  actionableTasks: boolean;
+  pendingPlanningWork: boolean;
+  goalsByStatus: Record<GoalStatus, number>;
+}): AutomationState {
+  if (options.continuationDecision === "needs_confirmation") {
+    return "needs_confirmation";
+  }
+
+  if (options.paused) {
+    return "paused";
+  }
+
+  if (options.needsHumanReview || options.cycleStatus === "review_pending") {
+    return "review_pending";
+  }
+
+  if (options.cycleStatus === "planning" || options.cycleStatus === "working") {
+    return "in_progress";
+  }
+
+  if (options.readyForAutomation) {
+    return "ready";
+  }
+
+  if (options.completionBlockedByVerification) {
+    return "blocked";
+  }
+
+  if (!options.actionableTasks && !options.pendingPlanningWork) {
+    return hasOnlyCompletedIdleWork(options.goalsByStatus) ? "idle_completed" : "idle_no_work";
+  }
+
+  if (options.openBlockerCount > 0 || options.multipleActiveGoals || options.goalPointerMismatch || options.cycleStatus === "blocked") {
+    return "blocked";
+  }
+
+  return "blocked";
 }
 
 function buildRuntimeAutomationReason(warnings: readonly { code: string; message: string }[]): string {
@@ -253,7 +336,7 @@ function classifyDirtyPaths(statusLines: readonly string[]): {
   managedOnly: boolean;
 } {
   const dirtyPaths = extractDirtyPaths(statusLines);
-  const unmanagedDirtyPaths = dirtyPaths.filter((pathValue) => !isManagedControlSurfaceRelativePath(pathValue));
+  const unmanagedDirtyPaths = dirtyPaths.filter((pathValue) => !isAutonomyRuntimeAllowlistedPath(pathValue));
 
   return {
     dirtyPaths,
@@ -265,14 +348,14 @@ function classifyDirtyPaths(statusLines: readonly string[]): {
 function buildControlSurfaceDirtyOnlyMessage(scopes: readonly string[]): string {
   const normalizedScopes = [...new Set(scopes)];
   if (normalizedScopes.length === 0) {
-    return "Managed control surface changes are present.";
+    return "Allowlisted autonomy runtime file changes are present.";
   }
 
   if (normalizedScopes.length === 1) {
-    return `Managed control surface changes are pending only in the ${normalizedScopes[0]}.`;
+    return `Allowlisted autonomy runtime files are pending only in the ${normalizedScopes[0]}.`;
   }
 
-  return `Managed control surface changes are pending only in the ${normalizedScopes.join(" and ")}.`;
+  return `Allowlisted autonomy runtime files are pending only in the ${normalizedScopes.join(" and ")}.`;
 }
 
 function resolveRuntimeAutoContinueState(options: {
@@ -289,6 +372,39 @@ function resolveRuntimeAutoContinueState(options: {
   }
 
   return "stopped";
+}
+
+function resolveRuntimeAutomationState(options: {
+  summaryAutomationState: AutomationState;
+  summaryAutoContinueState: AutoContinueState;
+  readyForAutomation: boolean;
+  state: AutonomyState;
+}): AutomationState {
+  if (options.summaryAutoContinueState === "needs_confirmation") {
+    return "needs_confirmation";
+  }
+
+  if (options.state.paused) {
+    return "paused";
+  }
+
+  if (options.state.needs_human_review || options.state.cycle_status === "review_pending") {
+    return "review_pending";
+  }
+
+  if (options.state.cycle_status === "planning" || options.state.cycle_status === "working") {
+    return "in_progress";
+  }
+
+  if (options.readyForAutomation) {
+    return "ready";
+  }
+
+  if (options.summaryAutomationState === "idle_completed" || options.summaryAutomationState === "idle_no_work") {
+    return options.summaryAutomationState;
+  }
+
+  return "blocked";
 }
 
 function resolveRuntimeContinuationReason(options: {
@@ -348,6 +464,25 @@ function resolveContinuationReason(options: {
   }
 
   return options.nextAutomationReason;
+}
+
+function buildUpgradeHint(upgradeState: string | null): string | null {
+  switch (upgradeState) {
+    case "managed_diverged":
+      return "Run codex-autonomy upgrade-managed --target <repo> to inspect or apply a guided control-surface upgrade.";
+    case "managed_advisory_drift":
+      return "Optional: run codex-autonomy rebaseline-managed --target <repo> to accept repo-specific managed files as the new baseline.";
+    case "metadata_incomplete":
+      return "Repair autonomy/install.json before running managed upgrade or rebaseline commands.";
+    case "upgrade_probe_failed":
+      return "Managed upgrade state could not be read from autonomy/install.json.";
+    default:
+      return null;
+  }
+}
+
+function isUpgradeBlocking(upgradeState: string | null): boolean {
+  return upgradeState === "managed_diverged" || upgradeState === "metadata_incomplete" || upgradeState === "upgrade_probe_failed";
 }
 
 export function buildStatusSummary(
@@ -438,6 +573,7 @@ export function buildStatusSummary(
     readyForAutomation,
     actionableTasks,
     pendingPlanningWork,
+    goalsByStatus,
     verificationPending: verificationSummary.pending,
     completionBlockedByVerification,
     hasReportThread,
@@ -453,6 +589,20 @@ export function buildStatusSummary(
     readyForAutomation,
     autoContinueWithinGoal: settingsDoc.auto_continue_within_goal,
     continuationDecision: scopedResults.continuationDecision,
+  });
+  const automationState = resolveLocalAutomationState({
+    readyForAutomation,
+    continuationDecision: scopedResults.continuationDecision,
+    paused: state.paused,
+    needsHumanReview: state.needs_human_review,
+    cycleStatus: state.cycle_status,
+    completionBlockedByVerification,
+    openBlockerCount,
+    multipleActiveGoals: activeGoalCount > 1,
+    goalPointerMismatch,
+    actionableTasks,
+    pendingPlanningWork,
+    goalsByStatus,
   });
   const continuationReason = resolveContinuationReason({
     autoContinueState,
@@ -490,6 +640,7 @@ export function buildStatusSummary(
     has_recorded_run: summarySnapshot.hasRecordedRun,
     results_scope_note: scopedResults.resultsScopeNote,
     next_automation_reason: nextAutomationReason,
+    automation_state: automationState,
     auto_continue_state: autoContinueState,
     continuation_reason: continuationReason,
     closeout_policy: closeoutPolicy,
@@ -502,6 +653,8 @@ export function buildStatusSummary(
     remaining_ready: remainingReady,
     last_followup_summary: scopedResults.nextStepSummary,
     upgrade_state: options.upgradeState ?? null,
+    upgrade_blocking: isUpgradeBlocking(options.upgradeState ?? null),
+    upgrade_hint: buildUpgradeHint(options.upgradeState ?? null),
     cli_install_state: options.cliInstallState ?? null,
     results_summary: {
       planner_summary: scopedResults.plannerSummary,
@@ -554,9 +707,11 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     readyForAutomation = false;
     warnings.push({
       code: "no_actionable_work",
-      message: summary.completion_blocked_by_verification
-        ? `No further task is queued yet, but ${summary.verification_pending} verification axis/axes are still pending.`
-        : "No active goal work or proposal generation work is currently available.",
+      message: buildNoWorkReason({
+        goalsByStatus: summary.goals_by_status,
+        completionBlockedByVerification: summary.completion_blocked_by_verification,
+        verificationPending: summary.verification_pending,
+      }),
     });
   }
 
@@ -603,7 +758,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     pushUniqueWarning(
       warnings,
       "managed_advisory_drift",
-      "Managed repo-customized or runtime-state files differ from the latest product templates, but the drift is advisory only.",
+      "Managed repo-customized or runtime-state files differ from the latest product templates, but the drift is advisory only. Rebaseline with codex-autonomy rebaseline-managed --target <repo> when you want to accept the current repo-specific variant as the new baseline.",
     );
   } else if (upgradeState === "metadata_incomplete") {
     pushUniqueWarning(
@@ -792,6 +947,12 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     readyForAutomation,
     autoContinueWithinGoal: settingsDoc.auto_continue_within_goal,
   });
+  const automationState = resolveRuntimeAutomationState({
+    summaryAutomationState: summary.automation_state,
+    summaryAutoContinueState: summary.auto_continue_state,
+    readyForAutomation,
+    state,
+  });
   const continuationReason = resolveRuntimeContinuationReason({
     summaryAutoContinueState: summary.auto_continue_state,
     summaryContinuationReason: summary.continuation_reason,
@@ -805,8 +966,11 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     ready_for_automation: readyForAutomation,
     next_automation_ready: readyForAutomation,
     next_automation_reason: nextAutomationReason,
+    automation_state: automationState,
     auto_continue_state: autoContinueState,
     continuation_reason: continuationReason,
+    upgrade_blocking: isUpgradeBlocking(summary.upgrade_state),
+    upgrade_hint: buildUpgradeHint(summary.upgrade_state),
     warnings: warnings.length > 0 ? warnings : undefined,
   };
 

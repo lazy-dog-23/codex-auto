@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { commandSucceeded, runProcess } from "./process.js";
-import { isManagedControlSurfaceRelativePath } from "../shared/paths.js";
+import { isAutonomyRuntimeAllowlistedPath } from "../shared/paths.js";
 
 export interface WorktreeStatusSnapshot {
   dirty: boolean;
@@ -29,6 +29,13 @@ export interface WorktreeStateProbe extends WorktreeStatusSnapshot {
 export interface WorktreeStateProbeOptions {
   maxAttempts?: number;
   debounceMs?: number;
+}
+
+interface WorktreeProbeSnapshot extends WorktreeStatusSnapshot {
+  gitDir: string;
+  commonGitDir: string;
+  branch: string | null;
+  head: string | null;
 }
 
 export function normalizeGitStatusPath(pathValue: string): string {
@@ -74,7 +81,7 @@ export function classifyManagedControlSurfacePaths(statusLines: readonly string[
 
   for (const statusLine of statusLinesCopy) {
     for (const pathValue of extractGitStatusPaths(statusLine)) {
-      if (isManagedControlSurfaceRelativePath(pathValue)) {
+      if (isAutonomyRuntimeAllowlistedPath(pathValue)) {
         managedDirtyPaths.add(normalizeGitStatusPath(pathValue));
       } else {
         unmanagedDirtyPaths.add(normalizeGitStatusPath(pathValue));
@@ -101,21 +108,25 @@ export async function probeWorktreeState(
     return null;
   }
 
-  const metadata = await readRepositoryMetadata(repoRoot);
-  const status = await readStableStatusSnapshot(repoRoot, options);
+  const snapshot = await readStableWorktreeSnapshot(repoRoot, options);
 
   return {
     path: resolve(worktreePath),
     repoRoot,
-    gitDir: metadata.gitDir,
-    commonGitDir: metadata.commonGitDir,
-    branch: metadata.branch,
-    head: metadata.head,
-    ...status.snapshot,
-    stable: status.stable,
-    transient: status.transient,
-    reason: status.reason,
-    attempts: status.attempts,
+    gitDir: snapshot.snapshot.gitDir,
+    commonGitDir: snapshot.snapshot.commonGitDir,
+    branch: snapshot.snapshot.branch,
+    head: snapshot.snapshot.head,
+    dirty: snapshot.snapshot.dirty,
+    statusLines: snapshot.snapshot.statusLines,
+    normalizedStatusLines: snapshot.snapshot.normalizedStatusLines,
+    managedDirtyPaths: snapshot.snapshot.managedDirtyPaths,
+    unmanagedDirtyPaths: snapshot.snapshot.unmanagedDirtyPaths,
+    managedControlSurfaceOnly: snapshot.snapshot.managedControlSurfaceOnly,
+    stable: snapshot.stable,
+    transient: snapshot.transient,
+    reason: snapshot.reason,
+    attempts: snapshot.attempts,
   };
 }
 
@@ -129,12 +140,12 @@ async function readRepositoryRoot(worktreePath: string): Promise<string | null> 
   return root.length > 0 ? root : null;
 }
 
-async function readRepositoryMetadata(repoRoot: string): Promise<{
+function readRepositoryMetadata(repoRoot: string): {
   gitDir: string;
   commonGitDir: string;
   branch: string | null;
   head: string | null;
-}> {
+} {
   const gitDirResult = runProcess("git", ["rev-parse", "--git-dir"], { cwd: repoRoot });
   const commonGitDirResult = runProcess("git", ["rev-parse", "--git-common-dir"], { cwd: repoRoot });
   const branchResult = runProcess("git", ["branch", "--show-current"], { cwd: repoRoot });
@@ -152,11 +163,11 @@ async function readRepositoryMetadata(repoRoot: string): Promise<{
   };
 }
 
-async function readStableStatusSnapshot(
+async function readStableWorktreeSnapshot(
   repoRoot: string,
   options: WorktreeStateProbeOptions,
 ): Promise<{
-  snapshot: WorktreeStatusSnapshot;
+  snapshot: WorktreeProbeSnapshot;
   stable: boolean;
   transient: boolean;
   reason?: "transient_git_state";
@@ -165,12 +176,12 @@ async function readStableStatusSnapshot(
   const maxAttempts = Math.max(2, options.maxAttempts ?? 4);
   const debounceMs = Math.max(0, options.debounceMs ?? 25);
 
-  let previous: WorktreeStatusSnapshot | null = null;
+  let previous: WorktreeProbeSnapshot | null = null;
   let attempts = 0;
 
   while (attempts < maxAttempts) {
     attempts += 1;
-    const current = readStatusSnapshot(repoRoot);
+    const current = readWorktreeSnapshot(repoRoot);
     if (previous && snapshotsMatch(previous, current)) {
       return {
         snapshot: current,
@@ -187,7 +198,7 @@ async function readStableStatusSnapshot(
   }
 
   return {
-    snapshot: previous ?? readStatusSnapshot(repoRoot),
+    snapshot: previous ?? readWorktreeSnapshot(repoRoot),
     stable: false,
     transient: true,
     reason: "transient_git_state",
@@ -195,7 +206,8 @@ async function readStableStatusSnapshot(
   };
 }
 
-function readStatusSnapshot(repoRoot: string): WorktreeStatusSnapshot {
+function readWorktreeSnapshot(repoRoot: string): WorktreeProbeSnapshot {
+  const metadata = readRepositoryMetadata(repoRoot);
   const result = runProcess("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: repoRoot });
   const statusLines = commandSucceeded(result)
     ? result.stdout
@@ -204,11 +216,18 @@ function readStatusSnapshot(repoRoot: string): WorktreeStatusSnapshot {
         .filter(Boolean)
     : [];
 
-  return classifyManagedControlSurfacePaths(statusLines);
+  return {
+    ...metadata,
+    ...classifyManagedControlSurfacePaths(statusLines),
+  };
 }
 
-function snapshotsMatch(left: WorktreeStatusSnapshot, right: WorktreeStatusSnapshot): boolean {
+function snapshotsMatch(left: WorktreeProbeSnapshot, right: WorktreeProbeSnapshot): boolean {
   return (
+    left.gitDir === right.gitDir &&
+    left.commonGitDir === right.commonGitDir &&
+    left.branch === right.branch &&
+    left.head === right.head &&
     left.dirty === right.dirty &&
     left.managedControlSurfaceOnly === right.managedControlSurfaceOnly &&
     arrayEquals(left.normalizedStatusLines, right.normalizedStatusLines)

@@ -18,7 +18,7 @@ import { runMergeAutonomyBranch } from "../src/commands/merge-autonomy-branch.js
 import { runStatusCommand } from "../src/commands/status.js";
 import { runIntakeGoal } from "../src/commands/intake-goal.js";
 import { runUnblock } from "../src/commands/unblock.js";
-import { registerUpgradeManagedCommand } from "../src/commands/upgrade-managed.js";
+import { registerRebaselineManagedCommand, registerUpgradeManagedCommand } from "../src/commands/upgrade-managed.js";
 import { pathExists } from "../src/infra/json.js";
 import { inspectAutonomyCommitGate } from "../src/infra/git.js";
 import type { BlockersDocument, TasksDocument } from "../src/contracts/autonomy.js";
@@ -52,6 +52,7 @@ describe("command integration contracts", () => {
     expect(readme).toContain("codex-autonomy install --target <repoB>");
     expect(readme).toContain("codex-autonomy bind-thread --report-thread-id <thread-id>");
     expect(readme).toContain("codex-autonomy approve-proposal --goal-id <goalId>");
+    expect(readme).toContain("codex-autonomy rebaseline-managed --target <repo>");
     expect(readme).toContain("pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1");
     expect(readme).toContain("## 开发者回退");
     expect(readme).toContain("node tools/codex-supervisor/dist/cli.js <command>");
@@ -70,12 +71,13 @@ describe("command integration contracts", () => {
     await expect(pathExists(join(repoRoot, "scripts", "install-global.ps1"))).resolves.toBe(true);
   });
 
-  it("registers install and upgrade-managed exactly once in the shared CLI program", () => {
+  it("registers install, upgrade-managed, and rebaseline-managed exactly once in the shared CLI program", () => {
     const program = new Command();
 
     expect(() => {
       registerInstallCommand(program);
       registerUpgradeManagedCommand(program);
+      registerRebaselineManagedCommand(program);
     }).not.toThrow();
   });
 

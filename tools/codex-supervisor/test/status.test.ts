@@ -66,6 +66,7 @@ describe("status command", () => {
     expect(summary.latest_summary_reason).toBe("Heartbeat summary sent to the thread and Inbox.");
     expect(summary.has_recorded_run).toBe(true);
     expect(summary.results_scope_note).toBeNull();
+    expect(summary.automation_state).toBe("blocked");
     expect(summary.auto_continue_state).toBe("stopped");
     expect(summary.closeout_policy).toBeNull();
     expect(summary.verification_required).toBe(0);
@@ -183,6 +184,7 @@ describe("status command", () => {
     expect(summary.verification_passed).toBe(0);
     expect(summary.verification_pending).toBe(1);
     expect(summary.completion_blocked_by_verification).toBe(true);
+    expect(summary.automation_state).toBe("blocked");
     expect(summary.next_automation_reason).toContain("Verification closeout is still pending");
   });
 
@@ -265,6 +267,7 @@ describe("status command", () => {
     expect(summary.current_goal_id).toBe("goal-42");
     expect(summary.report_thread_id).toBe("thread-99");
     expect(summary.sprint_active).toBe(true);
+    expect(summary.automation_state).toBe("ready");
     expect(summary.results_summary?.worker_result).toBe("completed task-ready");
     expect(summary.auto_continue_state).toBe("running");
     expect(summary.continuation_reason).toBe("Ready for automation: active or planning work is available.");
@@ -350,6 +353,67 @@ describe("status command", () => {
     expect(summary.ready_for_automation).toBe(false);
     expect(summary.next_automation_ready).toBe(false);
     expect(summary.next_automation_reason).toBe("Bind report_thread_id from the originating thread before automation can run.");
+  });
+
+  it("marks completed goal queues as idle_completed instead of generic blocked", () => {
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-done",
+            title: "Completed Goal",
+            objective: "Finished work",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "completed",
+            run_mode: "cruise",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: null,
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: false,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-done", task_id: null, summary: "done", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-done", task_id: null, summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-done", task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-done/task): Done", review_status: null },
+        reporter: { status: "sent", goal_id: "goal-done", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+      },
+    );
+
+    expect(summary.ready_for_automation).toBe(false);
+    expect(summary.automation_state).toBe("idle_completed");
+    expect(summary.next_automation_reason).toBe("All approved goal work is complete. Automation is idle until a new goal or proposal is created.");
   });
 
   it("recovers the active goal when state.current_goal_id is missing", () => {

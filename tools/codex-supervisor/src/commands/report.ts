@@ -16,16 +16,23 @@ import { runStatusCommand } from "./status.js";
 
 const REPORT_BLOCKING_WARNING_CODES = new Set([
   "not_a_git_repo",
-  "dirty_repository",
+  "repo_dirty_unmanaged",
   "missing_background_worktree",
   "unsafe_background_worktree_path",
-  "dirty_background_worktree",
+  "background_dirty_unmanaged",
   "unexpected_background_repo",
   "unexpected_background_branch",
   "background_worktree_head_mismatch",
+  "transient_git_state",
   "active_cycle_lock",
   "stale_cycle_lock",
   "missing_report_thread_id",
+  "managed_diverged",
+  "managed_metadata_incomplete",
+  "upgrade_probe_failed",
+  "codex_process_probe_failed",
+  "codex_not_running",
+  "cli_missing",
 ]);
 
 interface ReportWarning {
@@ -57,6 +64,7 @@ export interface ReportResult {
   has_recorded_run: boolean;
   results_scope_note: string | null;
   next_automation_reason: string | null;
+  automation_state: string;
   auto_continue_state: string;
   continuation_reason: string | null;
   closeout_policy: string | null;
@@ -69,6 +77,8 @@ export interface ReportResult {
   remaining_ready: number;
   last_followup_summary: string | null;
   upgrade_state: string | null;
+  upgrade_blocking: boolean;
+  upgrade_hint: string | null;
   cli_install_state: string | null;
   runtime_reason: string | null;
   healthy_runtime: boolean;
@@ -132,6 +142,7 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     resultsScopeNote: scopedResults.resultsScopeNote,
     nextAutomationReason,
     autoContinueState: status.auto_continue_state,
+    automationState: status.automation_state,
     continuationReason: status.continuation_reason,
     closeoutPolicy: status.closeout_policy,
     verificationRequired: status.verification_required,
@@ -143,6 +154,8 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     remainingReady: status.remaining_ready,
     lastFollowupSummary: status.last_followup_summary,
     upgradeState: status.upgrade_state,
+    upgradeBlocking: status.upgrade_blocking,
+    upgradeHint: status.upgrade_hint,
     cliInstallState: status.cli_install_state,
     runtimeWarnings,
   });
@@ -171,6 +184,7 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     has_recorded_run: summarySnapshot.hasRecordedRun,
     results_scope_note: scopedResults.resultsScopeNote,
     next_automation_reason: nextAutomationReason,
+    automation_state: status.automation_state,
     auto_continue_state: status.auto_continue_state,
     continuation_reason: status.continuation_reason,
     closeout_policy: status.closeout_policy,
@@ -183,6 +197,8 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     remaining_ready: status.remaining_ready,
     last_followup_summary: status.last_followup_summary,
     upgrade_state: status.upgrade_state,
+    upgrade_blocking: status.upgrade_blocking,
+    upgrade_hint: status.upgrade_hint,
     cli_install_state: status.cli_install_state,
     runtime_reason: nextAutomationReason,
     healthy_runtime: healthyRuntime,
@@ -223,6 +239,7 @@ function buildReportMessage(
     hasRecordedRun: boolean;
     resultsScopeNote: string | null;
     nextAutomationReason: string | null;
+    automationState: string;
     autoContinueState: string;
     continuationReason: string | null;
     closeoutPolicy: string | null;
@@ -235,6 +252,8 @@ function buildReportMessage(
     remainingReady: number;
     lastFollowupSummary: string | null;
     upgradeState: string | null;
+    upgradeBlocking: boolean;
+    upgradeHint: string | null;
     cliInstallState: string | null;
     runtimeWarnings: readonly ReportWarning[];
   },
@@ -258,6 +277,7 @@ function buildReportMessage(
   const resultsScopePart = `results_scope_note=${formatNullableValue(options.resultsScopeNote)}`;
   const threadSummaryAtPart = `last_thread_summary_sent_at=${formatNullableValue(options.lastThreadSummarySentAt)}`;
   const inboxRunAtPart = `last_inbox_run_at=${formatNullableValue(options.lastInboxRunAt)}`;
+  const automationStatePart = `automation_state=${formatNullableValue(options.automationState)}`;
   const autoContinueStatePart = `auto_continue_state=${formatNullableValue(options.autoContinueState)}`;
   const continuationReasonPart = `continuation_reason=${formatNullableValue(options.continuationReason)}`;
   const closeoutPolicyPart = `closeout_policy=${formatNullableValue(options.closeoutPolicy)}`;
@@ -269,6 +289,8 @@ function buildReportMessage(
   const remainingReadyPart = `remaining_ready=${options.remainingReady}`;
   const lastFollowupSummaryPart = `last_followup_summary=${formatNullableValue(options.lastFollowupSummary)}`;
   const upgradeStatePart = `upgrade_state=${formatNullableValue(options.upgradeState)}`;
+  const upgradeBlockingPart = `upgrade_blocking=${options.upgradeBlocking ? "yes" : "no"}`;
+  const upgradeHintPart = `upgrade_hint=${formatNullableValue(options.upgradeHint)}`;
   const cliInstallStatePart = `cli_install_state=${formatNullableValue(options.cliInstallState)}`;
   const nextAutomationReasonPart = `next_automation_reason=${formatNullableValue(options.nextAutomationReason)}`;
   const runtimePart = formatRuntimeWarnings(options.runtimeWarnings);
@@ -290,6 +312,7 @@ function buildReportMessage(
     resultsScopePart,
     threadSummaryAtPart,
     inboxRunAtPart,
+    automationStatePart,
     autoContinueStatePart,
     continuationReasonPart,
     closeoutPolicyPart,
@@ -301,6 +324,8 @@ function buildReportMessage(
     remainingReadyPart,
     lastFollowupSummaryPart,
     upgradeStatePart,
+    upgradeBlockingPart,
+    upgradeHintPart,
     cliInstallStatePart,
     nextAutomationReasonPart,
     runtimePart,

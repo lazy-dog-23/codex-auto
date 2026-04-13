@@ -2,6 +2,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { runProcess, commandSucceeded } from './process.js';
 import { assertDirectPathBoundary, listDirectoryEntries, pathExists } from './json.js';
 import { extractGitStatusPaths, normalizeGitStatusPath, probeWorktreeState } from './worktree-state.js';
+import { isAutonomyRuntimeAllowlistedPath } from '../shared/paths.js';
 import type { CommandExecution } from './types.js';
 import type {
   BackgroundWorktreePreparation,
@@ -19,6 +20,11 @@ export const AUTONOMY_COMMIT_ALLOWLIST = [
   'scripts/',
 ] as const;
 
+export const AUTONOMY_COMMIT_AMBIENT_ALLOWLIST = [
+  'AGENTS.override.md',
+  'TEAM_GUIDE.md',
+] as const;
+
 export interface GitCommitGate {
   ok: boolean;
   repoRoot: string;
@@ -31,8 +37,10 @@ export interface GitCommitGate {
   branchDrift: boolean;
   allowlist: string[];
   allowedPaths: string[];
+  ignoredPaths: string[];
   blockedPaths: string[];
   allowedStatusLines: string[];
+  ignoredStatusLines: string[];
   blockedStatusLines: string[];
   statusLines: string[];
   reason: 'not_a_git_repo' | 'dirty_worktree' | 'branch_drift' | 'no_diff' | 'ready';
@@ -122,15 +130,28 @@ export function isAllowlistedAutonomyCommitPath(pathValue: string): boolean {
   ));
 }
 
+export function isAmbientAutonomyCommitPath(pathValue: string): boolean {
+  const normalizedPath = normalizeAllowlistPath(pathValue);
+  return AUTONOMY_COMMIT_AMBIENT_ALLOWLIST.some((entry) => (
+    entry.endsWith('/')
+      ? normalizedPath.startsWith(normalizeAllowlistPath(entry))
+      : normalizedPath === normalizeAllowlistPath(entry)
+  ));
+}
+
 function analyzeAutonomyCommitScope(statusLines: string[]): {
   allowedPaths: string[];
+  ignoredPaths: string[];
   blockedPaths: string[];
   allowedStatusLines: string[];
+  ignoredStatusLines: string[];
   blockedStatusLines: string[];
 } {
   const allowedPaths = new Set<string>();
+  const ignoredPaths = new Set<string>();
   const blockedPaths = new Set<string>();
   const allowedStatusLines: string[] = [];
+  const ignoredStatusLines: string[] = [];
   const blockedStatusLines: string[] = [];
 
   for (const statusLine of statusLines) {
@@ -140,27 +161,48 @@ function analyzeAutonomyCommitScope(statusLines: string[]): {
       continue;
     }
 
-    const statusAllowed = paths.every((pathValue) => isAllowlistedAutonomyCommitPath(pathValue));
-    if (statusAllowed) {
+    const hasBlockedPath = paths.some((pathValue) =>
+      !isAllowlistedAutonomyCommitPath(pathValue) && !isAmbientAutonomyCommitPath(pathValue) && !isAutonomyRuntimeAllowlistedPath(pathValue),
+    );
+    const hasAllowedPath = paths.some((pathValue) => isAllowlistedAutonomyCommitPath(pathValue));
+    const hasAmbientPath = paths.some((pathValue) => !isAllowlistedAutonomyCommitPath(pathValue) && isAutonomyRuntimeAllowlistedPath(pathValue));
+
+    if (!hasBlockedPath && hasAllowedPath) {
       allowedStatusLines.push(statusLine);
       for (const pathValue of paths) {
-        allowedPaths.add(normalizeGitStatusPath(pathValue));
+        if (isAllowlistedAutonomyCommitPath(pathValue)) {
+          allowedPaths.add(normalizeGitStatusPath(pathValue));
+        } else if (isAutonomyRuntimeAllowlistedPath(pathValue)) {
+          ignoredPaths.add(normalizeGitStatusPath(pathValue));
+        }
       }
       continue;
     }
 
-      blockedStatusLines.push(statusLine);
+    if (!hasBlockedPath && hasAmbientPath) {
+      ignoredStatusLines.push(statusLine);
       for (const pathValue of paths) {
-        if (!isAllowlistedAutonomyCommitPath(pathValue)) {
-          blockedPaths.add(normalizeGitStatusPath(pathValue));
+        if (isAutonomyRuntimeAllowlistedPath(pathValue)) {
+          ignoredPaths.add(normalizeGitStatusPath(pathValue));
         }
       }
+      continue;
     }
+
+    blockedStatusLines.push(statusLine);
+    for (const pathValue of paths) {
+      if (!isAllowlistedAutonomyCommitPath(pathValue) && !isAutonomyRuntimeAllowlistedPath(pathValue)) {
+        blockedPaths.add(normalizeGitStatusPath(pathValue));
+      }
+    }
+  }
 
   return {
     allowedPaths: [...allowedPaths],
+    ignoredPaths: [...ignoredPaths],
     blockedPaths: [...blockedPaths],
     allowedStatusLines,
+    ignoredStatusLines,
     blockedStatusLines,
   };
 }
@@ -198,15 +240,17 @@ export async function inspectAutonomyCommitGate(
       head: null,
       dirty: false,
       hasDiff: false,
-      commitReady: false,
-      branchDrift: true,
-      allowlist: [...AUTONOMY_COMMIT_ALLOWLIST],
-      allowedPaths: [],
-      blockedPaths: [],
-      allowedStatusLines: [],
-      blockedStatusLines: [],
-      statusLines: [],
-      reason: 'not_a_git_repo',
+        commitReady: false,
+        branchDrift: true,
+        allowlist: [...AUTONOMY_COMMIT_ALLOWLIST],
+        allowedPaths: [],
+        ignoredPaths: [],
+        blockedPaths: [],
+        allowedStatusLines: [],
+        ignoredStatusLines: [],
+        blockedStatusLines: [],
+        statusLines: [],
+        reason: 'not_a_git_repo',
     };
   }
 
@@ -214,13 +258,14 @@ export async function inspectAutonomyCommitGate(
   const statusLines = repoInfo.statusLines;
   const dirty = statusLines.length > 0;
   const branchDrift = currentBranch !== expectedBranch;
-  const { allowedPaths, blockedPaths, allowedStatusLines, blockedStatusLines } = analyzeAutonomyCommitScope(statusLines);
+  const { allowedPaths, ignoredPaths, blockedPaths, allowedStatusLines, ignoredStatusLines, blockedStatusLines } = analyzeAutonomyCommitScope(statusLines);
   const commitReady = !branchDrift && allowedPaths.length > 0 && blockedPaths.length === 0;
+  const hasCommitDiff = allowedPaths.length > 0;
 
   let reason: GitCommitGate['reason'] = 'ready';
   if (branchDrift) {
     reason = 'branch_drift';
-  } else if (dirty) {
+  } else if (hasCommitDiff || blockedPaths.length > 0) {
     reason = 'dirty_worktree';
   } else {
     reason = 'no_diff';
@@ -230,19 +275,21 @@ export async function inspectAutonomyCommitGate(
     ok: commitReady,
     repoRoot: repoInfo.path,
     expectedBranch,
-    currentBranch,
-    head: repoInfo.head,
-    dirty,
-    hasDiff: dirty,
-    commitReady,
-    branchDrift,
-    allowlist: [...AUTONOMY_COMMIT_ALLOWLIST],
-    allowedPaths,
-    blockedPaths,
-    allowedStatusLines,
-    blockedStatusLines,
-    statusLines,
-    reason,
+      currentBranch,
+      head: repoInfo.head,
+      dirty,
+      hasDiff: hasCommitDiff,
+      commitReady,
+      branchDrift,
+      allowlist: [...AUTONOMY_COMMIT_ALLOWLIST],
+      allowedPaths,
+      ignoredPaths,
+      blockedPaths,
+      allowedStatusLines,
+      ignoredStatusLines,
+      blockedStatusLines,
+      statusLines,
+      reason,
   };
 }
 

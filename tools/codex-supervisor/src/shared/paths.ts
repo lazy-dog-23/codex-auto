@@ -38,7 +38,17 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   "autonomy/schema/verification.schema.json",
 ] as const;
 
+const AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS = [
+  ...MANAGED_CONTROL_SURFACE_RELATIVE_PATHS,
+  "AGENTS.override.md",
+  "TEAM_GUIDE.md",
+] as const;
+
 const NORMALIZED_MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.map((relativePath) =>
+  normalizeManagedControlSurfacePath(relativePath),
+);
+
+const NORMALIZED_AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS = AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS.map((relativePath) =>
   normalizeManagedControlSurfacePath(relativePath),
 );
 
@@ -120,10 +130,21 @@ export function getManagedControlSurfaceRelativePaths(): string[] {
   return [...MANAGED_CONTROL_SURFACE_RELATIVE_PATHS];
 }
 
+export function getAutonomyRuntimeAllowlistRelativePaths(): string[] {
+  return [...AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS];
+}
+
 export function isManagedControlSurfaceRelativePath(pathValue: string): boolean {
   const normalized = normalizeManagedControlSurfacePath(pathValue);
   return NORMALIZED_MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.some((managedPath) =>
     normalized === managedPath || normalized.startsWith(`${managedPath}/`),
+  );
+}
+
+export function isAutonomyRuntimeAllowlistedPath(pathValue: string): boolean {
+  const normalized = normalizeManagedControlSurfacePath(pathValue);
+  return NORMALIZED_AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS.some((allowlistedPath) =>
+    normalized === allowlistedPath || normalized.startsWith(`${allowlistedPath}/`),
   );
 }
 

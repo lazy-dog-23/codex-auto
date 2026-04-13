@@ -168,7 +168,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       issues.push({
         severity: 'info',
         code: 'control_surface_dirty_only',
-        message: 'Repository only contains managed control-surface changes.',
+        message: 'Repository only contains allowlisted autonomy runtime file changes.',
         path: gitRepo.path,
       });
     } else {
@@ -217,7 +217,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
         issues.push({
           severity: 'info',
           code: 'background_dirty_allowlisted',
-          message: `Background worktree at ${backgroundPath} only contains allowlisted managed control-surface changes.`,
+          message: `Background worktree at ${backgroundPath} only contains allowlisted autonomy runtime file changes.`,
           path: backgroundPath,
         });
       } else {
@@ -320,7 +320,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       issues.push({
         severity: 'info',
         code: 'managed_advisory_drift',
-        message: 'Managed repo-customized or runtime-state files differ from the latest product templates, but the drift is advisory only.',
+        message: 'Managed repo-customized or runtime-state files differ from the latest product templates, but the drift is advisory only. Rebaseline with codex-autonomy rebaseline-managed --target <repo> when you want to accept the current repo-specific variant as the new baseline.',
         path: join(controlRoot, 'autonomy', 'install.json'),
       });
     } else if (upgradeState.state === 'metadata_incomplete') {
