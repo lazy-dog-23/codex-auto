@@ -10,6 +10,13 @@ import type {
 
 export const DEFAULT_BACKGROUND_WORKTREE_BRANCH = 'codex/background';
 export const DEFAULT_AUTONOMY_BRANCH = 'codex/autonomy';
+export const AUTONOMY_COMMIT_ALLOWLIST = [
+  'AGENTS.md',
+  '.agents/skills/',
+  '.codex/',
+  'autonomy/',
+  'scripts/',
+] as const;
 
 export interface GitCommitGate {
   ok: boolean;
@@ -19,7 +26,13 @@ export interface GitCommitGate {
   head: string | null;
   dirty: boolean;
   hasDiff: boolean;
+  commitReady: boolean;
   branchDrift: boolean;
+  allowlist: string[];
+  allowedPaths: string[];
+  blockedPaths: string[];
+  allowedStatusLines: string[];
+  blockedStatusLines: string[];
   statusLines: string[];
   reason: 'not_a_git_repo' | 'dirty_worktree' | 'branch_drift' | 'no_diff' | 'ready';
 }
@@ -111,6 +124,98 @@ export function stageAllRepositoryChanges(repoRoot: string): CommandExecution {
   return runProcess('git', ['add', '-A'], { cwd: repoRoot });
 }
 
+function normalizeStatusPath(pathValue: string): string {
+  return pathValue.replace(/^"+|"+$/g, '').replace(/\\/g, '/').trim();
+}
+
+function normalizeAllowlistPath(pathValue: string): string {
+  return normalizeStatusPath(pathValue).toLowerCase();
+}
+
+function extractStatusPaths(statusLine: string): string[] {
+  if (statusLine.length < 4) {
+    return [];
+  }
+
+  const content = statusLine.slice(3).trim();
+  if (!content) {
+    return [];
+  }
+
+  const paths = content.includes(' -> ')
+    ? content.split(' -> ').map((part) => normalizeStatusPath(part))
+    : [normalizeStatusPath(content)];
+
+  return paths.filter(Boolean);
+}
+
+export function isAllowlistedAutonomyCommitPath(pathValue: string): boolean {
+  const normalizedPath = normalizeAllowlistPath(pathValue);
+  return AUTONOMY_COMMIT_ALLOWLIST.some((entry) => (
+    entry.endsWith('/')
+      ? normalizedPath.startsWith(normalizeAllowlistPath(entry))
+      : normalizedPath === normalizeAllowlistPath(entry)
+  ));
+}
+
+function analyzeAutonomyCommitScope(statusLines: string[]): {
+  allowedPaths: string[];
+  blockedPaths: string[];
+  allowedStatusLines: string[];
+  blockedStatusLines: string[];
+} {
+  const allowedPaths = new Set<string>();
+  const blockedPaths = new Set<string>();
+  const allowedStatusLines: string[] = [];
+  const blockedStatusLines: string[] = [];
+
+  for (const statusLine of statusLines) {
+    const paths = extractStatusPaths(statusLine);
+    if (paths.length === 0) {
+      blockedStatusLines.push(statusLine);
+      continue;
+    }
+
+    const statusAllowed = paths.every((pathValue) => isAllowlistedAutonomyCommitPath(pathValue));
+    if (statusAllowed) {
+      allowedStatusLines.push(statusLine);
+      for (const pathValue of paths) {
+        allowedPaths.add(normalizeStatusPath(pathValue));
+      }
+      continue;
+    }
+
+    blockedStatusLines.push(statusLine);
+    for (const pathValue of paths) {
+      if (!isAllowlistedAutonomyCommitPath(pathValue)) {
+        blockedPaths.add(normalizeStatusPath(pathValue));
+      }
+    }
+  }
+
+  return {
+    allowedPaths: [...allowedPaths],
+    blockedPaths: [...blockedPaths],
+    allowedStatusLines,
+    blockedStatusLines,
+  };
+}
+
+export function stageAllowlistedRepositoryChanges(repoRoot: string, allowedPaths: string[]): CommandExecution {
+  if (allowedPaths.length === 0) {
+    return {
+      command: 'git',
+      args: ['add', '-A'],
+      cwd: repoRoot,
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    };
+  }
+
+  return runProcess('git', ['add', '-A', '--', ...allowedPaths], { cwd: repoRoot });
+}
+
 export function commitStagedRepositoryChanges(repoRoot: string, commitMessage: string): CommandExecution {
   return runProcess('git', ['commit', '-m', commitMessage], { cwd: repoRoot });
 }
@@ -129,7 +234,13 @@ export async function inspectAutonomyCommitGate(
       head: null,
       dirty: false,
       hasDiff: false,
+      commitReady: false,
       branchDrift: true,
+      allowlist: [...AUTONOMY_COMMIT_ALLOWLIST],
+      allowedPaths: [],
+      blockedPaths: [],
+      allowedStatusLines: [],
+      blockedStatusLines: [],
       statusLines: [],
       reason: 'not_a_git_repo',
     };
@@ -139,6 +250,8 @@ export async function inspectAutonomyCommitGate(
   const statusLines = repoInfo.statusLines;
   const dirty = statusLines.length > 0;
   const branchDrift = currentBranch !== expectedBranch;
+  const { allowedPaths, blockedPaths, allowedStatusLines, blockedStatusLines } = analyzeAutonomyCommitScope(statusLines);
+  const commitReady = !branchDrift && allowedPaths.length > 0 && blockedPaths.length === 0;
 
   let reason: GitCommitGate['reason'] = 'ready';
   if (branchDrift) {
@@ -150,14 +263,20 @@ export async function inspectAutonomyCommitGate(
   }
 
   return {
-    ok: reason === 'dirty_worktree',
+    ok: commitReady,
     repoRoot: repoInfo.path,
     expectedBranch,
     currentBranch,
     head: repoInfo.head,
     dirty,
     hasDiff: dirty,
+    commitReady,
     branchDrift,
+    allowlist: [...AUTONOMY_COMMIT_ALLOWLIST],
+    allowedPaths,
+    blockedPaths,
+    allowedStatusLines,
+    blockedStatusLines,
     statusLines,
     reason,
   };
@@ -220,7 +339,24 @@ export async function createAutonomyCommit(
     };
   }
 
-  const stageResult = stageAllRepositoryChanges(gate.repoRoot);
+  if (gate.blockedPaths.length > 0) {
+    return {
+      ok: false,
+      repoRoot: gate.repoRoot,
+      expectedBranch,
+      currentBranch: gate.currentBranch,
+      headBefore: gate.head,
+      headAfter: gate.head,
+      commitHash: null,
+      committed: false,
+      skippedReason: null,
+      stageResult: null,
+      commitResult: null,
+      message: `Refusing to create an autonomy commit because the workspace contains non-allowlisted changes: ${gate.blockedPaths.join(', ')}. Allowlisted paths are ${gate.allowlist.join(', ')}.`,
+    };
+  }
+
+  const stageResult = stageAllowlistedRepositoryChanges(gate.repoRoot, gate.allowedPaths);
   if (!commandSucceeded(stageResult)) {
     return {
       ok: false,

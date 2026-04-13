@@ -161,10 +161,16 @@ function isLockProcessGone(pid: number): boolean {
     process.kill(pid, 0);
     return false;
   } catch (error) {
-    if (error instanceof Error && 'code' in error) {
-      return true;
+    if (error && typeof error === "object" && "code" in error) {
+      const code = (error as { code?: string }).code;
+      if (code === "ESRCH") {
+        return true;
+      }
+
+      return false;
     }
-    return true;
+
+    return false;
   }
 }
 

@@ -150,6 +150,83 @@ describe("status command", () => {
     expect(summary.next_automation_reason).toBe("Ready for automation: active or planning work is available.");
   });
 
+  it("requires report_thread_id before automation can run", () => {
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [
+          {
+            id: "task-ready",
+            goal_id: "goal-42",
+            title: "Ready task",
+            status: "ready",
+            priority: "P1",
+            depends_on: [],
+            acceptance: [],
+            file_hints: [],
+            retry_count: 0,
+            last_error: null,
+            updated_at: "2026-01-06T00:00:00Z",
+            commit_hash: null,
+            review_status: "not_reviewed",
+          },
+        ],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-42",
+            title: "Goal 42",
+            objective: "Ship it",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "active",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: "goal-42",
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: "sprint",
+        last_planner_run_at: "2026-01-05T00:00:00Z",
+        last_worker_run_at: "2026-01-05T02:00:00Z",
+        last_result: "planned",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: null,
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "planned", goal_id: "goal-42", task_id: null, summary: "planned next task", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: "completed task-ready", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-42/task-ready): Ready task", review_status: null },
+        reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      },
+    );
+
+    expect(summary.ready_for_automation).toBe(false);
+    expect(summary.next_automation_ready).toBe(false);
+    expect(summary.next_automation_reason).toBe("Bind report_thread_id from the originating thread before automation can run.");
+  });
+
   it("reads result summaries from autonomy/results.json", async () => {
     const workspace = await makeTempWorkspace();
     await mkdir(join(workspace, "autonomy", "locks"), { recursive: true });

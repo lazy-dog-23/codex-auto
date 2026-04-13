@@ -13,6 +13,7 @@ Use this skill when you need to plan the next automation cycle for the repo cont
 - Keep at most 5 tasks in `ready` for the current active goal.
 - If a goal is still `awaiting_confirmation`, update only `autonomy/proposals.json` and do not materialize tasks yet.
 - If the goal is `approved` or `active`, rebalance only inside that approved boundary.
+- If a worker, reviewer, or sprint loop leaves a follow-up suggestion that still fits the approved goal, convert it into proposal or task queue adjustments.
 - Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.
 - Write `autonomy/*.json` via atomic temp-file then rename semantics.
 - Update only autonomy state, proposal, result, and journal entries.
@@ -23,6 +24,7 @@ Use this skill when you need to plan the next automation cycle for the repo cont
 - Do not take implementation ownership of a worker task.
 - Do not bypass blockers or dependencies.
 - Do not expand scope, change acceptance, or relax constraints without a blocker.
+- If a suggested next step would cross the approved goal boundary, write a blocker instead of promoting it.
 - If the next step is unclear, write a blocker and stop.
 
 ## Output

@@ -265,7 +265,7 @@ describe("git/worktree integration", () => {
     expect(doctor.issues.some((issue) => issue.code === "unsafe_background_worktree_path")).toBe(true);
   });
 
-  it("detects commit gates, skips no-diff commits, and creates controlled autonomy commits", async () => {
+  it("detects commit gates, skips no-diff commits, and creates controlled autonomy commits for allowlisted paths", async () => {
     const workspace = await makeTempWorkspace();
     const gitHome = join(workspace, ".git-home");
     const gitConfigGlobal = join(gitHome, "gitconfig");
@@ -302,13 +302,17 @@ describe("git/worktree integration", () => {
     expect(noDiffCommit.committed).toBe(false);
     expect(noDiffCommit.skippedReason).toBe("no_diff");
 
-    await appendFile(join(workspace, "README.md"), "\n<!-- autonomy commit test -->\n", "utf8");
+    await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- autonomy commit test -->\n", "utf8");
 
     const readyGate = await inspectAutonomyCommitGate(workspace);
     expect(readyGate.reason).toBe("dirty_worktree");
     expect(readyGate.ok).toBe(true);
+    expect(readyGate.commitReady).toBe(true);
+    expect(readyGate.allowedPaths).toContain("autonomy/journal.md");
+    expect(readyGate.blockedPaths).toHaveLength(0);
+    expect(readyGate.allowedStatusLines.some((line) => line.includes("autonomy/journal.md"))).toBe(true);
 
-    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-1/task-1): update README");
+    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-1/task-1): update journal");
     expect(commitResult.ok).toBe(true);
     expect(commitResult.committed).toBe(true);
     expect(commitResult.commitHash).toBeTruthy();
@@ -318,6 +322,52 @@ describe("git/worktree integration", () => {
     const branchAfterCommit = await getCurrentGitBranch(workspace);
     expect(branchAfterCommit).toBe(DEFAULT_AUTONOMY_BRANCH);
     expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
+  });
+
+  it("refuses to create autonomy commits when non-allowlisted changes are present", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    const bootstrap = await runBootstrapCommand(workspace);
+    expect(bootstrap.ok).toBe(true);
+
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- allowlisted change -->\n", "utf8");
+    await appendFile(join(workspace, "README.md"), "\n<!-- blocked change -->\n", "utf8");
+
+    const headBefore = runGit(workspace, ["rev-parse", "HEAD"]);
+    const gate = await inspectAutonomyCommitGate(workspace);
+    expect(gate.reason).toBe("dirty_worktree");
+    expect(gate.ok).toBe(false);
+    expect(gate.commitReady).toBe(false);
+    expect(gate.allowedPaths).toContain("autonomy/journal.md");
+    expect(gate.blockedPaths).toContain("README.md");
+    expect(gate.blockedStatusLines.some((line) => line.includes("README.md"))).toBe(true);
+
+    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-2/task-1): blocked");
+    expect(commitResult.ok).toBe(false);
+    expect(commitResult.committed).toBe(false);
+    expect(commitResult.stageResult).toBeNull();
+    expect(commitResult.commitResult).toBeNull();
+    expect(commitResult.message).toContain("non-allowlisted changes");
+    expect(commitResult.message).toContain("README.md");
+    expect(commitResult.message).toContain("autonomy/");
+
+    const headAfter = runGit(workspace, ["rev-parse", "HEAD"]);
+    expect(headAfter).toBe(headBefore);
   });
 
   it("runs review gating and blocks dirty or branch-drift states before review.ps1", async () => {
@@ -351,13 +401,23 @@ describe("git/worktree integration", () => {
     expect(cleanReview.issues).toHaveLength(0);
     expect(cleanReview.review_script.exitCode).toBe(0);
 
-    await appendFile(join(workspace, "README.md"), "\n<!-- review dirty gate -->\n", "utf8");
+    await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- review allowlisted gate -->\n", "utf8");
     const dirtyReview = await runReviewCommand(workspace);
     expect(dirtyReview.ok).toBe(true);
     expect(dirtyReview.dirty).toBe(true);
     expect(dirtyReview.commit_ready).toBe(true);
     expect(dirtyReview.commit_skipped_reason).toBeNull();
     expect(dirtyReview.issues).toHaveLength(0);
+
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "stabilize before blocked-scope test"]);
+
+    await appendFile(join(workspace, "README.md"), "\n<!-- review blocked gate -->\n", "utf8");
+    const blockedReview = await runReviewCommand(workspace);
+    expect(blockedReview.ok).toBe(false);
+    expect(blockedReview.commit_ready).toBe(false);
+    expect(blockedReview.commit_skipped_reason).toBe("non_allowlisted_changes");
+    expect(blockedReview.issues.some((issue) => issue.code === "non_allowlisted_changes")).toBe(true);
 
     runGit(workspace, ["add", "-A"]);
     runGit(workspace, ["commit", "-m", "stabilize before drift test"]);

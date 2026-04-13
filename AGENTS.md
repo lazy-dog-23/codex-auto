@@ -23,7 +23,14 @@
 - Sprint runner 的 heartbeat 只是唤醒间隔，不是任务时长；每次唤醒只推进单个任务闭环，当前 goal 完成且存在下一个 approved goal 时同轮直接接续。
 - `sprint_active=false` 或 `paused=true` 时只做状态检查和汇报，不做新的 plan/work/review 推进。
 - Sprint runner 遇到 blocker、review_pending 或无任务时停下。
+- Worker、Reviewer 或 Sprint runner 如果生成了“下一步建议”，只允许目标内 follow-up 自动入队；一旦改变验收、约束或范围，必须写 blocker 等线程确认。
 - 非 Git 目录允许 `bootstrap`，但不允许进入可运行 automation 态。
+
+## 线程入口
+
+- 原线程是唯一操作入口，`report_thread_id` 是所有摘要和异常回传的锚点。
+- 线程内的自然语言动作固定收口为：`把 auto 装进当前项目`、`目标是……`、`确认提案`、`用冲刺模式推进这个目标`、`用巡航模式推进这个目标`、`汇报当前情况`、`暂停当前目标`、`继续当前目标`、`处理下一个目标`、`合并自治分支`。
+- `goal.md` 只镜像当前 active goal；真正的目标队列和批准边界以 `goals.json`、`proposals.json`、`tasks.json` 为准。
 
 ## Skills
 

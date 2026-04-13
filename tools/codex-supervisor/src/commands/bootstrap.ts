@@ -102,7 +102,6 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
     path.dirname(reviewSkillFile),
     path.dirname(reportSkillFile),
     path.dirname(sprintSkillFile),
-    paths.cliDir,
   ];
 
   for (const directory of repoDirectories) {

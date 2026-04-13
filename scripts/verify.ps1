@@ -172,6 +172,14 @@ function Test-StateDocument {
     )) {
         Assert-PropertyExists -Item $state -Name $key -Path $Path
     }
+    if ($state.PSObject.Properties.Name -contains 'last_thread_summary_sent_at' -and $null -ne $state.last_thread_summary_sent_at) {
+        $threadSummarySentAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$state.last_thread_summary_sent_at, [ref]$threadSummarySentAt)) "Invalid last_thread_summary_sent_at in $Path."
+    }
+    if ($state.PSObject.Properties.Name -contains 'last_inbox_run_at' -and $null -ne $state.last_inbox_run_at) {
+        $inboxRunAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$state.last_inbox_run_at, [ref]$inboxRunAt)) "Invalid last_inbox_run_at in $Path."
+    }
 
     Assert-True (@('idle','planning','working','blocked','review_pending') -contains [string]$state.cycle_status) "Invalid cycle_status in $Path."
     Assert-True ($null -eq $state.run_mode -or @('sprint','cruise') -contains [string]$state.run_mode) "Invalid run_mode in $Path."
@@ -295,6 +303,17 @@ function Test-ResultsDocument {
     param([Parameter(Mandatory)][string]$Path)
     $results = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     Assert-PropertyExists -Item $results -Name 'version' -Path $Path
+    if ($results.PSObject.Properties.Name -contains 'last_thread_summary_sent_at' -and $null -ne $results.last_thread_summary_sent_at) {
+        $threadSummarySentAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$results.last_thread_summary_sent_at, [ref]$threadSummarySentAt)) "Invalid last_thread_summary_sent_at in $Path."
+    }
+    if ($results.PSObject.Properties.Name -contains 'last_inbox_run_at' -and $null -ne $results.last_inbox_run_at) {
+        $inboxRunAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$results.last_inbox_run_at, [ref]$inboxRunAt)) "Invalid last_inbox_run_at in $Path."
+    }
+    if ($results.PSObject.Properties.Name -contains 'last_summary_kind') {
+        Assert-True ($null -eq $results.last_summary_kind -or @('normal_success','thread_summary','immediate_exception','goal_transition') -contains [string]$results.last_summary_kind) "Invalid last_summary_kind in $Path."
+    }
 
     foreach ($entryName in @('planner','worker','review','commit','reporter')) {
         Assert-PropertyExists -Item $results -Name $entryName -Path $Path

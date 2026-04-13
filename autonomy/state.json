@@ -14,5 +14,7 @@
   "autonomy_branch": "codex/autonomy",
   "sprint_active": false,
   "paused": false,
-  "pause_reason": null
+  "pause_reason": null,
+  "last_thread_summary_sent_at": null,
+  "last_inbox_run_at": null
 }

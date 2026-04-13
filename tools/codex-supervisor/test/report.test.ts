@@ -162,6 +162,8 @@ describe("report command", () => {
     results.commit.task_id = "task-beta-1";
     results.commit.hash = "def456";
     results.commit.message = "autonomy(goal-beta/task-beta-1): Kick off the next goal";
+    results.last_summary_kind = "goal_transition";
+    results.last_summary_reason = "The previous goal completed and the next approved goal is active.";
 
     await writeControlPlaneFiles(workspace, { goals, tasks, state, blockers, results });
 
@@ -183,5 +185,86 @@ describe("report command", () => {
     expect(report.message).toContain("commit=def456:autonomy(goal-beta/task-beta-1): Kick off the next goal");
     expect(report.message).toContain("paused=no");
     expect(report.message).toContain("runtime=warning[not_a_git_repo]");
+  });
+
+  it("keeps steady-state summaries out of goal_transition even when history already contains completed goals", async () => {
+    const goals = clone(readJsonFixture<GoalsDocument>("goals.sample.json"));
+    const tasks = clone(readJsonFixture<TasksDocument>("tasks.sample.json"));
+    const state = clone(readJsonFixture<AutonomyState>("state.sample.json"));
+    const blockers = clone(readJsonFixture<BlockersDocument>("blockers.sample.json"));
+    const results = clone(readJsonFixture<AutonomyResults>("results.sample.json"));
+    const workspace = await makeTempWorkspace();
+
+    goals.goals = [
+      {
+        ...goals.goals[0]!,
+        id: "goal-old",
+        title: "Historical completed goal",
+        status: "completed",
+        completed_at: "2026-01-07T10:00:00Z",
+      },
+      {
+        ...goals.goals[1]!,
+        id: "goal-steady",
+        title: "Steady active goal",
+        status: "active",
+        run_mode: "cruise",
+        approved_at: "2026-01-07T10:01:00Z",
+      },
+    ];
+    tasks.tasks = [
+      {
+        ...tasks.tasks[0]!,
+        id: "task-steady-1",
+        goal_id: "goal-steady",
+        title: "Continue steady work",
+        status: "ready",
+        priority: "P1",
+        updated_at: "2026-01-07T10:02:00Z",
+        commit_hash: null,
+        review_status: "not_reviewed",
+      },
+    ];
+    state.current_goal_id = "goal-steady";
+    state.current_task_id = null;
+    state.run_mode = "cruise";
+    state.paused = false;
+    state.pause_reason = null;
+    blockers.blockers = [];
+    results.last_summary_kind = "normal_success";
+    results.last_summary_reason = "The latest run completed successfully and is waiting for summary handling.";
+    results.worker.goal_id = "goal-steady";
+    results.worker.task_id = "task-steady-1";
+    results.worker.summary = "Steady-state work completed.";
+
+    await writeControlPlaneFiles(workspace, { goals, tasks, state, blockers, results });
+
+    const report = await runReport(workspace);
+
+    expect(report.goal_transition).toBeNull();
+    expect(report.latest_summary_kind).toBe("normal_success");
+    expect(report.latest_summary_reason).toBe("The latest run completed successfully and is waiting for summary handling.");
+    expect(report.message).toContain("goal_transition=none");
+  });
+
+  it("treats a missing report_thread_id as a blocking runtime issue when work exists", async () => {
+    const goals = clone(readJsonFixture<GoalsDocument>("goals.sample.json"));
+    const tasks = clone(readJsonFixture<TasksDocument>("tasks.sample.json"));
+    const state = clone(readJsonFixture<AutonomyState>("state.sample.json"));
+    const blockers = clone(readJsonFixture<BlockersDocument>("blockers.sample.json"));
+    const results = clone(readJsonFixture<AutonomyResults>("results.sample.json"));
+    const workspace = await makeTempWorkspace();
+
+    state.report_thread_id = null;
+    state.open_blocker_count = 0;
+    blockers.blockers = [];
+
+    await writeControlPlaneFiles(workspace, { goals, tasks, state, blockers, results });
+
+    const report = await runReport(workspace);
+
+    expect(report.healthy_runtime).toBe(false);
+    expect(report.runtime_warnings.some((warning) => warning.code === "missing_report_thread_id")).toBe(true);
+    expect(report.runtime_reason).toContain("report_thread_id");
   });
 });

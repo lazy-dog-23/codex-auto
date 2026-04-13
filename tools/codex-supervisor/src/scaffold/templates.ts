@@ -25,7 +25,14 @@ export function getAgentsMarkdown(): string {
     "- Sprint runner 的 heartbeat 只是唤醒间隔，不是任务时长；每次唤醒只推进单个任务闭环，当前 goal 完成且存在下一个 approved goal 时同轮直接接续。",
     "- `sprint_active=false` 或 `paused=true` 时只做状态检查和汇报，不做新的 plan/work/review 推进。",
     "- Sprint runner 遇到 blocker、review_pending 或无任务时停下。",
+    "- Worker、Reviewer 或 Sprint runner 如果生成了“下一步建议”，只允许目标内 follow-up 自动入队；一旦改变验收、约束或范围，必须写 blocker 等线程确认。",
     "- 非 Git 目录允许 `bootstrap`，但不允许进入可运行 automation 态。",
+    "",
+    "## 线程入口",
+    "",
+    "- 原线程是唯一操作入口，`report_thread_id` 是所有摘要和异常回传的锚点。",
+    "- 线程内的自然语言动作固定收口为：`把 auto 装进当前项目`、`目标是……`、`确认提案`、`用冲刺模式推进这个目标`、`用巡航模式推进这个目标`、`汇报当前情况`、`暂停当前目标`、`继续当前目标`、`处理下一个目标`、`合并自治分支`。",
+    "- `goal.md` 只镜像当前 active goal；真正的目标队列和批准边界以 `goals.json`、`proposals.json`、`tasks.json` 为准。",
     "",
     "## Skills",
     "",
@@ -59,6 +66,7 @@ export function getAutonomyPlanSkillMarkdown(): string {
     "- Keep at most 5 tasks in `ready` for the current active goal.",
     "- If a goal is still `awaiting_confirmation`, update only `autonomy/proposals.json` and do not materialize tasks yet.",
     "- If the goal is `approved` or `active`, rebalance only inside that approved boundary.",
+    "- If a worker, reviewer, or sprint loop leaves a follow-up suggestion that still fits the approved goal, convert it into proposal or task queue adjustments.",
     "- Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.",
     "- Write `autonomy/*.json` via atomic temp-file then rename semantics.",
     "- Update only autonomy state, proposal, result, and journal entries.",
@@ -69,6 +77,7 @@ export function getAutonomyPlanSkillMarkdown(): string {
     "- Do not take implementation ownership of a worker task.",
     "- Do not bypass blockers or dependencies.",
     "- Do not expand scope, change acceptance, or relax constraints without a blocker.",
+    "- If a suggested next step would cross the approved goal boundary, write a blocker instead of promoting it.",
     "- If the next step is unclear, write a blocker and stop.",
     "",
     "## Output",
@@ -133,6 +142,7 @@ export function getAutonomyIntakeSkillMarkdown(): string {
     "- Read the current `autonomy/goal.md` and existing journal entries before writing anything.",
     "- Turn the user request into a concise objective, constraints, and success criteria.",
     "- Keep the intake focused on the current repository and current thread.",
+    "- Treat thread phrases like `目标是……` as goal intake, and leave `确认提案` or mode changes to their dedicated command paths.",
     "- Update only the repo-local intake artifacts that already exist.",
     "",
     "## Guardrails",
@@ -158,13 +168,14 @@ export function getAutonomyReviewSkillMarkdown(): string {
     "",
     "- Read the current goal, task, and latest verification context.",
     "- Run `scripts/review.ps1` and interpret the result in plain language.",
-    "- Record whether the change is acceptable or needs follow-up.",
+    "- Record whether the change is acceptable or needs follow-up, and leave a concise next-step suggestion when the follow-up stays inside the approved goal.",
     "- Keep the review bounded to the current task.",
     "",
     "## Guardrails",
     "",
     "- Do not broaden the scope into new implementation work.",
     "- Do not replace verification with a manual eyeball check unless the script already does that.",
+    "- If the suggested next step would change acceptance, constraints, or scope, write a blocker instead of carrying it forward.",
     "- Do not continue after a genuine blocker.",
   ].join("\n");
 }
@@ -183,7 +194,8 @@ export function getAutonomyReportSkillMarkdown(): string {
     "## Responsibilities",
     "",
     "- Read the latest autonomy state, recent verification result, and journal entry.",
-    "- Summarize the current goal, current task, latest verify/review outcome, and blockers.",
+    "- Summarize the current goal, current task, latest verify/review outcome, latest commit, blockers, and why the loop is idle when nothing ran.",
+    "- Bind every summary to `report_thread_id`; treat the originating thread as the sole operator-facing surface.",
     "- Treat normal success as a heartbeat summary, and surface blocked, review_pending, commit failure, or other failure states immediately.",
     "- Keep the report short and actionable.",
     "",
@@ -214,6 +226,7 @@ export function getAutonomySprintSkillMarkdown(): string {
     "- When sprint_active is false or paused is true, keep the loop to a status check and report, then stop.",
     "- Move through plan, work, review, and report in a single bounded pass.",
     "- When the current goal completes and another approved goal exists, continue in the same loop instead of waiting for the next heartbeat.",
+    "- If a task finishes and the next step still belongs to the approved goal set, leave a concise follow-up suggestion for the next planning pass or immediate continuation.",
     "- Stop when sprint_active is false, paused is true, the goal is blocked, or there is nothing eligible to do.",
     "",
     "## Guardrails",
@@ -221,6 +234,7 @@ export function getAutonomySprintSkillMarkdown(): string {
     "- Do not pick up a second task in the same loop.",
     "- Do not keep running after a blocker, review_pending condition, commit failure, or pause.",
     "- Do not broaden the goal beyond its approved boundaries.",
+    "- If the suggested next step would change acceptance, constraints, or scope, write a blocker instead of continuing.",
   ].join("\n");
 }
 
@@ -481,6 +495,14 @@ function Test-StateDocument {
     )) {
         Assert-PropertyExists -Item $state -Name $key -Path $Path
     }
+    if ($state.PSObject.Properties.Name -contains 'last_thread_summary_sent_at' -and $null -ne $state.last_thread_summary_sent_at) {
+        $threadSummarySentAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$state.last_thread_summary_sent_at, [ref]$threadSummarySentAt)) "Invalid last_thread_summary_sent_at in $Path."
+    }
+    if ($state.PSObject.Properties.Name -contains 'last_inbox_run_at' -and $null -ne $state.last_inbox_run_at) {
+        $inboxRunAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$state.last_inbox_run_at, [ref]$inboxRunAt)) "Invalid last_inbox_run_at in $Path."
+    }
 
     Assert-True (@('idle','planning','working','blocked','review_pending') -contains [string]$state.cycle_status) "Invalid cycle_status in $Path."
     Assert-True ($null -eq $state.run_mode -or @('sprint','cruise') -contains [string]$state.run_mode) "Invalid run_mode in $Path."
@@ -604,6 +626,17 @@ function Test-ResultsDocument {
     param([Parameter(Mandatory)][string]$Path)
     $results = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     Assert-PropertyExists -Item $results -Name 'version' -Path $Path
+    if ($results.PSObject.Properties.Name -contains 'last_thread_summary_sent_at' -and $null -ne $results.last_thread_summary_sent_at) {
+        $threadSummarySentAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$results.last_thread_summary_sent_at, [ref]$threadSummarySentAt)) "Invalid last_thread_summary_sent_at in $Path."
+    }
+    if ($results.PSObject.Properties.Name -contains 'last_inbox_run_at' -and $null -ne $results.last_inbox_run_at) {
+        $inboxRunAt = [datetime]::MinValue
+        Assert-True ([DateTime]::TryParse([string]$results.last_inbox_run_at, [ref]$inboxRunAt)) "Invalid last_inbox_run_at in $Path."
+    }
+    if ($results.PSObject.Properties.Name -contains 'last_summary_kind') {
+        Assert-True ($null -eq $results.last_summary_kind -or @('normal_success','thread_summary','immediate_exception','goal_transition') -contains [string]$results.last_summary_kind) "Invalid last_summary_kind in $Path."
+    }
 
     foreach ($entryName in @('planner','worker','review','commit','reporter')) {
         Assert-PropertyExists -Item $results -Name $entryName -Path $Path
@@ -962,27 +995,31 @@ export function getReadmeMarkdown(): string {
     "",
     "1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。",
     "2. 在本仓库运行 `npm --prefix tools/codex-supervisor run build` 生成 `dist/cli.js`。",
-    "3. 用 `node tools/codex-supervisor/dist/cli.js install --target <repoB>` 把控制面安装到目标仓库。",
-    "4. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。",
-    "5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。",
-    "6. 在目标仓库运行 `node tools/codex-supervisor/dist/cli.js doctor` 或 `codex-autonomy doctor` 查看健康状况。",
+    "3. 任选一种方式准备本机 CLI：在源码仓库里直接用 `node tools/codex-supervisor/dist/cli.js ...`，或者先把 `tools/codex-supervisor` 作为本机本地包安装后使用 `codex-autonomy ...`。",
+    "4. 用 `node tools/codex-supervisor/dist/cli.js install --target <repoB>` 或 `codex-autonomy install --target <repoB>` 把控制面安装到目标仓库。",
+    "5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。",
+    "6. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。",
+    "7. 在目标仓库运行 `codex-autonomy doctor` 查看健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree`。",
+    "8. 在目标仓库所在的 Codex app 原线程里，用自然语言完成目标 intake、确认提案、切换 run mode 和收取汇报。",
     "",
     "## 日常命令",
     "",
-    "- `node tools/codex-supervisor/dist/cli.js install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。",
-    "- `node tools/codex-supervisor/dist/cli.js bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。",
-    "- `node tools/codex-supervisor/dist/cli.js doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。",
-    "- `node tools/codex-supervisor/dist/cli.js intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标规范化为待确认 goal。",
-    "- `node tools/codex-supervisor/dist/cli.js approve-proposal <goal-id>`：把提案物化为任务并激活该 goal。",
-    "- `node tools/codex-supervisor/dist/cli.js status`：汇总 goal、任务、blocker、最近一次 verify/review/commit，以及是否适合下一轮 automation。",
-    "- `node tools/codex-supervisor/dist/cli.js prepare-worktree`：创建或校验专用 background worktree；主仓库或 background worktree dirty 时会拒绝继续。",
-    "- `node tools/codex-supervisor/dist/cli.js set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。",
-    "- `node tools/codex-supervisor/dist/cli.js review`：执行 review gate 并返回是否允许后续提交或合并。",
-    "- `node tools/codex-supervisor/dist/cli.js report`：输出当前 goal、任务、verify/review/commit 的摘要。",
-    "- `node tools/codex-supervisor/dist/cli.js pause` / `resume`：暂停或恢复自治循环。",
-    "- `node tools/codex-supervisor/dist/cli.js emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner prompts 与建议 cadence。",
-    "- `node tools/codex-supervisor/dist/cli.js merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。",
-    "- `node tools/codex-supervisor/dist/cli.js unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。",
+    "- 源码仓库内：`node tools/codex-supervisor/dist/cli.js <command>`。",
+    "- 目标仓库内：`codex-autonomy <command>`。",
+    "- `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。",
+    "- `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。",
+    "- `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。",
+    "- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标规范化为待确认 goal。",
+    "- `codex-autonomy approve-proposal <goal-id>`：把提案物化为任务并激活该 goal。",
+    "- `codex-autonomy status`：汇总 goal、任务、blocker、最近一次 verify/review/commit，以及是否适合下一轮 automation。",
+    "- `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；主仓库或 background worktree dirty 时会拒绝继续。",
+    "- `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。",
+    "- `codex-autonomy review`：执行 review gate 并返回是否允许后续提交或合并。",
+    "- `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。",
+    "- `codex-autonomy pause` / `resume`：暂停或恢复自治循环。",
+    "- `codex-autonomy emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner prompts 与建议 cadence。",
+    "- `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。",
+    "- `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。",
     "",
     "## Repo 控制面",
     "",
@@ -999,6 +1036,16 @@ export function getReadmeMarkdown(): string {
     "- 默认路径：仓库同级目录下的 `<repo-name>.__codex_bg`。",
     "- 默认分支：`codex/background`。",
     "- 自动提交只允许进入 `codex/autonomy`，不会自动 push、PR 或 deploy。",
+    "",
+    "## 线程与 cadence",
+    "",
+    "- 原线程是唯一操作入口；`report_thread_id` 是汇总和异常回传的锚点。",
+    "- `install` 的 `automation_ready` 只表示环境前置条件基本齐全；目标仓库仍然需要 `report_thread_id` 和可推进 goal/task，`status` 才会变成 `ready_for_automation=true`。",
+    "- `cruise cadence` 是稳态巡航频率，适合长期低打扰推进。",
+    "- `sprint heartbeat` 是冲刺闭环的唤醒间隔，不是单个任务时长。",
+    "- `kickoff` 表示目标确认后立即跑一轮，不等待下一个 heartbeat。",
+    "- Reporter 正常只按 heartbeat 汇总成功结果；blocked、review_pending、commit 失败等重要异常立即回线程。",
+    "- heartbeat automation 如果没有持久化模型字段，以 repo `.codex/config.toml` 和线程当前模型配置为兜底。",
     "",
     "## Git safe.directory",
     "",
@@ -1035,6 +1082,7 @@ export function getReadmeMarkdown(): string {
     "- 非 Git 目录允许 `bootstrap`，但 `status` 不会给出可运行 automation 的结论。",
     "- `paused=true` 时只保留状态检查和汇报，不继续推进新的 plan/work/review。",
     "- `ready_for_automation=false` 常见原因包括：没有 active goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用、目标仍在等待首次确认。",
+    "- 目标内 follow-up 建议可以自动入队；一旦建议改变验收、约束或范围，流程必须写 blocker 并等待线程确认。",
   ].join("\n");
 }
 

@@ -20,6 +20,7 @@ Rules:
 - If a goal is still `awaiting_confirmation`, write or refresh the proposal in `autonomy/proposals.json` and do not materialize tasks yet.
 - If the goal is `approved` or `active`, plan only within that approved boundary.
 - Use task priority, dependency satisfaction, and `updated_at` to choose which eligible tasks enter `ready`.
+- If a worker, reviewer, or sprint cycle leaves a next-step suggestion that still fits the approved goal, fold it into proposal or task rebalancing.
 - If a change would expand scope, alter acceptance criteria, or relax constraints, write a blocker and stop.
 - Respect run mode: sprint means immediate kickoff plus a short heartbeat runner, cruise means scheduled cadence.
 - Never work on more than one task at a time.
@@ -71,7 +72,7 @@ Rules:
 - Review exactly one task or change set at a time.
 - Run `scripts/review.ps1` after the worker's verify gate has passed.
 - If the change passes review, record the review outcome and keep the task boundary unchanged.
-- If the change needs follow-up but stays inside the approved goal, mark it `followup_required`.
+- If the change needs follow-up but stays inside the approved goal, mark it `followup_required` and leave a concise next-step suggestion.
 - If the review would expand scope, change acceptance, or weaken constraints, write a blocker and stop.
 - Important failures, blockers, and `review_pending` states must be reported to the thread immediately.
 - Before any write to `autonomy/*`, acquire `autonomy/locks/cycle.lock`.
@@ -99,7 +100,10 @@ Inputs you may read:
 
 Rules:
 - Bind summaries to `report_thread_id` from state.
+- Treat the originating thread as the sole operator-facing surface.
 - Include the current goal, current task, last verify, last review, last commit hash, and last commit message in the summary when available.
+- When nothing ran, say why the loop is idle or not ready instead of reporting a blank success.
+- Include any recorded next-step suggestion when it stays inside the approved goal boundary.
 - Send critical failures, blockers, `review_pending` states, and commit failures to the thread immediately.
 - Send successful runs only as heartbeat summaries, not as immediate per-run spam.
 - Do not flood the thread with routine success updates when a heartbeat summary will cover them.
@@ -122,10 +126,12 @@ Rules:
 - On each heartbeat, do one closed loop only: plan or rebalance, work one task, review, then report.
 - If the current goal is completed and a next approved goal exists, switch to that goal and kickoff immediately in the same run.
 - Even after a goal switch, complete only one task in the current run.
+- If the completed task suggests a safe follow-up inside the approved goal set, record the suggestion and let planning or the next loop pick it up.
 - Stop when the current goal is completed, blocked, `review_pending`, or there is no work left to progress.
 - Use the originating thread's `report_thread_id` for summaries.
 - Important failures, blockers, `review_pending`, and commit failures must be reported immediately; successful cycles can be batched into heartbeat summaries.
 - Respect the approved goal boundary and never expand scope without a blocker.
+- If a suggested next step would change acceptance, constraints, or scope, write a blocker and stop instead of continuing.
 - Before any write to `autonomy/*`, acquire `autonomy/locks/cycle.lock`.
 - Write `autonomy/*.json` with atomic temp-file then rename semantics.
 - Update only autonomy state files, results summary, and `autonomy/journal.md`.

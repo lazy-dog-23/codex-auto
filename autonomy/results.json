@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "last_thread_summary_sent_at": null,
+  "last_inbox_run_at": null,
+  "last_summary_kind": null,
+  "last_summary_reason": null,
   "planner": {
     "status": "planned",
     "goal_id": "goal-codex-autonomy-v2",

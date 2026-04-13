@@ -74,14 +74,14 @@ export async function runIntakeGoal(options: IntakeGoalOptions, repoRoot = proce
       actor: "supervisor",
       taskId: goal.id,
       result: "planned",
-      summary: `Intake goal ${goal.id} (${goal.run_mode}) and wait for proposal generation.`,
+      summary: `Intake goal ${goal.id} (${goal.run_mode}) and wait for codex-autonomy generate-proposal or planner proposal generation.`,
       verify: "not run (codex-autonomy intake-goal)",
       blocker: "none",
     });
 
     return {
       ok: true,
-      message: `Goal ${goal.id} recorded and is awaiting proposal generation.`,
+      message: `Goal ${goal.id} recorded and is awaiting proposal generation. Run codex-autonomy generate-proposal for a local fallback, or let Planner create the proposal.`,
     };
   } finally {
     await releaseCycleLock(paths.cycleLockFile, lock);

@@ -25,6 +25,7 @@ const REPORT_BLOCKING_WARNING_CODES = new Set([
   "background_worktree_head_mismatch",
   "active_cycle_lock",
   "stale_cycle_lock",
+  "missing_report_thread_id",
 ]);
 
 interface ReportWarning {
@@ -83,11 +84,13 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
   const latestReviewSummary = resultsDoc.review.summary ?? resultsDoc.review.review_status ?? null;
   const latestCommitHash = resultsDoc.commit.hash ?? null;
   const latestCommitMessage = resultsDoc.commit.message ?? resultsDoc.commit.summary ?? null;
-  const goalTransition = buildGoalTransitionSummary(previousGoal, currentGoal);
   const lastThreadSummarySentAt = status.last_thread_summary_sent_at ?? resultsDoc.last_thread_summary_sent_at ?? state.last_thread_summary_sent_at ?? null;
   const lastInboxRunAt = status.last_inbox_run_at ?? resultsDoc.last_inbox_run_at ?? state.last_inbox_run_at ?? null;
   const latestSummaryKind = status.latest_summary_kind ?? resultsDoc.last_summary_kind ?? null;
   const latestSummaryReason = status.latest_summary_reason ?? resultsDoc.last_summary_reason ?? null;
+  const goalTransition = latestSummaryKind === "goal_transition"
+    ? buildGoalTransitionSummary(previousGoal, currentGoal)
+    : null;
   const nextAutomationReason = status.next_automation_reason ?? null;
   const runtimeWarnings = (status.warnings ?? []).filter((warning) => REPORT_BLOCKING_WARNING_CODES.has(warning.code));
   const healthyRuntime = runtimeWarnings.length === 0;

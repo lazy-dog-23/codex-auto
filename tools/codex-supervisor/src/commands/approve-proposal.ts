@@ -88,6 +88,12 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
     };
     const updatedResults = {
       ...resultsDoc,
+      last_summary_kind: goalCompletion.completedGoalId && goalCompletion.activatedGoalId
+        ? "goal_transition" as const
+        : "normal_success" as const,
+      last_summary_reason: goalCompletion.completedGoalId && goalCompletion.activatedGoalId
+        ? "The previous goal completed and the next approved goal is active."
+        : `Approved proposal for ${targetGoal.id} without switching to a new goal.`,
       planner: {
         ...resultsDoc.planner,
         status: "planned" as const,

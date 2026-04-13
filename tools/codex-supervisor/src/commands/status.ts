@@ -99,6 +99,7 @@ function buildLocalAutomationReason(options: {
   readyForAutomation: boolean;
   actionableTasks: boolean;
   pendingPlanningWork: boolean;
+  hasReportThread: boolean;
   paused: boolean;
   pauseReason: string | null;
   cycleStatus: StatusSummary["cycle_status"];
@@ -107,6 +108,10 @@ function buildLocalAutomationReason(options: {
 }): string {
   if (options.readyForAutomation) {
     return "Ready for automation: active or planning work is available.";
+  }
+
+  if (!options.hasReportThread && (options.actionableTasks || options.pendingPlanningWork)) {
+    return "Bind report_thread_id from the originating thread before automation can run.";
   }
 
   if (options.paused) {
@@ -140,18 +145,13 @@ function buildRuntimeAutomationReason(warnings: readonly { message: string }[]):
   return warnings.map((warning) => warning.message).join("; ");
 }
 
-function inferLatestSummaryKind(resultsDoc: AutonomyResults, goalsDoc: GoalsDocument, state: AutonomyState): SummaryKind {
+function inferLatestSummaryKind(resultsDoc: AutonomyResults, _goalsDoc: GoalsDocument, state: AutonomyState): SummaryKind {
   if (resultsDoc.worker.status === "failed" || resultsDoc.review.status === "failed" || resultsDoc.commit.status === "failed") {
     return "immediate_exception";
   }
 
-  const currentGoal = state.current_goal_id
-    ? goalsDoc.goals.find((goal) => goal.id === state.current_goal_id) ?? null
-    : goalsDoc.goals.find((goal) => goal.status === "active") ?? null;
-  const hasCompletedGoal = goalsDoc.goals.some((goal) => goal.status === "completed" && goal.id !== currentGoal?.id);
-
-  if (currentGoal && currentGoal.status === "active" && hasCompletedGoal) {
-    return "goal_transition";
+  if (resultsDoc.last_summary_kind) {
+    return resultsDoc.last_summary_kind;
   }
 
   if (resultsDoc.reporter.sent_at || state.last_thread_summary_sent_at || resultsDoc.last_thread_summary_sent_at) {
@@ -169,12 +169,12 @@ function inferLatestSummaryReason(options: {
 }): string {
   const kind = options.kind;
 
-  if (kind === "goal_transition") {
-    return "The previous goal completed and the next approved goal is active.";
+  if (options.resultsDoc.last_summary_kind === kind && options.resultsDoc.last_summary_reason) {
+    return options.resultsDoc.last_summary_reason;
   }
 
-  if (options.resultsDoc.last_summary_reason) {
-    return options.resultsDoc.last_summary_reason;
+  if (kind === "goal_transition") {
+    return "The previous goal completed and the next approved goal is active.";
   }
 
   if (kind === "thread_summary") {
@@ -210,10 +210,12 @@ export function buildStatusSummary(
   const goalsByStatus = countGoalStatuses(goalsDoc.goals);
   const actionableTasks = hasActionableTasks(tasksDoc.tasks, state.current_goal_id);
   const pendingPlanningWork = hasPlanningWork(goalsDoc.goals);
+  const hasReportThread = Boolean(state.report_thread_id?.trim());
   const readyForAutomation =
     state.cycle_status === "idle" &&
     state.needs_human_review === false &&
     state.paused === false &&
+    hasReportThread &&
     openBlockerCount === 0 &&
     (actionableTasks || pendingPlanningWork);
 
@@ -230,19 +232,15 @@ export function buildStatusSummary(
     readyForAutomation,
     actionableTasks,
     pendingPlanningWork,
+    hasReportThread,
     paused: state.paused,
     pauseReason: state.pause_reason,
     cycleStatus: state.cycle_status,
     needsHumanReview: state.needs_human_review,
     openBlockerCount,
   });
-  const inferredSummaryKind = inferLatestSummaryKind(resultsDoc, goalsDoc, state);
-  const latestSummaryKind = inferredSummaryKind !== "normal_success"
-    ? inferredSummaryKind
-    : resultsDoc.last_summary_kind ?? inferredSummaryKind;
-  const latestSummaryReason = inferredSummaryKind !== "normal_success"
-    ? inferLatestSummaryReason({ kind: inferredSummaryKind, resultsDoc, goalsDoc, state })
-    : resultsDoc.last_summary_reason ?? inferLatestSummaryReason({ kind: latestSummaryKind, resultsDoc, goalsDoc, state });
+  const latestSummaryKind = inferLatestSummaryKind(resultsDoc, goalsDoc, state);
+  const latestSummaryReason = inferLatestSummaryReason({ kind: latestSummaryKind, resultsDoc, goalsDoc, state });
 
   const summary: StatusSummary = {
     ok: true,
@@ -295,12 +293,22 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc);
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
+  const hasEligibleWork = hasActionableTasks(tasksDoc.tasks, state.current_goal_id) || hasPlanningWork(goalsDoc.goals);
+  const hasReportThread = Boolean(state.report_thread_id?.trim());
 
-  if (!hasActionableTasks(tasksDoc.tasks, state.current_goal_id) && !hasPlanningWork(goalsDoc.goals)) {
+  if (!hasEligibleWork) {
     readyForAutomation = false;
     warnings.push({
       code: "no_actionable_work",
       message: "No active goal work or proposal generation work is currently available.",
+    });
+  }
+
+  if (!hasReportThread && hasEligibleWork) {
+    readyForAutomation = false;
+    warnings.push({
+      code: "missing_report_thread_id",
+      message: "report_thread_id is not bound to the originating thread yet.",
     });
   }
 

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runBootstrapCommand } from "../src/commands/bootstrap.js";
 import { runDoctor } from "../src/commands/doctor.js";
 import { runApproveProposal } from "../src/commands/approve-proposal.js";
+import { runGenerateProposal } from "../src/commands/generate-proposal.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
 import { runMergeAutonomyBranch } from "../src/commands/merge-autonomy-branch.js";
 import { runStatusCommand } from "../src/commands/status.js";
@@ -191,6 +192,117 @@ describe("command integration contracts", () => {
     expect(stateDoc.report_thread_id).toBe("thread-123");
   });
 
+  it("intake-goal followed by generate-proposal creates a conservative fallback proposal and rejects duplicates", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+
+    await runIntakeGoal(
+      {
+        title: "First goal",
+        objective: "First objective",
+        successCriteria: ["first success"],
+        runMode: "cruise",
+        reportThreadId: "thread-123",
+      },
+      workspace,
+    );
+    const firstGoalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const firstGoalId = firstGoalsDoc.goals[0]?.id as string;
+
+    await runIntakeGoal(
+      {
+        title: "Second goal",
+        objective: "Second objective",
+        successCriteria: ["second success"],
+        runMode: "sprint",
+        reportThreadId: "thread-123",
+      },
+      workspace,
+    );
+
+    const result = await runGenerateProposal({}, workspace);
+    const proposalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "proposals.json"), "utf8"));
+    const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
+    const journalText = await readFile(join(workspace, "autonomy", "journal.md"), "utf8");
+
+    expect(result.ok).toBe(true);
+    expect(proposalsDoc.proposals).toHaveLength(1);
+    expect(proposalsDoc.proposals[0]?.goal_id).toBe(firstGoalId);
+    expect(proposalsDoc.proposals[0]?.status).toBe("awaiting_confirmation");
+    expect(proposalsDoc.proposals[0]?.tasks).toHaveLength(3);
+    expect(proposalsDoc.proposals[0]?.tasks.every((task: { file_hints: string[] }) => task.file_hints.length === 0)).toBe(true);
+    expect(tasksDoc.tasks).toHaveLength(0);
+    expect(resultsDoc.last_summary_kind).toBe("normal_success");
+    expect(resultsDoc.planner.goal_id).toBe(firstGoalId);
+    expect(journalText).toContain(`task: ${firstGoalId}`);
+    expect(journalText).toContain("generate-proposal");
+
+    await expect(runGenerateProposal({ goalId: firstGoalId }, workspace)).rejects.toThrow(
+      /already has an awaiting_confirmation proposal/i,
+    );
+  });
+
+  it("generate-proposal skips older goals that already have awaiting proposals", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+
+    await runIntakeGoal(
+      {
+        title: "First goal",
+        objective: "First objective",
+        successCriteria: ["first success"],
+        runMode: "cruise",
+        reportThreadId: "thread-123",
+      },
+      workspace,
+    );
+    await runIntakeGoal(
+      {
+        title: "Second goal",
+        objective: "Second objective",
+        successCriteria: ["second success"],
+        runMode: "sprint",
+        reportThreadId: "thread-123",
+      },
+      workspace,
+    );
+
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const firstGoalId = goalsDoc.goals[0]?.id as string;
+    const secondGoalId = goalsDoc.goals[1]?.id as string;
+
+    await writeJson(join(workspace, "autonomy", "proposals.json"), {
+      version: 1,
+      proposals: [
+        {
+          goal_id: firstGoalId,
+          status: "awaiting_confirmation",
+          summary: "Existing proposal for first goal.",
+          tasks: [
+            {
+              id: "proposal-first-existing",
+              title: "Keep existing first goal proposal",
+              priority: "P1",
+              depends_on: [],
+              acceptance: ["done"],
+              file_hints: [],
+            },
+          ],
+          created_at: "2026-04-10T00:10:00Z",
+          approved_at: null,
+        },
+      ],
+    });
+
+    const result = await runGenerateProposal({}, workspace);
+    const proposalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "proposals.json"), "utf8"));
+
+    expect(result.ok).toBe(true);
+    expect(proposalsDoc.proposals).toHaveLength(2);
+    expect(proposalsDoc.proposals[1]?.goal_id).toBe(secondGoalId);
+  });
+
   it("approve-proposal materializes tasks and activates the goal", async () => {
     const workspace = await makeTempWorkspace();
     await runBootstrapCommand(workspace);
@@ -239,12 +351,126 @@ describe("command integration contracts", () => {
     const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
     const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
     const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
 
     expect(result.ok).toBe(true);
     expect(goalsDoc.goals[0]?.status).toBe("active");
     expect(tasksDoc.tasks[0]?.goal_id).toBe("goal-approve");
     expect(stateDoc.current_goal_id).toBe("goal-approve");
     expect(stateDoc.run_mode).toBe("sprint");
+    expect(resultsDoc.last_summary_kind).toBe("normal_success");
+    expect(resultsDoc.last_summary_reason).toContain("Approved proposal for goal-approve");
+  });
+
+  it("approve-proposal records a goal transition when the previous active goal completes", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await writeJson(join(workspace, "autonomy", "tasks.json"), {
+      version: 1,
+      tasks: [
+        {
+          id: "task-alpha-done",
+          goal_id: "goal-alpha",
+          title: "Finish alpha",
+          status: "done",
+          priority: "P1",
+          depends_on: [],
+          acceptance: ["done"],
+          file_hints: ["src/alpha.ts"],
+          retry_count: 0,
+          last_error: null,
+          updated_at: "2026-04-10T00:00:00Z",
+          commit_hash: null,
+          review_status: "passed",
+        },
+      ],
+    } satisfies TasksDocument);
+    await writeJson(join(workspace, "autonomy", "goals.json"), {
+      version: 1,
+      goals: [
+        {
+          id: "goal-alpha",
+          title: "Alpha Goal",
+          objective: "Finish alpha work",
+          success_criteria: ["alpha done"],
+          constraints: [],
+          out_of_scope: [],
+          status: "active",
+          run_mode: "cruise",
+          created_at: "2026-04-09T00:00:00Z",
+          approved_at: "2026-04-09T00:10:00Z",
+          completed_at: null,
+        },
+        {
+          id: "goal-beta",
+          title: "Beta Goal",
+          objective: "Start beta work",
+          success_criteria: ["beta planned"],
+          constraints: [],
+          out_of_scope: [],
+          status: "awaiting_confirmation",
+          run_mode: "sprint",
+          created_at: "2026-04-10T00:00:00Z",
+          approved_at: null,
+          completed_at: null,
+        },
+      ],
+    });
+    await writeJson(join(workspace, "autonomy", "proposals.json"), {
+      version: 1,
+      proposals: [
+        {
+          goal_id: "goal-beta",
+          status: "awaiting_confirmation",
+          summary: "Start beta with one task.",
+          tasks: [
+            {
+              id: "task-beta-1",
+              title: "Implement beta task",
+              priority: "P1",
+              depends_on: [],
+              acceptance: ["done"],
+              file_hints: ["src/beta.ts"],
+            },
+          ],
+          created_at: "2026-04-10T00:10:00Z",
+          approved_at: null,
+        },
+      ],
+    });
+    await writeJson(join(workspace, "autonomy", "state.json"), {
+      version: 1,
+      current_goal_id: "goal-alpha",
+      current_task_id: null,
+      cycle_status: "idle",
+      run_mode: "cruise",
+      last_planner_run_at: null,
+      last_worker_run_at: null,
+      last_result: "noop",
+      consecutive_worker_failures: 0,
+      needs_human_review: false,
+      open_blocker_count: 0,
+      report_thread_id: "thread-123",
+      autonomy_branch: "codex/autonomy",
+      sprint_active: false,
+      paused: false,
+      pause_reason: null,
+      last_thread_summary_sent_at: null,
+      last_inbox_run_at: null,
+    });
+
+    const result = await runApproveProposal("goal-beta", workspace);
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
+
+    expect(result.ok).toBe(true);
+    expect(goalsDoc.goals.find((goal: { id: string }) => goal.id === "goal-alpha")?.status).toBe("completed");
+    expect(goalsDoc.goals.find((goal: { id: string }) => goal.id === "goal-beta")?.status).toBe("active");
+    expect(stateDoc.current_goal_id).toBe("goal-beta");
+    expect(stateDoc.run_mode).toBe("sprint");
+    expect(resultsDoc.last_summary_kind).toBe("goal_transition");
+    expect(resultsDoc.last_summary_reason).toContain("next approved goal is active");
   });
 
   it("merge-autonomy-branch fast-forwards a reviewed autonomy branch into the current branch", async () => {

@@ -12,6 +12,7 @@ Use this skill when a natural-language request needs to be converted into the re
 - Read the current `autonomy/goal.md` and existing journal entries before writing anything.
 - Turn the user request into a concise objective, constraints, and success criteria.
 - Keep the intake focused on the current repository and current thread.
+- Treat thread phrases like `目标是……` as goal intake, and leave `确认提案` or mode changes to their dedicated command paths.
 - Update only the repo-local intake artifacts that already exist.
 
 ## Guardrails

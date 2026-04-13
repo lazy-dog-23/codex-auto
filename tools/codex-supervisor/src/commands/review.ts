@@ -13,7 +13,7 @@ import { pathExists } from "../infra/json.js";
 import { commandSucceeded, discoverPowerShellExecutable, runProcess } from "../infra/process.js";
 
 export interface ReviewCommandIssue {
-  code: "not_a_git_repo" | "dirty_worktree" | "branch_drift" | "review_script_missing" | "review_failed";
+  code: "not_a_git_repo" | "dirty_worktree" | "branch_drift" | "non_allowlisted_changes" | "review_script_missing" | "review_failed";
   message: string;
 }
 
@@ -33,7 +33,7 @@ export interface ReviewCommandResult extends CommandResult {
   dirty: boolean;
   hasDiff: boolean;
   commit_ready: boolean;
-  commit_skipped_reason: "no_diff" | "dirty_worktree" | "branch_drift" | "review_failed" | "review_script_missing" | null;
+  commit_skipped_reason: "no_diff" | "dirty_worktree" | "branch_drift" | "non_allowlisted_changes" | "review_failed" | "review_script_missing" | null;
   review_script: ReviewScriptRun;
   issues: ReviewCommandIssue[];
 }
@@ -110,6 +110,13 @@ export async function runReviewCommand(
     });
   }
 
+  if (gate.blockedPaths.length > 0) {
+    issues.push({
+      code: "non_allowlisted_changes",
+      message: `Commit scope includes non-allowlisted paths: ${gate.blockedPaths.join(", ")}.`,
+    });
+  }
+
   if (!reviewScriptExists) {
     issues.push({
       code: "review_script_missing",
@@ -162,12 +169,14 @@ export async function runReviewCommand(
     });
   }
 
-  const commitReady = gate.hasDiff && issues.length === 0;
+  const commitReady = gate.commitReady && issues.length === 0;
+  const blockedPathsReason = issues.find((issue) => issue.code === "non_allowlisted_changes")
+    ?.code as ReviewCommandResult["commit_skipped_reason"];
   const reviewFailedReason = issues.find((issue) => issue.code === "review_failed")
     ?.code as ReviewCommandResult["commit_skipped_reason"];
   const skipReason = gate.reason === "no_diff"
     ? "no_diff"
-    : reviewFailedReason ?? null;
+    : blockedPathsReason ?? reviewFailedReason ?? null;
 
   return {
     ok: issues.length === 0,
