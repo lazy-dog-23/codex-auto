@@ -29,8 +29,8 @@ import {
   getAutonomyWorkSkillMarkdown,
   getConfigTomlTemplate,
   getEnvironmentTomlTemplate,
-  getInstallGoalMarkdown,
   getInstallVerifyScriptTemplate,
+  getLegacyReviewScriptTemplates,
   getReviewScriptTemplate,
   getSetupWindowsScriptTemplate,
   getSmokeScriptTemplate,
@@ -42,6 +42,9 @@ import {
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
   createDefaultState,
+  formatGoalMarkdown,
+  getActiveGoal,
+  persistGoalMirror,
 } from "./control-plane.js";
 import type {
   AutonomyResults,
@@ -66,6 +69,111 @@ const DEFAULT_BLOCKERS: BlockersDocument = {
   version: 1,
   blockers: [],
 };
+
+const LEGACY_RESULTS_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  $id: "https://codex-auto.local/schema/results.schema.json",
+  title: "AutonomyResultsFile",
+  type: "object",
+  additionalProperties: false,
+  required: ["version", "planner", "worker", "review", "commit", "reporter"],
+  properties: {
+    version: {
+      type: "integer",
+      minimum: 1,
+    },
+    planner: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "goal_id", "summary"],
+      properties: {
+        status: {
+          type: "string",
+          enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+        },
+        goal_id: {
+          type: ["string", "null"],
+          minLength: 1,
+        },
+        summary: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    worker: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "goal_id", "summary"],
+      properties: {
+        status: {
+          type: "string",
+          enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+        },
+        goal_id: {
+          type: ["string", "null"],
+          minLength: 1,
+        },
+        summary: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    review: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "goal_id", "summary"],
+      properties: {
+        status: {
+          type: "string",
+          enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+        },
+        goal_id: {
+          type: ["string", "null"],
+          minLength: 1,
+        },
+        summary: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    commit: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "goal_id", "summary"],
+      properties: {
+        status: {
+          type: "string",
+          enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+        },
+        goal_id: {
+          type: ["string", "null"],
+          minLength: 1,
+        },
+        summary: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    reporter: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "goal_id", "summary"],
+      properties: {
+        status: {
+          type: "string",
+          enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+        },
+        goal_id: {
+          type: ["string", "null"],
+          minLength: 1,
+        },
+        summary: {
+          type: ["string", "null"],
+        },
+      },
+    },
+  },
+} as const;
 
 interface InstallOptions {
   target?: string;
@@ -144,7 +252,7 @@ export async function runInstallCommand(
       [paths.verifyScript, getInstallVerifyScriptTemplate()],
       [paths.smokeScript, getSmokeScriptTemplate()],
       [path.join(paths.scriptsDir, "review.ps1"), getReviewScriptTemplate()],
-      [paths.goalFile, getInstallGoalMarkdown() + "\n"],
+      [paths.goalFile, formatGoalMarkdown(null) + "\n"],
       [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
     ];
 
@@ -177,7 +285,8 @@ export async function runInstallCommand(
       }
     }
 
-    const migratedFiles = await normalizeInstalledControlPlane(paths);
+    const normalization = await normalizeInstalledControlPlane(paths);
+    const migratedFiles = normalization.migratedFiles;
 
     const codexProcessDetected = await (dependencies.detectCodexProcess ?? detectCodexProcess)();
     const backgroundWorktreePrereqs = isGitRepo && (await hasBackgroundWorktreePrerequisites(paths));
@@ -198,7 +307,17 @@ export async function runInstallCommand(
         ? { code: "background_worktree_not_ready", message: "Background worktree prerequisites are not ready." }
         : null,
       migratedFiles > 0 ? { code: "control_plane_migrated", message: `Updated ${migratedFiles} existing control-plane document(s) to the latest contract.` } : null,
+      normalization.placeholderGoalIds.length > 0
+        ? {
+            code: "placeholder_goals_blocked",
+            message: `Legacy references created blocked placeholder goal(s) that need human review: ${normalization.placeholderGoalIds.join(", ")}.`,
+          }
+        : null,
     ].filter((value): value is { code: string; message: string } => value !== null);
+
+    const normalizedGoals = await loadJsonFile<GoalsDocument>(paths.goalsFile);
+    const normalizedState = await loadJsonFile<AutonomyState>(paths.stateFile);
+    await persistGoalMirror(paths, getActiveGoal(normalizedGoals.goals, normalizedState));
 
     return {
       ok: true,
@@ -251,7 +370,10 @@ async function ensureJsonFile(filePath: string, value: unknown): Promise<boolean
   return true;
 }
 
-async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRepoPaths>): Promise<number> {
+async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRepoPaths>): Promise<{
+  migratedFiles: number;
+  placeholderGoalIds: string[];
+}> {
   const now = new Date().toISOString();
   const rawState = await loadExistingJson(paths.stateFile, createDefaultState);
   let state = normalizeStateDocument(rawState);
@@ -260,12 +382,14 @@ async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRe
   const rawResults = await loadExistingJson(paths.resultsFile, createDefaultResultsDocument);
   const results = normalizeResultsDocument(rawResults);
   const rawGoals = await loadExistingJson(paths.goalsFile, createDefaultGoalsDocument);
-  let goals = normalizeGoalsDocument(rawGoals, {
+  let goalsNormalization = normalizeGoalsDocument(rawGoals, {
     referencedGoalIds: state.current_goal_id ? [state.current_goal_id] : [],
     activeGoalId: state.current_goal_id,
     defaultRunMode: state.run_mode,
     now,
   });
+  let goals = goalsNormalization.document;
+  let placeholderGoalIds = [...goalsNormalization.placeholderGoalIds];
   const fallbackGoalId = state.current_goal_id ?? goals.goals[0]?.id ?? LEGACY_GOAL_ID;
   const rawTasks = await loadExistingJson(paths.tasksFile, () => DEFAULT_TASKS);
   const tasks = normalizeTasksDocument(rawTasks, { fallbackGoalId, now });
@@ -274,7 +398,7 @@ async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRe
     fallbackGoalId: state.current_goal_id ?? tasks.tasks[0]?.goal_id ?? goals.goals[0]?.id ?? LEGACY_GOAL_ID,
     now,
   });
-  goals = normalizeGoalsDocument(goals, {
+  goalsNormalization = normalizeGoalsDocument(goals, {
     referencedGoalIds: [
       ...tasks.tasks.map((task) => task.goal_id),
       ...proposals.proposals.map((proposal) => proposal.goal_id),
@@ -284,8 +408,49 @@ async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRe
     defaultRunMode: state.run_mode,
     now,
   });
+  goals = goalsNormalization.document;
+  placeholderGoalIds = Array.from(new Set([...placeholderGoalIds, ...goalsNormalization.placeholderGoalIds]));
   const rawBlockers = await loadExistingJson(paths.blockersFile, () => DEFAULT_BLOCKERS);
-  const blockers = normalizeBlockersDocument(rawBlockers, { now });
+  const normalizedBlockers = normalizeBlockersDocument(rawBlockers, { now });
+  const placeholderProtection = protectPlaceholderGoalReferences({
+    tasks,
+    blockers: normalizedBlockers,
+    placeholderGoalIds,
+    currentTaskId: state.current_task_id,
+    now,
+  });
+  const protectedTasks = placeholderProtection.tasks;
+  const blockers = placeholderProtection.blockers;
+  const openBlockerCount = blockers.blockers.filter((blocker) => blocker.status === "open").length;
+
+  if (state.current_goal_id && placeholderGoalIds.includes(state.current_goal_id)) {
+    state = {
+      ...state,
+      current_goal_id: null,
+      current_task_id: null,
+      cycle_status: "blocked",
+      run_mode: null,
+      last_result: "blocked",
+      needs_human_review: true,
+      sprint_active: false,
+    };
+  }
+
+  if (placeholderGoalIds.length > 0) {
+    state = {
+      ...state,
+      cycle_status: "blocked",
+      last_result: "blocked",
+      needs_human_review: true,
+      sprint_active: false,
+      open_blocker_count: openBlockerCount,
+    };
+  } else if (state.open_blocker_count !== openBlockerCount) {
+    state = {
+      ...state,
+      open_blocker_count: openBlockerCount,
+    };
+  }
 
   const activeGoal = goals.goals.find((goal) => goal.status === "active") ?? null;
   if (!state.current_goal_id && activeGoal) {
@@ -301,12 +466,21 @@ async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRe
     writeNormalizedJsonIfChanged(paths.settingsFile, rawSettings, settings),
     writeNormalizedJsonIfChanged(paths.resultsFile, rawResults, results),
     writeNormalizedJsonIfChanged(paths.goalsFile, rawGoals, goals),
-    writeNormalizedJsonIfChanged(paths.tasksFile, rawTasks, tasks),
+    writeNormalizedJsonIfChanged(paths.tasksFile, rawTasks, protectedTasks),
     writeNormalizedJsonIfChanged(paths.proposalsFile, rawProposals, proposals),
     writeNormalizedJsonIfChanged(paths.blockersFile, rawBlockers, blockers),
   ]);
+  const migratedSchemaFiles = await migrateGeneratedSchemaFiles(paths);
+  const migratedReviewScript = await maybeMigrateGeneratedTextFile(
+    paths.reviewScript,
+    getLegacyReviewScriptTemplates(),
+    getReviewScriptTemplate(),
+  );
 
-  return writes.filter(Boolean).length;
+  return {
+    migratedFiles: writes.filter(Boolean).length + migratedSchemaFiles + (migratedReviewScript ? 1 : 0),
+    placeholderGoalIds,
+  };
 }
 
 async function loadExistingJson<T>(filePath: string, fallback: () => T): Promise<unknown> {
@@ -324,6 +498,83 @@ async function writeNormalizedJsonIfChanged(filePath: string, existing: unknown,
 
   await writeJsonAtomic(filePath, normalized);
   return true;
+}
+
+async function migrateGeneratedSchemaFiles(paths: ReturnType<typeof resolveRepoPaths>): Promise<number> {
+  const generatedSchemas: Array<{
+    filePath: string;
+    current: unknown;
+    legacyVariants?: unknown[];
+  }> = [
+    { filePath: path.join(paths.schemaDir, "tasks.schema.json"), current: tasksSchema },
+    { filePath: path.join(paths.schemaDir, "goals.schema.json"), current: goalsSchema },
+    { filePath: path.join(paths.schemaDir, "proposals.schema.json"), current: proposalsSchema },
+    { filePath: path.join(paths.schemaDir, "state.schema.json"), current: stateSchema },
+    { filePath: path.join(paths.schemaDir, "settings.schema.json"), current: settingsSchema },
+    {
+      filePath: path.join(paths.schemaDir, "results.schema.json"),
+      current: resultsSchema,
+      legacyVariants: [LEGACY_RESULTS_SCHEMA],
+    },
+    { filePath: path.join(paths.schemaDir, "blockers.schema.json"), current: blockersSchema },
+  ];
+  const writes = await Promise.all(
+    generatedSchemas.map((schema) => maybeMigrateGeneratedJsonFile(schema.filePath, schema.current, schema.legacyVariants ?? [])),
+  );
+  return writes.filter(Boolean).length;
+}
+
+async function maybeMigrateGeneratedJsonFile(filePath: string, normalized: unknown, legacyVariants: readonly unknown[]): Promise<boolean> {
+  if (!(await pathExists(filePath))) {
+    return false;
+  }
+
+  let existing: unknown;
+  try {
+    existing = await loadJsonFile<unknown>(filePath);
+  } catch {
+    return false;
+  }
+
+  if (JSON.stringify(existing) === JSON.stringify(normalized)) {
+    return false;
+  }
+
+  const matchesKnownManagedVersion = legacyVariants
+    .some((legacyVariant) => JSON.stringify(existing) === JSON.stringify(legacyVariant));
+  if (!matchesKnownManagedVersion) {
+    return false;
+  }
+
+  await writeJsonAtomic(filePath, normalized);
+  return true;
+}
+
+async function maybeMigrateGeneratedTextFile(filePath: string, legacyTemplates: string[], currentTemplate: string): Promise<boolean> {
+  if (!(await pathExists(filePath))) {
+    return false;
+  }
+
+  const existing = await fs.readFile(filePath, "utf8");
+  const normalizedExisting = normalizeTemplateText(existing);
+  const normalizedCurrent = normalizeTemplateText(currentTemplate);
+  if (normalizedExisting === normalizedCurrent) {
+    return false;
+  }
+
+  const matchesLegacyTemplate = legacyTemplates
+    .map((template) => normalizeTemplateText(template))
+    .includes(normalizedExisting);
+  if (!matchesLegacyTemplate) {
+    return false;
+  }
+
+  await writeTextFileAtomic(filePath, currentTemplate);
+  return true;
+}
+
+function normalizeTemplateText(value: string): string {
+  return value.replace(/\r\n/g, "\n").trimEnd();
 }
 
 function normalizeStateDocument(document: unknown): AutonomyState {
@@ -382,6 +633,7 @@ function normalizeResultsDocument(document: unknown): AutonomyResults {
       ? merged.last_summary_kind
       : null,
     last_summary_reason: readOptionalString(merged.last_summary_reason),
+    latest_goal_transition: normalizeGoalTransitionSnapshot(merged.latest_goal_transition),
     planner: normalizeResultEntry(merged.planner),
     worker: normalizeResultEntry(merged.worker),
     review: normalizeResultEntry(merged.review),
@@ -398,7 +650,10 @@ function normalizeGoalsDocument(
     defaultRunMode: RunMode | null;
     now: string;
   },
-): GoalsDocument {
+): {
+  document: GoalsDocument;
+  placeholderGoalIds: string[];
+} {
   const input = isPlainObject(document) ? document : {};
   const goals = Array.isArray(input.goals) ? input.goals : [];
   const normalizedGoals = goals.map((goal, index) => normalizeGoalRecord(goal, {
@@ -408,6 +663,7 @@ function normalizeGoalsDocument(
     defaultRunMode: options.defaultRunMode ?? "cruise",
   }));
   const existingIds = new Set(normalizedGoals.map((goal) => goal.id));
+  const placeholderGoalIds: string[] = [];
 
   for (const goalId of options.referencedGoalIds) {
     if (!goalId || existingIds.has(goalId)) {
@@ -416,15 +672,18 @@ function normalizeGoalsDocument(
 
     normalizedGoals.push(createPlaceholderGoal(goalId, {
       now: options.now,
-      active: goalId === options.activeGoalId,
       runMode: options.defaultRunMode ?? "cruise",
     }));
     existingIds.add(goalId);
+    placeholderGoalIds.push(goalId);
   }
 
   return {
-    version: 1,
-    goals: normalizedGoals,
+    document: {
+      version: 1,
+      goals: normalizedGoals,
+    },
+    placeholderGoalIds,
   };
 }
 
@@ -528,7 +787,7 @@ function normalizeGoalRecord(
     status,
     run_mode: isOneOf(input.run_mode, ["sprint", "cruise"]) ? input.run_mode : options.defaultRunMode,
     created_at: createdAt,
-    approved_at: normalizeOptionalTimestamp(input.approved_at) ?? (status === "draft" || status === "awaiting_confirmation" ? null : createdAt),
+    approved_at: normalizeOptionalTimestamp(input.approved_at) ?? (status === "approved" || status === "active" || status === "completed" ? createdAt : null),
     completed_at: status === "completed" ? completedAt ?? createdAt : completedAt,
   };
 }
@@ -606,7 +865,25 @@ function normalizeResultEntry(entry: unknown): AutonomyResults["planner"] {
   };
 }
 
-function createPlaceholderGoal(goalId: string, options: { now: string; active: boolean; runMode: RunMode }): GoalsDocument["goals"][number] {
+function normalizeGoalTransitionSnapshot(value: unknown): AutonomyResults["latest_goal_transition"] {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const fromGoalId = readOptionalString(value.from_goal_id);
+  const toGoalId = readOptionalString(value.to_goal_id);
+  if (!fromGoalId || !toGoalId) {
+    return null;
+  }
+
+  return {
+    from_goal_id: fromGoalId,
+    to_goal_id: toGoalId,
+    happened_at: normalizeOptionalTimestamp(value.happened_at),
+  };
+}
+
+function createPlaceholderGoal(goalId: string, options: { now: string; runMode: RunMode }): GoalsDocument["goals"][number] {
   return {
     id: goalId,
     title: `Imported legacy goal (${goalId})`,
@@ -614,11 +891,103 @@ function createPlaceholderGoal(goalId: string, options: { now: string; active: b
     success_criteria: ["Review and refine the imported legacy goal."],
     constraints: [],
     out_of_scope: [],
-    status: options.active ? "active" : "approved",
+    status: "blocked",
     run_mode: options.runMode,
     created_at: options.now,
-    approved_at: options.now,
+    approved_at: null,
     completed_at: null,
+  };
+}
+
+function protectPlaceholderGoalReferences(options: {
+  tasks: TasksDocument;
+  blockers: BlockersDocument;
+  placeholderGoalIds: readonly string[];
+  currentTaskId: string | null;
+  now: string;
+}): {
+  tasks: TasksDocument;
+  blockers: BlockersDocument;
+} {
+  if (options.placeholderGoalIds.length === 0) {
+    return {
+      tasks: options.tasks,
+      blockers: options.blockers,
+    };
+  }
+
+  const placeholderGoalIds = new Set(options.placeholderGoalIds);
+  const existingBlockerIds = new Set(options.blockers.blockers.map((blocker) => blocker.id));
+  const touchedGoalIds = new Set<string>();
+  const protectedTasks = options.tasks.tasks.map((task) => {
+    if (!placeholderGoalIds.has(task.goal_id) || task.status === "done") {
+      return task;
+    }
+
+    touchedGoalIds.add(task.goal_id);
+    return {
+      ...task,
+      status: "blocked" as const,
+      last_error: `Referenced goal ${task.goal_id} is missing from goals.json and requires human review.`,
+      updated_at: options.now,
+    };
+  });
+
+  const appendedBlockers = protectedTasks.flatMap((task) => {
+    if (!placeholderGoalIds.has(task.goal_id) || task.status !== "blocked") {
+      return [];
+    }
+
+    const blockerId = `install-missing-goal-${task.goal_id}-${task.id}`;
+    if (existingBlockerIds.has(blockerId)) {
+      return [];
+    }
+
+    existingBlockerIds.add(blockerId);
+    return [{
+      id: blockerId,
+      task_id: task.id,
+      question: `Task ${task.id} references missing goal ${task.goal_id}. Repair goals.json before resuming automation.`,
+      severity: "high" as const,
+      status: "open" as const,
+      resolution: null,
+      opened_at: options.now,
+      resolved_at: null,
+    }];
+  });
+
+  const syntheticGoalBlockers = options.placeholderGoalIds.flatMap((goalId) => {
+    if (touchedGoalIds.has(goalId)) {
+      return [];
+    }
+
+    const blockerId = `install-missing-goal-${goalId}`;
+    if (existingBlockerIds.has(blockerId)) {
+      return [];
+    }
+
+    existingBlockerIds.add(blockerId);
+    return [{
+      id: blockerId,
+      task_id: options.currentTaskId ?? `goal::${goalId}`,
+      question: `Goal ${goalId} is referenced by the control plane but missing from goals.json. Repair the goal definition before resuming automation.`,
+      severity: "high" as const,
+      status: "open" as const,
+      resolution: null,
+      opened_at: options.now,
+      resolved_at: null,
+    }];
+  });
+
+  return {
+    tasks: {
+      ...options.tasks,
+      tasks: protectedTasks,
+    },
+    blockers: {
+      ...options.blockers,
+      blockers: [...options.blockers.blockers, ...appendedBlockers, ...syntheticGoalBlockers],
+    },
   };
 }
 

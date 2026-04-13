@@ -5,7 +5,8 @@ import type { CommandExecution } from './types.js';
 export function buildCodexProcessDetectionScript(): string {
   return [
     '$ErrorActionPreference = "Stop"',
-    '$matches = Get-Process | Select-Object -ExpandProperty ProcessName | Where-Object { $_ -match "Codex|OpenAI" } | Sort-Object -Unique',
+    '$allowed = @("codex", "openai.codex", "openai-codex")',
+    '$matches = Get-Process | Where-Object { $allowed -contains $_.ProcessName.ToLowerInvariant() } | Select-Object -ExpandProperty ProcessName | Sort-Object -Unique',
     '$matches',
   ].join('; ');
 }

@@ -2,10 +2,10 @@ import { Command } from "commander";
 
 import type { AutonomyResults, BlockerRecord, GoalRecord, TaskRecord } from "../domain/types.js";
 import { countOpenBlockers } from "../domain/autonomy.js";
+import { resolveSummarySnapshot, scopeResultsSummary } from "../domain/results.js";
 import { detectGitRepository } from "../infra/git.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import {
-  getActiveGoal,
   loadBlockersDocument,
   loadGoalsDocument,
   loadResultsDocument,
@@ -54,6 +54,8 @@ export interface ReportResult {
   last_inbox_run_at: string | null;
   latest_summary_kind: string | null;
   latest_summary_reason: string | null;
+  has_recorded_run: boolean;
+  results_scope_note: string | null;
   next_automation_reason: string | null;
   runtime_reason: string | null;
   healthy_runtime: boolean;
@@ -72,24 +74,25 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     loadBlockersDocument(paths),
     loadResultsDocument(paths),
   ]);
-
-  const currentGoal = getActiveGoal(goalsDoc.goals, state);
-  const previousGoal = findMostRecentCompletedGoal(goalsDoc.goals, currentGoal?.id ?? null);
+  const currentGoal = goalsDoc.goals.find((goal) => goal.id === status.current_goal_id) ?? null;
+  const summarySnapshot = resolveSummarySnapshot(resultsDoc, state);
+  const previousGoal = resolvePreviousGoal(goalsDoc.goals, summarySnapshot.latestGoalTransition);
   const currentTask = state.current_task_id
     ? tasksDoc.tasks.find((task) => task.id === state.current_task_id) ?? null
-    : tasksDoc.tasks.find((task) => task.goal_id === state.current_goal_id && task.status === "ready") ?? null;
+    : tasksDoc.tasks.find((task) => task.goal_id === status.current_goal_id && task.status === "ready") ?? null;
   const openBlockers = blockersDoc.blockers.filter((blocker) => blocker.status === "open");
   const blockersOpen = countOpenBlockers(blockersDoc.blockers);
-  const latestVerifySummary = resultsDoc.worker.verify_summary ?? resultsDoc.worker.summary ?? null;
-  const latestReviewSummary = resultsDoc.review.summary ?? resultsDoc.review.review_status ?? null;
-  const latestCommitHash = resultsDoc.commit.hash ?? null;
-  const latestCommitMessage = resultsDoc.commit.message ?? resultsDoc.commit.summary ?? null;
-  const lastThreadSummarySentAt = status.last_thread_summary_sent_at ?? resultsDoc.last_thread_summary_sent_at ?? state.last_thread_summary_sent_at ?? null;
-  const lastInboxRunAt = status.last_inbox_run_at ?? resultsDoc.last_inbox_run_at ?? state.last_inbox_run_at ?? null;
-  const latestSummaryKind = status.latest_summary_kind ?? resultsDoc.last_summary_kind ?? null;
-  const latestSummaryReason = status.latest_summary_reason ?? resultsDoc.last_summary_reason ?? null;
+  const scopedResults = scopeResultsSummary(resultsDoc, status.current_goal_id);
+  const latestVerifySummary = scopedResults.workerVerifySummary;
+  const latestReviewSummary = scopedResults.reviewResult;
+  const latestCommitHash = scopedResults.commitHash;
+  const latestCommitMessage = scopedResults.commitMessage;
+  const lastThreadSummarySentAt = status.last_thread_summary_sent_at ?? summarySnapshot.lastThreadSummarySentAt;
+  const lastInboxRunAt = status.last_inbox_run_at ?? summarySnapshot.lastInboxRunAt;
+  const latestSummaryKind = status.latest_summary_kind ?? summarySnapshot.latestSummaryKind;
+  const latestSummaryReason = status.latest_summary_reason ?? summarySnapshot.latestSummaryReason;
   const goalTransition = latestSummaryKind === "goal_transition"
-    ? buildGoalTransitionSummary(previousGoal, currentGoal)
+    ? buildGoalTransitionSummary(previousGoal, currentGoal, summarySnapshot.latestGoalTransition)
     : null;
   const nextAutomationReason = status.next_automation_reason ?? null;
   const runtimeWarnings = (status.warnings ?? []).filter((warning) => REPORT_BLOCKING_WARNING_CODES.has(warning.code));
@@ -112,6 +115,8 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     lastInboxRunAt,
     latestSummaryKind,
     latestSummaryReason,
+    hasRecordedRun: summarySnapshot.hasRecordedRun,
+    resultsScopeNote: scopedResults.resultsScopeNote,
     nextAutomationReason,
     runtimeWarnings,
   });
@@ -137,6 +142,8 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     last_inbox_run_at: lastInboxRunAt,
     latest_summary_kind: latestSummaryKind,
     latest_summary_reason: latestSummaryReason,
+    has_recorded_run: summarySnapshot.hasRecordedRun,
+    results_scope_note: scopedResults.resultsScopeNote,
     next_automation_reason: nextAutomationReason,
     runtime_reason: nextAutomationReason,
     healthy_runtime: healthyRuntime,
@@ -174,6 +181,8 @@ function buildReportMessage(
     lastInboxRunAt: string | null;
     latestSummaryKind: string | null;
     latestSummaryReason: string | null;
+    hasRecordedRun: boolean;
+    resultsScopeNote: string | null;
     nextAutomationReason: string | null;
     runtimeWarnings: readonly ReportWarning[];
   },
@@ -193,6 +202,8 @@ function buildReportMessage(
   const transitionPart = options.goalTransition ? `goal_transition=${options.goalTransition}` : "goal_transition=none";
   const summaryKindPart = `summary_kind=${formatNullableValue(options.latestSummaryKind)}`;
   const summaryReasonPart = `summary_reason=${formatNullableValue(options.latestSummaryReason)}`;
+  const recordedRunPart = `recorded_run=${options.hasRecordedRun ? "yes" : "no"}`;
+  const resultsScopePart = `results_scope_note=${formatNullableValue(options.resultsScopeNote)}`;
   const threadSummaryAtPart = `last_thread_summary_sent_at=${formatNullableValue(options.lastThreadSummarySentAt)}`;
   const inboxRunAtPart = `last_inbox_run_at=${formatNullableValue(options.lastInboxRunAt)}`;
   const nextAutomationReasonPart = `next_automation_reason=${formatNullableValue(options.nextAutomationReason)}`;
@@ -211,6 +222,8 @@ function buildReportMessage(
     transitionPart,
     summaryKindPart,
     summaryReasonPart,
+    recordedRunPart,
+    resultsScopePart,
     threadSummaryAtPart,
     inboxRunAtPart,
     nextAutomationReasonPart,
@@ -284,25 +297,27 @@ function formatRuntimeWarnings(warnings: readonly ReportWarning[]): string {
   return `runtime=warning[${codes.join(",")}]`;
 }
 
-function findMostRecentCompletedGoal(goals: readonly GoalRecord[], currentGoalId: string | null): GoalRecord | null {
-  return [...goals]
-    .filter((goal) => goal.status === "completed" && goal.id !== currentGoalId)
-    .sort((left, right) => {
-      const completedOrder = right.completed_at?.localeCompare(left.completed_at ?? "") ?? 0;
-      if (completedOrder !== 0) {
-        return completedOrder;
-      }
-
-      return right.created_at.localeCompare(left.created_at);
-    })[0] ?? null;
-}
-
-function buildGoalTransitionSummary(previousGoal: GoalRecord | null, currentGoal: GoalRecord | null): string | null {
-  if (!previousGoal || !currentGoal) {
+function resolvePreviousGoal(
+  goals: readonly GoalRecord[],
+  transition: { from_goal_id: string; to_goal_id: string; happened_at: string | null } | null,
+): GoalRecord | null {
+  if (!transition) {
     return null;
   }
 
-  if (previousGoal.id === currentGoal.id) {
+  return goals.find((goal) => goal.id === transition.from_goal_id) ?? null;
+}
+
+function buildGoalTransitionSummary(
+  previousGoal: GoalRecord | null,
+  currentGoal: GoalRecord | null,
+  transition: { from_goal_id: string; to_goal_id: string; happened_at: string | null } | null,
+): string | null {
+  if (!previousGoal || !currentGoal || !transition) {
+    return null;
+  }
+
+  if (previousGoal.id !== transition.from_goal_id || currentGoal.id !== transition.to_goal_id) {
     return null;
   }
 

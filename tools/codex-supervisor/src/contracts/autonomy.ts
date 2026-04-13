@@ -79,6 +79,12 @@ export type AutoCommitMode = (typeof AUTO_COMMIT_MODES)[number];
 export type ResultState = (typeof RESULT_STATES)[number];
 export type SummaryKind = (typeof SUMMARY_KINDS)[number];
 
+export interface GoalTransitionSnapshot {
+  from_goal_id: string;
+  to_goal_id: string;
+  happened_at: string | null;
+}
+
 export interface GoalRecord {
   id: string;
   title: string;
@@ -178,6 +184,7 @@ export interface AutonomyResults {
   last_inbox_run_at?: string | null;
   last_summary_kind?: SummaryKind | null;
   last_summary_reason?: string | null;
+  latest_goal_transition?: GoalTransitionSnapshot | null;
   planner: ResultEntry;
   worker: ResultEntry;
   review: ResultEntry;
@@ -299,6 +306,8 @@ export interface StatusSummary extends CommandResult {
   last_inbox_run_at: string | null;
   latest_summary_kind: SummaryKind | null;
   latest_summary_reason: string | null;
+  has_recorded_run: boolean;
+  results_scope_note: string | null;
   next_automation_reason: string | null;
   results_summary: {
     planner_summary: string | null;
@@ -336,6 +345,11 @@ export const READY_WINDOW_LIMIT = 5;
 export const DEFAULT_BACKGROUND_BRANCH = "codex/background";
 export const DEFAULT_AUTONOMY_BRANCH = "codex/autonomy";
 export const DEFAULT_SPRINT_HEARTBEAT_MINUTES = 15;
+export const DEFAULT_CRUISE_CADENCE: CruiseCadence = {
+  planner_hours: 6,
+  worker_hours: 2,
+  reviewer_hours: 6,
+};
 export const STALE_LOCK_AGE_MINUTES = 45;
 
 export const TASK_PRIORITY_WEIGHT: Record<TaskPriority, number> = {

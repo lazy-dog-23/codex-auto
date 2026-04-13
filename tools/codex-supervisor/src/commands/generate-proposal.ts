@@ -69,6 +69,7 @@ export async function runGenerateProposal(
       last_inbox_run_at: now,
       last_summary_kind: "normal_success" as const,
       last_summary_reason: `Generated fallback proposal for ${targetGoal.id} without materializing tasks.json.`,
+      latest_goal_transition: null,
       planner: {
         ...resultsDoc.planner,
         status: "planned" as const,

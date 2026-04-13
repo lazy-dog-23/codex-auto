@@ -87,6 +87,8 @@ describe("report command", () => {
     expect(report.last_inbox_run_at).toBe("2026-01-05T02:18:00Z");
     expect(report.latest_summary_kind).toBe("thread_summary");
     expect(report.latest_summary_reason).toBe("Heartbeat summary sent to the thread and Inbox.");
+    expect(report.has_recorded_run).toBe(true);
+    expect(report.results_scope_note).toBeNull();
     expect(report.next_automation_reason).toContain("Current workspace is not a Git repository");
     expect(report.runtime_reason).toContain("Current workspace is not a Git repository");
     expect(report.open_blockers).toHaveLength(1);
@@ -164,6 +166,11 @@ describe("report command", () => {
     results.commit.message = "autonomy(goal-beta/task-beta-1): Kick off the next goal";
     results.last_summary_kind = "goal_transition";
     results.last_summary_reason = "The previous goal completed and the next approved goal is active.";
+    results.latest_goal_transition = {
+      from_goal_id: "goal-alpha",
+      to_goal_id: "goal-beta",
+      happened_at: "2026-01-07T10:01:00Z",
+    };
 
     await writeControlPlaneFiles(workspace, { goals, tasks, state, blockers, results });
 
@@ -266,5 +273,72 @@ describe("report command", () => {
     expect(report.healthy_runtime).toBe(false);
     expect(report.runtime_warnings.some((warning) => warning.code === "missing_report_thread_id")).toBe(true);
     expect(report.runtime_reason).toContain("report_thread_id");
+  });
+
+  it("does not reuse previous-goal execution summaries for the current goal", async () => {
+    const goals = clone(readJsonFixture<GoalsDocument>("goals.sample.json"));
+    const tasks = clone(readJsonFixture<TasksDocument>("tasks.sample.json"));
+    const state = clone(readJsonFixture<AutonomyState>("state.sample.json"));
+    const blockers = clone(readJsonFixture<BlockersDocument>("blockers.sample.json"));
+    const results = clone(readJsonFixture<AutonomyResults>("results.sample.json"));
+    const workspace = await makeTempWorkspace();
+
+    goals.goals = [
+      {
+        ...goals.goals[0]!,
+        id: "goal-old",
+        title: "Completed historical goal",
+        status: "completed",
+        completed_at: "2026-01-06T10:00:00Z",
+      },
+      {
+        ...goals.goals[1]!,
+        id: "goal-new",
+        title: "Current active goal",
+        status: "active",
+        run_mode: "sprint",
+        approved_at: "2026-01-06T10:01:00Z",
+      },
+    ];
+    tasks.tasks = [
+      {
+        ...tasks.tasks[0]!,
+        id: "task-new-1",
+        goal_id: "goal-new",
+        title: "Plan the next change",
+        status: "ready",
+        review_status: "not_reviewed",
+        commit_hash: null,
+      },
+    ];
+    state.current_goal_id = "goal-new";
+    state.current_task_id = null;
+    state.run_mode = "sprint";
+    blockers.blockers = [];
+    results.planner.goal_id = "goal-new";
+    results.planner.summary = "Prepared the new ready window.";
+    results.worker.goal_id = "goal-old";
+    results.worker.task_id = "task-old-1";
+    results.worker.verify_summary = "old verify passed";
+    results.worker.summary = "Completed an old task.";
+    results.review.goal_id = "goal-old";
+    results.review.task_id = "task-old-1";
+    results.review.summary = "Old review passed.";
+    results.commit.goal_id = "goal-old";
+    results.commit.task_id = "task-old-1";
+    results.commit.hash = "old123";
+    results.commit.message = "autonomy(goal-old/task-old-1): Old task";
+
+    await writeControlPlaneFiles(workspace, { goals, tasks, state, blockers, results });
+
+    const report = await runReport(workspace);
+
+    expect(report.current_goal?.id).toBe("goal-new");
+    expect(report.latest_verify_summary).toBeNull();
+    expect(report.latest_review_summary).toBeNull();
+    expect(report.latest_commit_hash).toBeNull();
+    expect(report.latest_commit_message).toBeNull();
+    expect(report.results_scope_note).toContain("goal-old");
+    expect(report.message).toContain("results_scope_note=Latest execution results belong to goal-old, not current goal goal-new.");
   });
 });

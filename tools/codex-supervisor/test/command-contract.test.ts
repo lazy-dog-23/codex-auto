@@ -92,6 +92,33 @@ describe("command integration contracts", () => {
     expect(report.issues.some((issue) => issue.code === "config_toml_invalid")).toBe(true);
   });
 
+  it("doctor warns when config.toml enables unattended full-access execution", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    execFileSync("git", ["init", workspace], { stdio: "pipe" });
+
+    await writeFile(
+      join(workspace, ".codex", "config.toml"),
+      [
+        'approval_policy = "never"',
+        'sandbox_mode = "danger-full-access"',
+        '',
+        '[sandbox_workspace_write]',
+        'network_access = true',
+        '',
+        '[windows]',
+        'sandbox = "unelevated"',
+        '',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const report = await runDoctor({ workspaceRoot: workspace });
+
+    expect(report.issues.some((issue) => issue.code === "config_toml_high_risk_approval_policy")).toBe(true);
+    expect(report.issues.some((issue) => issue.code === "config_toml_high_risk_sandbox_mode")).toBe(true);
+  });
+
   it("status blocks automation when the workspace is not a git repo", async () => {
     const workspace = await makeTempWorkspace();
     await runBootstrapCommand(workspace);
@@ -190,6 +217,21 @@ describe("command integration contracts", () => {
     expect(goalsDoc.goals[0]?.status).toBe("awaiting_confirmation");
     expect(goalsDoc.goals[0]?.run_mode).toBe("sprint");
     expect(stateDoc.report_thread_id).toBe("thread-123");
+  });
+
+  it("requires report_thread_id when intake-goal binds the first originating thread", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+
+    await expect(runIntakeGoal(
+      {
+        title: "Upgrade autonomy",
+        objective: "Ship the v2 autonomy control plane",
+        successCriteria: ["goal exists"],
+        runMode: "sprint",
+      },
+      workspace,
+    )).rejects.toThrow(/report-thread-id/i);
   });
 
   it("intake-goal followed by generate-proposal creates a conservative fallback proposal and rejects duplicates", async () => {
@@ -471,6 +513,11 @@ describe("command integration contracts", () => {
     expect(stateDoc.run_mode).toBe("sprint");
     expect(resultsDoc.last_summary_kind).toBe("goal_transition");
     expect(resultsDoc.last_summary_reason).toContain("next approved goal is active");
+    expect(resultsDoc.latest_goal_transition).toEqual({
+      from_goal_id: "goal-alpha",
+      to_goal_id: "goal-beta",
+      happened_at: expect.any(String),
+    });
   });
 
   it("merge-autonomy-branch fast-forwards a reviewed autonomy branch into the current branch", async () => {

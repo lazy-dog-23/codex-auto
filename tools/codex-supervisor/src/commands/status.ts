@@ -13,6 +13,7 @@ import type {
 } from "../contracts/autonomy.js";
 import { GOAL_STATUSES, TASK_STATUSES } from "../contracts/autonomy.js";
 import { countOpenBlockers } from "../domain/autonomy.js";
+import { resolveSummarySnapshot, scopeResultsSummary } from "../domain/results.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess } from "../infra/process.js";
@@ -65,6 +66,22 @@ function hasActionableTasks(tasks: TasksDocument["tasks"], currentGoalId: string
   );
 }
 
+function resolveCurrentGoalId(goals: GoalsDocument["goals"], state: AutonomyState): string | null {
+  const activeGoals = goals.filter((goal) => goal.status === "active");
+  if (activeGoals.length > 1) {
+    return null;
+  }
+
+  if (state.current_goal_id) {
+    const currentGoal = goals.find((goal) => goal.id === state.current_goal_id);
+    if (currentGoal?.status === "active") {
+      return currentGoal.id;
+    }
+  }
+
+  return activeGoals[0]?.id ?? null;
+}
+
 function hasPlanningWork(goals: GoalsDocument["goals"]): boolean {
   return goals.some((goal) => goal.status === "awaiting_confirmation" || goal.status === "approved");
 }
@@ -88,6 +105,8 @@ function buildMessage(summary: StatusSummary): string {
     `autonomy_branch=${formatNullableText(summary.autonomy_branch)}`,
     `summary_kind=${formatNullableText(summary.latest_summary_kind)}`,
     `summary_reason=${formatNullableText(summary.latest_summary_reason)}`,
+    `recorded_run=${summary.has_recorded_run ? "yes" : "no"}`,
+    `results_scope_note=${formatNullableText(summary.results_scope_note)}`,
     `last_thread_summary_sent_at=${formatNullableText(summary.last_thread_summary_sent_at)}`,
     `last_inbox_run_at=${formatNullableText(summary.last_inbox_run_at)}`,
     `next_automation_reason=${formatNullableText(summary.next_automation_reason)}`,
@@ -100,6 +119,8 @@ function buildLocalAutomationReason(options: {
   actionableTasks: boolean;
   pendingPlanningWork: boolean;
   hasReportThread: boolean;
+  goalPointerMismatch: boolean;
+  multipleActiveGoals: boolean;
   paused: boolean;
   pauseReason: string | null;
   cycleStatus: StatusSummary["cycle_status"];
@@ -112,6 +133,14 @@ function buildLocalAutomationReason(options: {
 
   if (!options.hasReportThread && (options.actionableTasks || options.pendingPlanningWork)) {
     return "Bind report_thread_id from the originating thread before automation can run.";
+  }
+
+  if (options.multipleActiveGoals) {
+    return "goals.json contains multiple active goals; automation must stop until one active goal remains.";
+  }
+
+  if (options.goalPointerMismatch) {
+    return "state.json current_goal_id does not resolve to the single active goal.";
   }
 
   if (options.paused) {
@@ -145,59 +174,6 @@ function buildRuntimeAutomationReason(warnings: readonly { message: string }[]):
   return warnings.map((warning) => warning.message).join("; ");
 }
 
-function inferLatestSummaryKind(resultsDoc: AutonomyResults, _goalsDoc: GoalsDocument, state: AutonomyState): SummaryKind {
-  if (resultsDoc.worker.status === "failed" || resultsDoc.review.status === "failed" || resultsDoc.commit.status === "failed") {
-    return "immediate_exception";
-  }
-
-  if (resultsDoc.last_summary_kind) {
-    return resultsDoc.last_summary_kind;
-  }
-
-  if (resultsDoc.reporter.sent_at || state.last_thread_summary_sent_at || resultsDoc.last_thread_summary_sent_at) {
-    return "thread_summary";
-  }
-
-  return "normal_success";
-}
-
-function inferLatestSummaryReason(options: {
-  kind: SummaryKind;
-  resultsDoc: AutonomyResults;
-  goalsDoc: GoalsDocument;
-  state: AutonomyState;
-}): string {
-  const kind = options.kind;
-
-  if (options.resultsDoc.last_summary_kind === kind && options.resultsDoc.last_summary_reason) {
-    return options.resultsDoc.last_summary_reason;
-  }
-
-  if (kind === "goal_transition") {
-    return "The previous goal completed and the next approved goal is active.";
-  }
-
-  if (kind === "thread_summary") {
-    return "The latest successful run was summarized to the thread.";
-  }
-
-  if (kind === "immediate_exception") {
-    return "A worker, review, or commit step failed and needs immediate attention.";
-  }
-
-  return "The latest run completed successfully and is waiting for summary handling.";
-}
-
-function summarizeResults(results: AutonomyResults): StatusSummary["results_summary"] {
-  return {
-    planner_summary: results.planner.summary,
-    worker_result: results.worker.summary,
-    review_result: results.review.summary,
-    commit_result: results.commit.message ?? results.commit.summary,
-    reporter_sent_at: results.reporter.sent_at ?? results.reporter.happened_at ?? null,
-  };
-}
-
 export function buildStatusSummary(
   tasksDoc: TasksDocument,
   goalsDoc: GoalsDocument,
@@ -208,39 +184,80 @@ export function buildStatusSummary(
   const openBlockerCount = countOpenBlockers(blockersDoc.blockers);
   const tasksByStatus = countTaskStatuses(tasksDoc.tasks);
   const goalsByStatus = countGoalStatuses(goalsDoc.goals);
-  const actionableTasks = hasActionableTasks(tasksDoc.tasks, state.current_goal_id);
+  const activeGoalCount = goalsDoc.goals.filter((goal) => goal.status === "active").length;
+  const resolvedCurrentGoalId = resolveCurrentGoalId(goalsDoc.goals, state);
+  const goalPointerMismatch = Boolean(state.current_goal_id) && state.current_goal_id !== resolvedCurrentGoalId;
+  const actionableTasks = hasActionableTasks(tasksDoc.tasks, resolvedCurrentGoalId);
   const pendingPlanningWork = hasPlanningWork(goalsDoc.goals);
   const hasReportThread = Boolean(state.report_thread_id?.trim());
   const readyForAutomation =
+    activeGoalCount <= 1 &&
+    goalPointerMismatch === false &&
     state.cycle_status === "idle" &&
     state.needs_human_review === false &&
     state.paused === false &&
     hasReportThread &&
     openBlockerCount === 0 &&
     (actionableTasks || pendingPlanningWork);
+  const summarySnapshot = resolveSummarySnapshot(resultsDoc, state);
+  const scopedResults = scopeResultsSummary(resultsDoc, resolvedCurrentGoalId);
 
   const warnings =
-    state.open_blocker_count === openBlockerCount
-      ? undefined
-      : [
-          {
-            code: "open_blocker_count_mismatch",
-            message: `State reported ${state.open_blocker_count} open blocker(s), but blockers.json contains ${openBlockerCount}.`,
-          },
-        ];
+    [
+      ...(state.open_blocker_count === openBlockerCount
+        ? []
+        : [
+            {
+              code: "open_blocker_count_mismatch",
+              message: `State reported ${state.open_blocker_count} open blocker(s), but blockers.json contains ${openBlockerCount}.`,
+            },
+          ]),
+      ...(!state.current_goal_id && resolvedCurrentGoalId
+        ? [
+            {
+              code: "current_goal_recovered",
+              message: `Recovered current goal ${resolvedCurrentGoalId} from goals.json because state.json did not record current_goal_id.`,
+            },
+          ]
+        : []),
+      ...(state.current_goal_id && !goalsDoc.goals.some((goal) => goal.id === state.current_goal_id)
+        ? [
+            {
+              code: "stale_current_goal_id",
+              message: `state.json points to missing current_goal_id ${state.current_goal_id}.`,
+            },
+          ]
+        : []),
+      ...(state.current_goal_id && goalsDoc.goals.some((goal) => goal.id === state.current_goal_id && goal.status !== "active")
+        ? [
+            {
+              code: "inactive_current_goal_id",
+              message: `state.json points to ${state.current_goal_id}, but that goal is not active in goals.json.`,
+            },
+          ]
+        : []),
+      ...(activeGoalCount > 1
+        ? [
+            {
+              code: "multiple_active_goals",
+              message: "goals.json contains multiple active goals; automation must stop until one active goal remains.",
+            },
+          ]
+        : []),
+    ];
   const nextAutomationReason = buildLocalAutomationReason({
     readyForAutomation,
     actionableTasks,
     pendingPlanningWork,
     hasReportThread,
+    goalPointerMismatch,
+    multipleActiveGoals: activeGoalCount > 1,
     paused: state.paused,
     pauseReason: state.pause_reason,
     cycleStatus: state.cycle_status,
     needsHumanReview: state.needs_human_review,
     openBlockerCount,
   });
-  const latestSummaryKind = inferLatestSummaryKind(resultsDoc, goalsDoc, state);
-  const latestSummaryReason = inferLatestSummaryReason({ kind: latestSummaryKind, resultsDoc, goalsDoc, state });
 
   const summary: StatusSummary = {
     ok: true,
@@ -250,7 +267,7 @@ export function buildStatusSummary(
     total_goals: goalsDoc.goals.length,
     tasks_by_status: tasksByStatus,
     goals_by_status: goalsByStatus,
-    current_goal_id: state.current_goal_id,
+    current_goal_id: resolvedCurrentGoalId,
     current_task_id: state.current_task_id,
     cycle_status: state.cycle_status,
     run_mode: state.run_mode,
@@ -259,17 +276,25 @@ export function buildStatusSummary(
     ready_for_automation: readyForAutomation,
     paused: state.paused,
     review_pending_reason: state.pause_reason,
-    latest_commit_hash: resultsDoc.commit.hash ?? null,
-    latest_commit_message: resultsDoc.commit.message ?? resultsDoc.commit.summary ?? null,
+    latest_commit_hash: scopedResults.commitHash,
+    latest_commit_message: scopedResults.commitMessage,
     report_thread_id: state.report_thread_id,
     autonomy_branch: state.autonomy_branch,
     sprint_active: state.sprint_active,
-    last_thread_summary_sent_at: state.last_thread_summary_sent_at ?? resultsDoc.last_thread_summary_sent_at ?? null,
-    last_inbox_run_at: state.last_inbox_run_at ?? resultsDoc.last_inbox_run_at ?? null,
-    latest_summary_kind: latestSummaryKind,
-    latest_summary_reason: latestSummaryReason,
+    last_thread_summary_sent_at: summarySnapshot.lastThreadSummarySentAt,
+    last_inbox_run_at: summarySnapshot.lastInboxRunAt,
+    latest_summary_kind: summarySnapshot.latestSummaryKind,
+    latest_summary_reason: summarySnapshot.latestSummaryReason,
+    has_recorded_run: summarySnapshot.hasRecordedRun,
+    results_scope_note: scopedResults.resultsScopeNote,
     next_automation_reason: nextAutomationReason,
-    results_summary: summarizeResults(resultsDoc),
+    results_summary: {
+      planner_summary: scopedResults.plannerSummary,
+      worker_result: scopedResults.workerResult,
+      review_result: scopedResults.reviewResult,
+      commit_result: scopedResults.commitMessage,
+      reporter_sent_at: resultsDoc.reporter.sent_at ?? resultsDoc.reporter.happened_at ?? null,
+    },
     next_automation_ready: readyForAutomation,
   };
 
@@ -293,7 +318,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc);
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
-  const hasEligibleWork = hasActionableTasks(tasksDoc.tasks, state.current_goal_id) || hasPlanningWork(goalsDoc.goals);
+  const hasEligibleWork = hasActionableTasks(tasksDoc.tasks, summary.current_goal_id) || hasPlanningWork(goalsDoc.goals);
   const hasReportThread = Boolean(state.report_thread_id?.trim());
 
   if (!hasEligibleWork) {

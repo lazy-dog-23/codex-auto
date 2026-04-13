@@ -1,10 +1,10 @@
 import type { AutomationPromptSpec, AutomationPromptsResult } from "../contracts/autonomy.js";
-
-const PLANNER_CRUISE_CADENCE = "every 6 hours";
-const WORKER_CRUISE_CADENCE = "every 2 hours";
-const REVIEWER_CRUISE_CADENCE = "every 6 hours";
-const REPORTER_CADENCE = "heartbeat plus immediate critical exceptions";
-const SPRINT_CADENCE = "every 15 minutes while sprint is active";
+import { DEFAULT_CRUISE_CADENCE, DEFAULT_SPRINT_HEARTBEAT_MINUTES } from "../contracts/autonomy.js";
+import {
+  REPORTER_CADENCE_DESCRIPTION,
+  formatHourlyCadence,
+  formatSprintHeartbeatCadence,
+} from "../shared/policy.js";
 
 export interface ExtendedAutomationPromptsResult extends AutomationPromptsResult {
   reviewer: AutomationPromptSpec;
@@ -161,7 +161,7 @@ export function buildSprintAutomationPrompt(): string {
 export function buildPlannerAutomationPromptSpec(): AutomationPromptSpec {
   return {
     name: "planner-cruise",
-    cadence: PLANNER_CRUISE_CADENCE,
+    cadence: formatHourlyCadence(DEFAULT_CRUISE_CADENCE.planner_hours),
     prompt: buildPlannerAutomationPrompt(),
   };
 }
@@ -169,7 +169,7 @@ export function buildPlannerAutomationPromptSpec(): AutomationPromptSpec {
 export function buildWorkerAutomationPromptSpec(): AutomationPromptSpec {
   return {
     name: "worker-cruise",
-    cadence: WORKER_CRUISE_CADENCE,
+    cadence: formatHourlyCadence(DEFAULT_CRUISE_CADENCE.worker_hours),
     prompt: buildWorkerAutomationPrompt(),
   };
 }
@@ -177,7 +177,7 @@ export function buildWorkerAutomationPromptSpec(): AutomationPromptSpec {
 export function buildReviewerAutomationPromptSpec(): AutomationPromptSpec {
   return {
     name: "reviewer-cruise",
-    cadence: REVIEWER_CRUISE_CADENCE,
+    cadence: formatHourlyCadence(DEFAULT_CRUISE_CADENCE.reviewer_hours),
     prompt: buildReviewerAutomationPrompt(),
   };
 }
@@ -185,7 +185,7 @@ export function buildReviewerAutomationPromptSpec(): AutomationPromptSpec {
 export function buildReporterAutomationPromptSpec(): AutomationPromptSpec {
   return {
     name: "reporter",
-    cadence: REPORTER_CADENCE,
+    cadence: REPORTER_CADENCE_DESCRIPTION,
     prompt: buildReporterAutomationPrompt(),
   };
 }
@@ -193,7 +193,7 @@ export function buildReporterAutomationPromptSpec(): AutomationPromptSpec {
 export function buildSprintAutomationPromptSpec(): AutomationPromptSpec {
   return {
     name: "sprint",
-    cadence: SPRINT_CADENCE,
+    cadence: formatSprintHeartbeatCadence(DEFAULT_SPRINT_HEARTBEAT_MINUTES),
     prompt: buildSprintAutomationPrompt(),
   };
 }

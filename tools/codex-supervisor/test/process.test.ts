@@ -11,14 +11,16 @@ describe("process helpers", () => {
     spawnSyncMock.mockReset();
   });
 
-  it("builds a Codex detection script without probing process paths", async () => {
+  it("builds a Codex detection script with an exact process allowlist", async () => {
     const { buildCodexProcessDetectionScript } = await import("../src/infra/process.js");
 
     const script = buildCodexProcessDetectionScript();
 
     expect(script).toContain("Get-Process");
-    expect(script).toContain("ProcessName");
+    expect(script).toContain("ToLowerInvariant");
+    expect(script).toContain("$allowed");
     expect(script).not.toContain(".Path");
+    expect(script).not.toContain('ProcessName | Where-Object { $_ -match "Codex|OpenAI" }');
     expect(script).toContain("; ");
   });
 

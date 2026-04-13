@@ -26,7 +26,6 @@ import {
   getAutonomySprintSkillMarkdown,
   getAutonomyWorkSkillMarkdown,
   getConfigTomlTemplate,
-  getDefaultGoalMarkdown,
   getDefaultJournalMarkdown,
   getEnvironmentTomlTemplate,
   getReadmeMarkdown,
@@ -41,6 +40,7 @@ import {
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
   createDefaultState,
+  formatGoalMarkdown,
 } from "./control-plane.js";
 
 const DEFAULT_TASKS: TasksDocument = {
@@ -130,7 +130,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [reviewSkillFile, getAutonomyReviewSkillMarkdown() + "\n"],
       [reportSkillFile, getAutonomyReportSkillMarkdown() + "\n"],
       [sprintSkillFile, getAutonomySprintSkillMarkdown() + "\n"],
-      [paths.goalFile, getDefaultGoalMarkdown() + "\n"],
+      [paths.goalFile, formatGoalMarkdown(null) + "\n"],
       [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
       [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
       [paths.configFile, getConfigTomlTemplate() + "\n"],

@@ -94,6 +94,13 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
       last_summary_reason: goalCompletion.completedGoalId && goalCompletion.activatedGoalId
         ? "The previous goal completed and the next approved goal is active."
         : `Approved proposal for ${targetGoal.id} without switching to a new goal.`,
+      latest_goal_transition: goalCompletion.completedGoalId && goalCompletion.activatedGoalId
+        ? {
+            from_goal_id: goalCompletion.completedGoalId,
+            to_goal_id: goalCompletion.activatedGoalId,
+            happened_at: now,
+          }
+        : null,
       planner: {
         ...resultsDoc.planner,
         status: "planned" as const,

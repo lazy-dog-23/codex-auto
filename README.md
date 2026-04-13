@@ -13,7 +13,7 @@
 5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。
 6. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
 7. 在目标仓库运行 `codex-autonomy doctor` 查看环境与控制面健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree` 创建专用 background worktree。
-8. 初次本地闭环可以直接走：`codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal <goal-id>`。
+8. 初次本地闭环可以直接走：`codex-autonomy intake-goal --report-thread-id <thread-id> ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal <goal-id>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。
 
 ## 日常命令
 
@@ -22,11 +22,11 @@
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
 - `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。
 - `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。
-- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标规范化为待确认 goal。
+- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
 - `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。
 - `codex-autonomy approve-proposal <goal-id>`：把提案物化为任务并激活该 goal。
 - `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。
-- `codex-autonomy review`：执行 review gate 并返回是否允许后续提交或合并。
+- `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
 - `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；主仓库或 background worktree dirty 时会拒绝继续。
@@ -42,9 +42,10 @@
 - `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。
 - `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
 - `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
+- `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
 - `autonomy/journal.md`：每次 run 只追加一条记录。
 - `scripts/verify.ps1`：唯一验收门。
-- `scripts/review.ps1`：效果检查门。
+- `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
 
 ## 运行模型
 
@@ -86,6 +87,19 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 - 心跳 automation 的模型字段在不同持久化路径里不一定都能保留。
 - 所以 repo 里的 `.codex/config.toml` 是兜底配置，负责给当前项目和新 turn 提供稳定默认值。
 - 也就是说，automation 侧能配置时用 automation 配置，不能持久化时靠 repo `.codex/config.toml` 托底。
+
+## Review 扩展点
+
+- 默认 `scripts/review.ps1` 会先跑 `scripts/smoke.ps1`，再检查 `autonomy/state.json`、`goals.json`、`tasks.json`、`results.json`、`settings.json` 的基础一致性。
+- 如果仓库需要更贴近业务效果的检查，可以在目标仓库额外放一个 `scripts/review.local.ps1`；基础 review 会自动调用它。
+- `scripts/review.local.ps1` 适合放页面冒烟、接口探测、样例数据回归、关键输出校验这类项目特定逻辑。
+
+## 结果语义
+
+- `status` 和 `report` 会优先展示“当前 goal 的最近 planner/worker/review/commit 结果”，不再把历史 goal 的执行结果混进当前 goal 摘要。
+- 如果当前 goal 还没有自己的执行结果，但最近一次 worker/review/commit 属于别的 goal，输出里会明确给出 `results_scope_note`。
+- 当仓库还没有任何已记录运行时，`summary_kind` 会显示为 `none`，`summary_reason` 会明确说明 `No recorded autonomy run yet.`，不再伪装成成功。
+- `goal_transition` 只认 `autonomy/results.json` 里显式记录的 transition 元数据，不再靠历史 completed goals 反推。
 
 ## Background Worktree
 

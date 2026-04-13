@@ -16,9 +16,9 @@ import type {
 } from "../contracts/autonomy.js";
 import {
   DEFAULT_AUTONOMY_BRANCH,
-  DEFAULT_SPRINT_HEARTBEAT_MINUTES,
 } from "../contracts/autonomy.js";
 import { loadJsonFile, writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
+import { createDefaultAutonomySettings } from "../shared/policy.js";
 
 function emptyResultEntry(): ResultEntry {
   return {
@@ -50,20 +50,7 @@ export function createDefaultProposalsDocument(): ProposalsDocument {
 }
 
 export function createDefaultSettingsDocument(): AutonomySettings {
-  return {
-    version: 1,
-    install_source: "local_package",
-    initial_confirmation_required: true,
-    report_surface: "thread_and_inbox",
-    auto_commit: "autonomy_branch",
-    autonomy_branch: DEFAULT_AUTONOMY_BRANCH,
-    default_cruise_cadence: {
-      planner_hours: 6,
-      worker_hours: 2,
-      reviewer_hours: 6,
-    },
-    default_sprint_heartbeat_minutes: DEFAULT_SPRINT_HEARTBEAT_MINUTES,
-  };
+  return createDefaultAutonomySettings();
 }
 
 export function createDefaultResultsDocument(): AutonomyResults {
@@ -73,6 +60,7 @@ export function createDefaultResultsDocument(): AutonomyResults {
     last_inbox_run_at: null,
     last_summary_kind: null,
     last_summary_reason: null,
+    latest_goal_transition: null,
     planner: emptyResultEntry(),
     worker: emptyResultEntry(),
     review: emptyResultEntry(),

@@ -174,9 +174,7 @@ export async function runReviewCommand(
     ?.code as ReviewCommandResult["commit_skipped_reason"];
   const reviewFailedReason = issues.find((issue) => issue.code === "review_failed")
     ?.code as ReviewCommandResult["commit_skipped_reason"];
-  const skipReason = gate.reason === "no_diff"
-    ? "no_diff"
-    : blockedPathsReason ?? reviewFailedReason ?? null;
+  const skipReason = blockedPathsReason ?? reviewFailedReason ?? (gate.reason === "no_diff" ? "no_diff" : null);
 
   return {
     ok: issues.length === 0,

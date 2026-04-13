@@ -47,6 +47,15 @@ export async function runIntakeGoal(options: IntakeGoalOptions, repoRoot = proce
     const now = new Date().toISOString();
     const goalsDoc = await loadGoalsDocument(paths);
     const state = await loadStateDocument(paths);
+    const reportThreadId = options.reportThreadId?.trim() || state.report_thread_id;
+
+    if (!reportThreadId) {
+      throw new CliError(
+        "intake-goal requires --report-thread-id when the repo has not bound an originating thread yet.",
+        CLI_EXIT_CODES.usage,
+      );
+    }
+
     const goal = createGoalRecord({
       title,
       objective,
@@ -63,7 +72,7 @@ export async function runIntakeGoal(options: IntakeGoalOptions, repoRoot = proce
     };
     const updatedState = {
       ...state,
-      report_thread_id: options.reportThreadId?.trim() || state.report_thread_id,
+      report_thread_id: reportThreadId,
       last_result: "planned" as const,
     };
 

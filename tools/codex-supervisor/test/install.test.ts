@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runInstallCommand } from "../src/commands/install.js";
+import { getLegacyReviewScriptTemplates } from "../src/scaffold/templates.js";
 
 const tempRoots: string[] = [];
 
@@ -70,7 +71,8 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, ".codex", "environments", "environment.toml"), "utf8")).toContain(
       'name = "review"',
     );
-    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("Review precheck passed.");
+    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("Review checks passed.");
+    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("review.local.ps1");
     expect(await readFile(join(workspace, "scripts", "verify.ps1"), "utf8")).toContain("Install verify passed.");
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-intake", "SKILL.md"), "utf8")).toContain(
       "autonomy-intake",
@@ -81,7 +83,7 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
       "wake-up interval",
     );
-    expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("codex-autonomy");
+    expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("No active goal.");
     expect(await readFile(join(workspace, "autonomy", "journal.md"), "utf8")).toContain("Append one entry per run");
     expect(await readFile(join(workspace, "autonomy", "goals.json"), "utf8")).toContain('"goals"');
     expect(await readFile(join(workspace, "autonomy", "settings.json"), "utf8")).toContain('"autonomy_branch"');
@@ -119,7 +121,7 @@ describe("install scaffold", () => {
       ]),
     );
     expect(await readFile(join(workspace, "AGENTS.md"), "utf8")).toContain("# Repo Control Surface");
-    expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("codex-autonomy");
+    expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("No active goal.");
   });
 
   it("migrates legacy control-plane documents to the latest contract", async () => {
@@ -290,10 +292,389 @@ describe("install scaffold", () => {
     expect(goals.goals[0]?.run_mode).toBe("cruise");
     expect(goals.goals[0]?.approved_at).toBe("2026-01-01T00:00:00Z");
     expect(goals.goals[0]?.completed_at).toBeNull();
+    expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("Keep legacy goal running");
     expect(proposals.proposals[0]?.goal_id).toBe("goal-legacy");
     expect(proposals.proposals[0]?.status).toBe("awaiting_confirmation");
     expect(((proposals.proposals[0]?.tasks as Array<Record<string, unknown>>)[0])?.id).toBe("proposal-task-1");
     expect(blockers.blockers[0]?.resolution).toBeNull();
     expect(blockers.blockers[0]?.resolved_at).toBeNull();
+  });
+
+  it("blocks synthesized placeholder goals instead of treating them as approved work", async () => {
+    const workspace = await makeTempGitRepo();
+    await mkdir(join(workspace, "autonomy"), { recursive: true });
+    await writeFile(
+      join(workspace, "autonomy", "tasks.json"),
+      `${JSON.stringify({
+        version: 1,
+        tasks: [
+          {
+            id: "legacy-task-missing-goal",
+            goal_id: "goal-missing",
+            title: "Imported task with missing goal",
+            status: "ready",
+            priority: "P1",
+            depends_on: [],
+            acceptance: ["still passes verify"],
+            file_hints: [],
+            retry_count: 0,
+            last_error: null,
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "autonomy", "goals.json"),
+      `${JSON.stringify({
+        version: 1,
+        goals: [],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "autonomy", "state.json"),
+      `${JSON.stringify({
+        version: 1,
+        current_goal_id: "goal-missing",
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: "sprint",
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "noop",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-123",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    const goals = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8")) as { goals: Array<Record<string, unknown>> };
+    const state = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8")) as Record<string, unknown>;
+    const tasks = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8")) as { tasks: Array<Record<string, unknown>> };
+    const blockers = JSON.parse(await readFile(join(workspace, "autonomy", "blockers.json"), "utf8")) as { blockers: Array<Record<string, unknown>> };
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "placeholder_goals_blocked" }),
+      ]),
+    );
+    expect(goals.goals[0]?.id).toBe("goal-missing");
+    expect(goals.goals[0]?.status).toBe("blocked");
+    expect(goals.goals[0]?.approved_at).toBeNull();
+    expect(state.current_goal_id).toBeNull();
+    expect(state.cycle_status).toBe("blocked");
+    expect(state.last_result).toBe("blocked");
+    expect(state.needs_human_review).toBe(true);
+    expect(state.sprint_active).toBe(false);
+    expect(state.open_blocker_count).toBeGreaterThan(0);
+    expect(tasks.tasks[0]?.status).toBe("blocked");
+    expect(tasks.tasks[0]?.last_error).toBe("Referenced goal goal-missing is missing from goals.json and requires human review.");
+    expect(blockers.blockers[0]?.task_id).toBe("legacy-task-missing-goal");
+    expect(blockers.blockers[0]?.question).toContain("goal-missing");
+  });
+
+  it("migrates the legacy generated review script without overwriting user-owned files", async () => {
+    const workspace = await makeTempGitRepo();
+    await mkdir(join(workspace, "scripts"), { recursive: true });
+    await writeFile(join(workspace, "scripts", "review.ps1"), getLegacyReviewScriptTemplates()[0], "utf8");
+    await writeFile(join(workspace, "AGENTS.md"), "# user owned\n", "utf8");
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "control_plane_migrated" }),
+      ]),
+    );
+    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("Review checks passed.");
+    expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("review.local.ps1");
+    expect(await readFile(join(workspace, "AGENTS.md"), "utf8")).toBe("# user owned\n");
+  });
+
+  it("refreshes generated schema files when the installed contract changes", async () => {
+    const workspace = await makeTempGitRepo();
+    await mkdir(join(workspace, "autonomy", "schema"), { recursive: true });
+    await writeFile(
+      join(workspace, "autonomy", "schema", "results.schema.json"),
+      `${JSON.stringify({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://codex-auto.local/schema/results.schema.json",
+        title: "AutonomyResultsFile",
+        type: "object",
+        additionalProperties: false,
+        required: ["version", "planner", "worker", "review", "commit", "reporter"],
+        properties: {
+          version: {
+            type: "integer",
+            minimum: 1,
+          },
+          planner: {
+            type: "object",
+            additionalProperties: false,
+            required: ["status", "goal_id", "summary"],
+            properties: {
+              status: {
+                type: "string",
+                enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+              },
+              goal_id: {
+                type: ["string", "null"],
+                minLength: 1,
+              },
+              summary: {
+                type: ["string", "null"],
+              },
+            },
+          },
+          worker: {
+            type: "object",
+            additionalProperties: false,
+            required: ["status", "goal_id", "summary"],
+            properties: {
+              status: {
+                type: "string",
+                enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+              },
+              goal_id: {
+                type: ["string", "null"],
+                minLength: 1,
+              },
+              summary: {
+                type: ["string", "null"],
+              },
+            },
+          },
+          review: {
+            type: "object",
+            additionalProperties: false,
+            required: ["status", "goal_id", "summary"],
+            properties: {
+              status: {
+                type: "string",
+                enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+              },
+              goal_id: {
+                type: ["string", "null"],
+                minLength: 1,
+              },
+              summary: {
+                type: ["string", "null"],
+              },
+            },
+          },
+          commit: {
+            type: "object",
+            additionalProperties: false,
+            required: ["status", "goal_id", "summary"],
+            properties: {
+              status: {
+                type: "string",
+                enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+              },
+              goal_id: {
+                type: ["string", "null"],
+                minLength: 1,
+              },
+              summary: {
+                type: ["string", "null"],
+              },
+            },
+          },
+          reporter: {
+            type: "object",
+            additionalProperties: false,
+            required: ["status", "goal_id", "summary"],
+            properties: {
+              status: {
+                type: "string",
+                enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+              },
+              goal_id: {
+                type: ["string", "null"],
+                minLength: 1,
+              },
+              summary: {
+                type: ["string", "null"],
+              },
+            },
+          },
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "control_plane_migrated" }),
+      ]),
+    );
+    expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain(
+      '"latest_goal_transition"',
+    );
+  });
+
+  it("preserves user-managed schema customizations during install", async () => {
+    const workspace = await makeTempGitRepo();
+    await mkdir(join(workspace, "autonomy", "schema"), { recursive: true });
+    await writeFile(
+      join(workspace, "autonomy", "schema", "results.schema.json"),
+      `${JSON.stringify({
+        ...JSON.parse(JSON.stringify({
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          $id: "https://codex-auto.local/schema/results.schema.json",
+          title: "AutonomyResultsFile",
+          type: "object",
+          additionalProperties: false,
+          required: ["version", "planner", "worker", "review", "commit", "reporter"],
+          properties: {
+            version: {
+              type: "integer",
+              minimum: 1,
+            },
+            planner: {
+              type: "object",
+              additionalProperties: false,
+              required: ["status", "goal_id", "summary"],
+              properties: {
+                status: {
+                  type: "string",
+                  enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+                },
+                goal_id: {
+                  type: ["string", "null"],
+                  minLength: 1,
+                },
+                summary: {
+                  type: ["string", "null"],
+                },
+              },
+            },
+            worker: {
+              type: "object",
+              additionalProperties: false,
+              required: ["status", "goal_id", "summary"],
+              properties: {
+                status: {
+                  type: "string",
+                  enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+                },
+                goal_id: {
+                  type: ["string", "null"],
+                  minLength: 1,
+                },
+                summary: {
+                  type: ["string", "null"],
+                },
+              },
+            },
+            review: {
+              type: "object",
+              additionalProperties: false,
+              required: ["status", "goal_id", "summary"],
+              properties: {
+                status: {
+                  type: "string",
+                  enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+                },
+                goal_id: {
+                  type: ["string", "null"],
+                  minLength: 1,
+                },
+                summary: {
+                  type: ["string", "null"],
+                },
+              },
+            },
+            commit: {
+              type: "object",
+              additionalProperties: false,
+              required: ["status", "goal_id", "summary"],
+              properties: {
+                status: {
+                  type: "string",
+                  enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+                },
+                goal_id: {
+                  type: ["string", "null"],
+                  minLength: 1,
+                },
+                summary: {
+                  type: ["string", "null"],
+                },
+              },
+            },
+            reporter: {
+              type: "object",
+              additionalProperties: false,
+              required: ["status", "goal_id", "summary"],
+              properties: {
+                status: {
+                  type: "string",
+                  enum: ["not_run", "noop", "planned", "passed", "failed", "blocked", "sent", "skipped"],
+                },
+                goal_id: {
+                  type: ["string", "null"],
+                  minLength: 1,
+                },
+                summary: {
+                  type: ["string", "null"],
+                },
+              },
+            },
+          },
+        })),
+        x_user_managed: true,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain(
+      '"x_user_managed": true',
+    );
+    expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).not.toContain(
+      '"latest_goal_transition"',
+    );
   });
 });

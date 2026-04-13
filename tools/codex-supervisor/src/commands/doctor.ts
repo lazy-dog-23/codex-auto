@@ -351,8 +351,10 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
   const root = config[''] ?? {};
   const workspaceWrite = config['sandbox_workspace_write'] ?? {};
   const windows = config['windows'] ?? {};
+  const approvalPolicy = String(root.approval_policy ?? '');
+  const sandboxMode = String(root.sandbox_mode ?? '');
 
-  if (!['untrusted', 'on-request', 'never'].includes(String(root.approval_policy ?? ''))) {
+  if (!['untrusted', 'on-request', 'never'].includes(approvalPolicy)) {
     issues.push({
       severity: 'error',
       code: 'config_toml_invalid',
@@ -361,7 +363,7 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
     });
   }
 
-  if (!['read-only', 'workspace-write', 'danger-full-access'].includes(String(root.sandbox_mode ?? ''))) {
+  if (!['read-only', 'workspace-write', 'danger-full-access'].includes(sandboxMode)) {
     issues.push({
       severity: 'error',
       code: 'config_toml_invalid',
@@ -384,6 +386,24 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
       severity: 'error',
       code: 'config_toml_invalid',
       message: 'config.toml must define windows.sandbox as elevated or unelevated.',
+      path: configPath,
+    });
+  }
+
+  if (approvalPolicy === 'never') {
+    issues.push({
+      severity: 'warn',
+      code: 'config_toml_high_risk_approval_policy',
+      message: 'config.toml uses approval_policy=never. This enables unattended execution without approval prompts.',
+      path: configPath,
+    });
+  }
+
+  if (sandboxMode === 'danger-full-access') {
+    issues.push({
+      severity: 'warn',
+      code: 'config_toml_high_risk_sandbox_mode',
+      message: 'config.toml uses sandbox_mode=danger-full-access. This allows unrestricted filesystem access.',
       path: configPath,
     });
   }

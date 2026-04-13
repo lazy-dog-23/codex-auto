@@ -71,6 +71,25 @@ export const resultsSchema = {
     last_summary_reason: {
       type: ["string", "null"],
     },
+    latest_goal_transition: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["from_goal_id", "to_goal_id", "happened_at"],
+      properties: {
+        from_goal_id: {
+          type: "string",
+          minLength: 1,
+        },
+        to_goal_id: {
+          type: "string",
+          minLength: 1,
+        },
+        happened_at: {
+          type: ["string", "null"],
+          format: "date-time",
+        },
+      },
+    },
     planner: resultEntrySchema,
     worker: resultEntrySchema,
     review: resultEntrySchema,

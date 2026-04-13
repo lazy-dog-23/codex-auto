@@ -1,4 +1,78 @@
 {
   "version": 1,
-  "proposals": []
+  "proposals": [
+    {
+      "goal_id": "goal-system-audit-and-hardening-d9342362",
+      "status": "approved",
+      "summary": "Fallback proposal derived from objective, success criteria, constraints and out-of-scope notes and expanded into 5 task(s).",
+      "tasks": [
+        {
+          "id": "proposal-goal-system-audit-and-hardening-d9342362-objective",
+          "title": "Clarify and scope the goal objective",
+          "priority": "P0",
+          "depends_on": [],
+          "acceptance": [
+            "Objective: 检查当前 codex-auto 的安全性、健壮性、可用性与上手难度、扩展性，形成问题清单并逐项修复高优先级问题。"
+          ],
+          "file_hints": []
+        },
+        {
+          "id": "proposal-goal-system-audit-and-hardening-d9342362-criteria",
+          "title": "Implement the recorded success criteria",
+          "priority": "P1",
+          "depends_on": [
+            "proposal-goal-system-audit-and-hardening-d9342362-objective"
+          ],
+          "acceptance": [
+            "Success criterion: 按安全性、健壮性、可用性与上手难度、扩展性输出问题清单",
+            "Success criterion: 修复高优先级安全或数据一致性问题",
+            "Success criterion: 修复高优先级健壮性或流程阻断问题",
+            "Success criterion: 改进至少一项可用性或上手难度问题",
+            "Success criterion: 所有改动通过 scripts/verify.ps1 与必要回归测试"
+          ],
+          "file_hints": []
+        },
+        {
+          "id": "proposal-goal-system-audit-and-hardening-d9342362-constraints",
+          "title": "Respect the recorded constraints",
+          "priority": "P1",
+          "depends_on": [
+            "proposal-goal-system-audit-and-hardening-d9342362-criteria"
+          ],
+          "acceptance": [
+            "Constraint: 只修改必要源文件和 autonomy/*，不触碰未公开 Codex 内部接口",
+            "Constraint: 保持 Windows 原生 PowerShell、本地 Git 与 background worktree 方案"
+          ],
+          "file_hints": []
+        },
+        {
+          "id": "proposal-goal-system-audit-and-hardening-d9342362-scope",
+          "title": "Keep out-of-scope work out of the plan",
+          "priority": "P1",
+          "depends_on": [
+            "proposal-goal-system-audit-and-hardening-d9342362-constraints"
+          ],
+          "acceptance": [
+            "Out of scope: 不引入 GUI",
+            "Out of scope: 不接入私有 automation 存储"
+          ],
+          "file_hints": []
+        },
+        {
+          "id": "proposal-goal-system-audit-and-hardening-d9342362-verify",
+          "title": "Verify the proposal before task materialization",
+          "priority": "P1",
+          "depends_on": [
+            "proposal-goal-system-audit-and-hardening-d9342362-scope"
+          ],
+          "acceptance": [
+            "The proposal can be reviewed without writing tasks.json."
+          ],
+          "file_hints": []
+        }
+      ],
+      "created_at": "2026-04-13T02:07:24.685Z",
+      "approved_at": "2026-04-13T02:07:27.488Z"
+    }
+  ]
 }

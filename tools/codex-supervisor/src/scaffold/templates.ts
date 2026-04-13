@@ -637,6 +637,18 @@ function Test-ResultsDocument {
     if ($results.PSObject.Properties.Name -contains 'last_summary_kind') {
         Assert-True ($null -eq $results.last_summary_kind -or @('normal_success','thread_summary','immediate_exception','goal_transition') -contains [string]$results.last_summary_kind) "Invalid last_summary_kind in $Path."
     }
+    if ($results.PSObject.Properties.Name -contains 'latest_goal_transition' -and $null -ne $results.latest_goal_transition) {
+        $transition = $results.latest_goal_transition
+        foreach ($key in @('from_goal_id','to_goal_id','happened_at')) {
+            Assert-PropertyExists -Item $transition -Name $key -Path $Path -Context 'latest_goal_transition from'
+        }
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$transition.from_goal_id)) "Invalid latest_goal_transition.from_goal_id in $Path."
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$transition.to_goal_id)) "Invalid latest_goal_transition.to_goal_id in $Path."
+        if ($null -ne $transition.happened_at) {
+            $transitionAt = [datetime]::MinValue
+            Assert-True ([DateTime]::TryParse([string]$transition.happened_at, [ref]$transitionAt)) "Invalid latest_goal_transition.happened_at in $Path."
+        }
+    }
 
     foreach ($entryName in @('planner','worker','review','commit','reporter')) {
         Assert-PropertyExists -Item $results -Name $entryName -Path $Path
@@ -1000,7 +1012,7 @@ export function getReadmeMarkdown(): string {
     "5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。",
     "6. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。",
     "7. 在目标仓库运行 `codex-autonomy doctor` 查看健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree`。",
-    "8. 在目标仓库所在的 Codex app 原线程里，用自然语言完成目标 intake、确认提案、切换 run mode 和收取汇报。",
+    "8. 初次本地闭环可以直接走：`codex-autonomy intake-goal --report-thread-id <thread-id> ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal <goal-id>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。",
     "",
     "## 日常命令",
     "",
@@ -1009,12 +1021,13 @@ export function getReadmeMarkdown(): string {
     "- `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。",
     "- `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。",
     "- `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。",
-    "- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标规范化为待确认 goal。",
+    "- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。",
+    "- `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。",
     "- `codex-autonomy approve-proposal <goal-id>`：把提案物化为任务并激活该 goal。",
     "- `codex-autonomy status`：汇总 goal、任务、blocker、最近一次 verify/review/commit，以及是否适合下一轮 automation。",
     "- `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；主仓库或 background worktree dirty 时会拒绝继续。",
     "- `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。",
-    "- `codex-autonomy review`：执行 review gate 并返回是否允许后续提交或合并。",
+    "- `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。",
     "- `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。",
     "- `codex-autonomy pause` / `resume`：暂停或恢复自治循环。",
     "- `codex-autonomy emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner prompts 与建议 cadence。",
@@ -1026,10 +1039,12 @@ export function getReadmeMarkdown(): string {
     "- `AGENTS.md`：硬规则与运行约定。",
     "- `.agents/skills/$autonomy-plan`、`$autonomy-work`、`$autonomy-intake`、`$autonomy-review`、`$autonomy-report`、`$autonomy-sprint`：repo skills。",
     "- `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。",
+    "- `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `model = \"gpt-5.4\"`、`model_reasoning_effort = \"xhigh\"`、`service_tier = \"fast\"`。",
     "- `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。",
+    "- `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。",
     "- `autonomy/journal.md`：每次 run 只追加一条记录。",
     "- `scripts/verify.ps1`：唯一验收门。",
-    "- `scripts/review.ps1`：效果检查门。",
+    "- `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。",
     "",
     "## Background Worktree",
     "",
@@ -1046,6 +1061,19 @@ export function getReadmeMarkdown(): string {
     "- `kickoff` 表示目标确认后立即跑一轮，不等待下一个 heartbeat。",
     "- Reporter 正常只按 heartbeat 汇总成功结果；blocked、review_pending、commit 失败等重要异常立即回线程。",
     "- heartbeat automation 如果没有持久化模型字段，以 repo `.codex/config.toml` 和线程当前模型配置为兜底。",
+    "",
+    "## Review 扩展点",
+    "",
+    "- 默认 `scripts/review.ps1` 会先跑 `scripts/smoke.ps1`，再检查 `autonomy/state.json`、`goals.json`、`tasks.json`、`results.json`、`settings.json` 的基础一致性。",
+    "- 如果仓库需要更贴近业务效果的检查，可以在目标仓库额外放一个 `scripts/review.local.ps1`；基础 review 会自动调用它。",
+    "- `scripts/review.local.ps1` 适合放页面冒烟、接口探测、样例数据回归、关键输出校验这类项目特定逻辑。",
+    "",
+    "## 结果语义",
+    "",
+    "- `status` 和 `report` 会优先展示“当前 goal 的最近 planner/worker/review/commit 结果”，不再把历史 goal 的执行结果混进当前 goal 摘要。",
+    "- 如果当前 goal 还没有自己的执行结果，但最近一次 worker/review/commit 属于别的 goal，输出里会明确给出 `results_scope_note`。",
+    "- 当仓库还没有任何已记录运行时，`summary_kind` 会显示为 `none`，`summary_reason` 会明确说明 `No recorded autonomy run yet.`，不再伪装成成功。",
+    "- `goal_transition` 只认 `autonomy/results.json` 里显式记录的 transition 元数据，不再靠历史 completed goals 反推。",
     "",
     "## Git safe.directory",
     "",
@@ -1147,6 +1175,151 @@ function Assert-Exists {
     }
 }
 
+function Read-JsonFile {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -Depth 100
+    } catch {
+        throw "Invalid JSON in $Path. $($_.Exception.Message)"
+    }
+}
+
+function Get-OptionalString {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $null
+    }
+
+    return $text
+}
+
+$smokeScript = Join-Path $repoRoot 'scripts/smoke.ps1'
+$reviewLocalScript = Join-Path $repoRoot 'scripts/review.local.ps1'
+$statePath = Join-Path $repoRoot 'autonomy/state.json'
+$resultsPath = Join-Path $repoRoot 'autonomy/results.json'
+$goalsPath = Join-Path $repoRoot 'autonomy/goals.json'
+$tasksPath = Join-Path $repoRoot 'autonomy/tasks.json'
+$settingsPath = Join-Path $repoRoot 'autonomy/settings.json'
+
+Assert-Exists $smokeScript
+Assert-Exists $statePath
+Assert-Exists $resultsPath
+Assert-Exists $goalsPath
+Assert-Exists $tasksPath
+Assert-Exists $settingsPath
+
+& $smokeScript
+if (-not $?) {
+    $exitCodeVar = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+    $exitCode = if ($null -eq $exitCodeVar) { 1 } else { [int]$exitCodeVar.Value }
+    throw "smoke.ps1 failed with exit code $exitCode."
+}
+
+$state = Read-JsonFile -Path $statePath
+$results = Read-JsonFile -Path $resultsPath
+$goalsDoc = Read-JsonFile -Path $goalsPath
+$tasksDoc = Read-JsonFile -Path $tasksPath
+$settings = Read-JsonFile -Path $settingsPath
+
+if (-not ($goalsDoc.PSObject.Properties.Name -contains 'goals')) {
+    throw "Missing required key 'goals' in $goalsPath."
+}
+if (-not ($tasksDoc.PSObject.Properties.Name -contains 'tasks')) {
+    throw "Missing required key 'tasks' in $tasksPath."
+}
+
+foreach ($requiredResultKey in @('planner', 'worker', 'review', 'commit', 'reporter')) {
+    if (-not ($results.PSObject.Properties.Name -contains $requiredResultKey)) {
+        throw "Missing required key '$requiredResultKey' in $resultsPath."
+    }
+}
+
+$goals = @($goalsDoc.goals)
+$tasks = @($tasksDoc.tasks)
+$activeGoals = @($goals | Where-Object { [string]$_.status -eq 'active' })
+if ($activeGoals.Count -gt 1) {
+    throw "Found $($activeGoals.Count) active goals in $goalsPath. Expected at most one active goal."
+}
+
+$currentGoalId = Get-OptionalString $state.current_goal_id
+$currentTaskId = Get-OptionalString $state.current_task_id
+$stateRunMode = Get-OptionalString $state.run_mode
+$stateAutonomyBranch = Get-OptionalString $state.autonomy_branch
+$settingsAutonomyBranch = Get-OptionalString $settings.autonomy_branch
+
+if ($null -ne $stateAutonomyBranch -and $null -ne $settingsAutonomyBranch -and $stateAutonomyBranch -ne $settingsAutonomyBranch) {
+    throw "autonomy_branch mismatch between $statePath and $settingsPath."
+}
+
+$currentGoal = $null
+if ($null -ne $currentGoalId) {
+    $currentGoal = @($goals | Where-Object { [string]$_.id -eq $currentGoalId } | Select-Object -First 1)
+    if ($currentGoal.Count -eq 0) {
+        throw "Current goal '$currentGoalId' from $statePath does not exist in $goalsPath."
+    }
+
+    $goalRunMode = Get-OptionalString $currentGoal[0].run_mode
+    if ($null -ne $stateRunMode -and $null -ne $goalRunMode -and $stateRunMode -ne $goalRunMode) {
+        throw "run_mode mismatch between state '$stateRunMode' and current goal '$goalRunMode'."
+    }
+}
+
+if ($null -ne $currentTaskId) {
+    $currentTask = @($tasks | Where-Object { [string]$_.id -eq $currentTaskId } | Select-Object -First 1)
+    if ($currentTask.Count -eq 0) {
+        throw "Current task '$currentTaskId' from $statePath does not exist in $tasksPath."
+    }
+
+    if ($null -ne $currentGoalId -and [string]$currentTask[0].goal_id -ne $currentGoalId) {
+        throw "Current task '$currentTaskId' does not belong to current goal '$currentGoalId'."
+    }
+}
+
+$goalsRequiringThreadBinding = @($goals | Where-Object {
+    @('awaiting_confirmation', 'approved', 'active') -contains [string]$_.status
+})
+
+if ($goalsRequiringThreadBinding.Count -gt 0 -and $null -eq (Get-OptionalString $state.report_thread_id)) {
+    throw "report_thread_id must be set in $statePath before review can pass for actionable goals."
+}
+
+if (Test-Path -LiteralPath $reviewLocalScript) {
+    & $reviewLocalScript
+    if (-not $?) {
+        $exitCodeVar = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+        $exitCode = if ($null -eq $exitCodeVar) { 1 } else { [int]$exitCodeVar.Value }
+        throw "review.local.ps1 failed with exit code $exitCode."
+    }
+}
+
+Write-Host 'Review checks passed.'
+`;
+}
+
+export function getLegacyReviewScriptTemplates(): string[] {
+  return [
+    String.raw`[CmdletBinding()]
+param()
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function Assert-Exists {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Missing required path: $Path"
+    }
+}
+
 Assert-Exists (Join-Path $repoRoot 'scripts/smoke.ps1')
 
 & (Join-Path $repoRoot 'scripts/smoke.ps1')
@@ -1157,5 +1330,6 @@ if (-not $?) {
 }
 
 Write-Host 'Review precheck passed.'
-`;
+`,
+  ];
 }

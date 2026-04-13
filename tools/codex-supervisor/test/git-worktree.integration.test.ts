@@ -429,4 +429,197 @@ describe("git/worktree integration", () => {
     expect(driftReview.commit_skipped_reason).toBe("branch_drift");
     expect(driftReview.issues.some((issue) => issue.code === "branch_drift")).toBe(true);
   });
+
+  it("fails review when the control plane points to a missing current goal", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    await runBootstrapCommand(workspace);
+    await writeFile(
+      join(workspace, "scripts", "review.ps1"),
+      await readFile(join(repoRoot, "scripts", "review.ps1"), "utf8"),
+      "utf8",
+    );
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    const statePath = join(workspace, "autonomy", "state.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    state.current_goal_id = "goal-missing";
+    state.run_mode = "sprint";
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    const review = await runReviewCommand(workspace);
+    expect(review.ok).toBe(false);
+    expect(review.commit_ready).toBe(false);
+    expect(review.commit_skipped_reason).toBe("review_failed");
+    expect(review.issues.some((issue) => issue.code === "review_failed")).toBe(true);
+    expect(review.review_script.stderr).toContain("Current goal 'goal-missing'");
+  });
+
+  it("fails review when actionable goals are missing report_thread_id", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    await runBootstrapCommand(workspace);
+    await writeFile(
+      join(workspace, "scripts", "review.ps1"),
+      await readFile(join(repoRoot, "scripts", "review.ps1"), "utf8"),
+      "utf8",
+    );
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    const goalsPath = join(workspace, "autonomy", "goals.json");
+    const statePath = join(workspace, "autonomy", "state.json");
+    const goals = JSON.parse(await readFile(goalsPath, "utf8")) as { version: number; goals: Array<Record<string, unknown>> };
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+
+    goals.goals = [
+      {
+        id: "goal-1",
+        title: "Review thread binding",
+        objective: "Ensure review blocks missing thread binding when work exists.",
+        success_criteria: ["review fails without report_thread_id"],
+        constraints: [],
+        out_of_scope: [],
+        status: "active",
+        run_mode: "sprint",
+        created_at: "2026-01-01T00:00:00Z",
+        approved_at: "2026-01-01T00:00:00Z",
+        completed_at: null,
+      },
+    ];
+    state.current_goal_id = "goal-1";
+    state.run_mode = "sprint";
+    state.report_thread_id = null;
+
+    await writeFile(goalsPath, `${JSON.stringify(goals, null, 2)}\n`, "utf8");
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    const review = await runReviewCommand(workspace);
+    expect(review.ok).toBe(false);
+    expect(review.commit_ready).toBe(false);
+    expect(review.commit_skipped_reason).toBe("review_failed");
+    expect(review.issues.some((issue) => issue.code === "review_failed")).toBe(true);
+    expect(review.review_script.stderr).toContain("report_thread_id");
+  });
+
+  it("fails review when review.local.ps1 fails even with no diff", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    await runBootstrapCommand(workspace);
+    await writeFile(
+      join(workspace, "scripts", "review.ps1"),
+      await readFile(join(repoRoot, "scripts", "review.ps1"), "utf8"),
+      "utf8",
+    );
+    await writeFile(
+      join(workspace, "scripts", "review.local.ps1"),
+      "throw 'local review failed'\n",
+      "utf8",
+    );
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface with local review hook"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    const review = await runReviewCommand(workspace);
+    expect(review.ok).toBe(false);
+    expect(review.hasDiff).toBe(false);
+    expect(review.commit_ready).toBe(false);
+    expect(review.commit_skipped_reason).toBe("review_failed");
+    expect(review.issues.some((issue) => issue.code === "review_failed")).toBe(true);
+    expect(review.review_script.stderr).toContain("local review failed");
+  });
+
+  it("does not require report_thread_id when the only goal is blocked", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    await runBootstrapCommand(workspace);
+    await writeFile(
+      join(workspace, "scripts", "review.ps1"),
+      await readFile(join(repoRoot, "scripts", "review.ps1"), "utf8"),
+      "utf8",
+    );
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+    runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
+
+    const goalsPath = join(workspace, "autonomy", "goals.json");
+    const statePath = join(workspace, "autonomy", "state.json");
+    const goals = JSON.parse(await readFile(goalsPath, "utf8")) as { version: number; goals: Array<Record<string, unknown>> };
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+
+    goals.goals = [
+      {
+        id: "goal-blocked",
+        title: "Blocked goal",
+        objective: "Preserve blocked maintenance state without thread binding.",
+        success_criteria: ["review still runs"],
+        constraints: [],
+        out_of_scope: [],
+        status: "blocked",
+        run_mode: "sprint",
+        created_at: "2026-01-01T00:00:00Z",
+        approved_at: null,
+        completed_at: null,
+      },
+    ];
+    state.current_goal_id = null;
+    state.run_mode = null;
+    state.report_thread_id = null;
+
+    await writeFile(goalsPath, `${JSON.stringify(goals, null, 2)}\n`, "utf8");
+    await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+    const review = await runReviewCommand(workspace);
+    expect(review.ok).toBe(true);
+    expect(review.commit_ready).toBe(true);
+    expect(review.commit_skipped_reason).toBeNull();
+    expect(review.issues).toHaveLength(0);
+  });
 });

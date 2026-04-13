@@ -49,6 +49,105 @@
       "updated_at": "2026-04-12T18:12:38.089Z",
       "commit_hash": null,
       "review_status": "passed"
+    },
+    {
+      "id": "proposal-goal-system-audit-and-hardening-d9342362-objective",
+      "goal_id": "goal-system-audit-and-hardening-d9342362",
+      "title": "Clarify and scope the goal objective",
+      "status": "ready",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": [
+        "Objective: 检查当前 codex-auto 的安全性、健壮性、可用性与上手难度、扩展性，形成问题清单并逐项修复高优先级问题。"
+      ],
+      "file_hints": [],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-04-13T02:07:27.488Z",
+      "commit_hash": null,
+      "review_status": "not_reviewed"
+    },
+    {
+      "id": "proposal-goal-system-audit-and-hardening-d9342362-criteria",
+      "goal_id": "goal-system-audit-and-hardening-d9342362",
+      "title": "Implement the recorded success criteria",
+      "status": "queued",
+      "priority": "P1",
+      "depends_on": [
+        "proposal-goal-system-audit-and-hardening-d9342362-objective"
+      ],
+      "acceptance": [
+        "Success criterion: 按安全性、健壮性、可用性与上手难度、扩展性输出问题清单",
+        "Success criterion: 修复高优先级安全或数据一致性问题",
+        "Success criterion: 修复高优先级健壮性或流程阻断问题",
+        "Success criterion: 改进至少一项可用性或上手难度问题",
+        "Success criterion: 所有改动通过 scripts/verify.ps1 与必要回归测试"
+      ],
+      "file_hints": [],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-04-13T02:07:27.488Z",
+      "commit_hash": null,
+      "review_status": "not_reviewed"
+    },
+    {
+      "id": "proposal-goal-system-audit-and-hardening-d9342362-constraints",
+      "goal_id": "goal-system-audit-and-hardening-d9342362",
+      "title": "Respect the recorded constraints",
+      "status": "queued",
+      "priority": "P1",
+      "depends_on": [
+        "proposal-goal-system-audit-and-hardening-d9342362-criteria"
+      ],
+      "acceptance": [
+        "Constraint: 只修改必要源文件和 autonomy/*，不触碰未公开 Codex 内部接口",
+        "Constraint: 保持 Windows 原生 PowerShell、本地 Git 与 background worktree 方案"
+      ],
+      "file_hints": [],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-04-13T02:07:27.488Z",
+      "commit_hash": null,
+      "review_status": "not_reviewed"
+    },
+    {
+      "id": "proposal-goal-system-audit-and-hardening-d9342362-scope",
+      "goal_id": "goal-system-audit-and-hardening-d9342362",
+      "title": "Keep out-of-scope work out of the plan",
+      "status": "queued",
+      "priority": "P1",
+      "depends_on": [
+        "proposal-goal-system-audit-and-hardening-d9342362-constraints"
+      ],
+      "acceptance": [
+        "Out of scope: 不引入 GUI",
+        "Out of scope: 不接入私有 automation 存储"
+      ],
+      "file_hints": [],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-04-13T02:07:27.488Z",
+      "commit_hash": null,
+      "review_status": "not_reviewed"
+    },
+    {
+      "id": "proposal-goal-system-audit-and-hardening-d9342362-verify",
+      "goal_id": "goal-system-audit-and-hardening-d9342362",
+      "title": "Verify the proposal before task materialization",
+      "status": "queued",
+      "priority": "P1",
+      "depends_on": [
+        "proposal-goal-system-audit-and-hardening-d9342362-scope"
+      ],
+      "acceptance": [
+        "The proposal can be reviewed without writing tasks.json."
+      ],
+      "file_hints": [],
+      "retry_count": 0,
+      "last_error": null,
+      "updated_at": "2026-04-13T02:07:27.488Z",
+      "commit_hash": null,
+      "review_status": "not_reviewed"
     }
   ]
 }

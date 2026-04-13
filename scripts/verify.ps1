@@ -314,6 +314,18 @@ function Test-ResultsDocument {
     if ($results.PSObject.Properties.Name -contains 'last_summary_kind') {
         Assert-True ($null -eq $results.last_summary_kind -or @('normal_success','thread_summary','immediate_exception','goal_transition') -contains [string]$results.last_summary_kind) "Invalid last_summary_kind in $Path."
     }
+    if ($results.PSObject.Properties.Name -contains 'latest_goal_transition' -and $null -ne $results.latest_goal_transition) {
+        $transition = $results.latest_goal_transition
+        foreach ($key in @('from_goal_id','to_goal_id','happened_at')) {
+            Assert-PropertyExists -Item $transition -Name $key -Path $Path -Context 'latest_goal_transition from'
+        }
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$transition.from_goal_id)) "Invalid latest_goal_transition.from_goal_id in $Path."
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$transition.to_goal_id)) "Invalid latest_goal_transition.to_goal_id in $Path."
+        if ($null -ne $transition.happened_at) {
+            $transitionAt = [datetime]::MinValue
+            Assert-True ([DateTime]::TryParse([string]$transition.happened_at, [ref]$transitionAt)) "Invalid latest_goal_transition.happened_at in $Path."
+        }
+    }
 
     foreach ($entryName in @('planner','worker','review','commit','reporter')) {
         Assert-PropertyExists -Item $results -Name $entryName -Path $Path
