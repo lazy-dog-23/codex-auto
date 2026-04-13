@@ -1,4 +1,4 @@
-import { RESULT_STATES, REVIEW_STATUSES, SUMMARY_KINDS } from "../contracts/autonomy.js";
+import { CONTINUATION_DECISIONS, RESULT_STATES, REVIEW_STATUSES, SUMMARY_KINDS } from "../contracts/autonomy.js";
 
 const resultEntrySchema = {
   type: "object",
@@ -40,6 +40,13 @@ const resultEntrySchema = {
     review_status: {
       type: ["string", "null"],
       enum: [...REVIEW_STATUSES, null],
+    },
+    next_step_summary: {
+      type: ["string", "null"],
+    },
+    continuation_decision: {
+      type: ["string", "null"],
+      enum: [...CONTINUATION_DECISIONS, null],
     },
   },
 } as const;

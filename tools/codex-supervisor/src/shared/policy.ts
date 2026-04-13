@@ -15,6 +15,8 @@ export function createDefaultAutonomySettings(): AutonomySettings {
     report_surface: "thread_and_inbox",
     auto_commit: "autonomy_branch",
     autonomy_branch: DEFAULT_AUTONOMY_BRANCH,
+    auto_continue_within_goal: true,
+    block_on_major_decision: true,
     default_cruise_cadence: { ...DEFAULT_CRUISE_CADENCE },
     default_sprint_heartbeat_minutes: DEFAULT_SPRINT_HEARTBEAT_MINUTES,
   };

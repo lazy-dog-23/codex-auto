@@ -1,4 +1,4 @@
-import { REVIEW_STATUSES, TASK_PRIORITIES, TASK_STATUSES } from "../domain/types.js";
+import { REVIEW_STATUSES, TASK_PRIORITIES, TASK_SOURCES, TASK_STATUSES } from "../domain/types.js";
 
 export const tasksSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -38,6 +38,8 @@ export const tasksSchema = {
         "updated_at",
         "commit_hash",
         "review_status",
+        "source",
+        "source_task_id",
       ],
       properties: {
         id: { type: "string", minLength: 1 },
@@ -79,6 +81,13 @@ export const tasksSchema = {
         review_status: {
           type: "string",
           enum: [...REVIEW_STATUSES],
+        },
+        source: {
+          type: "string",
+          enum: [...TASK_SOURCES],
+        },
+        source_task_id: {
+          type: ["string", "null"],
         },
       },
     },

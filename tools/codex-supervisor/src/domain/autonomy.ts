@@ -4,6 +4,8 @@ import {
   type BlockerSeed,
   type DirtyWorktreeReviewPendingOptions,
   type DirtyWorktreeReviewPendingResult,
+  type FollowupSeed,
+  type FollowupTaskCreationResult,
   type GoalCompletionResult,
   type GoalProposal,
   type GoalRecord,
@@ -271,6 +273,94 @@ export function countOpenBlockersForTask(blockers: readonly BlockerRecord[], tas
   return blockers.filter((blocker) => blocker.task_id === taskId && blocker.status === "open").length;
 }
 
+export function countReadyTasksForGoal(tasks: readonly TaskRecord[], goalId: string | null): number {
+  if (!goalId) {
+    return 0;
+  }
+
+  return tasks.filter((task) => task.goal_id === goalId && task.status === "ready").length;
+}
+
+export function findNextReadyTask(tasks: readonly TaskRecord[], goalId: string | null): TaskRecord | null {
+  if (!goalId) {
+    return null;
+  }
+
+  return [...tasks]
+    .filter((task) => task.goal_id === goalId && task.status === "ready")
+    .sort(compareTaskPriority)[0] ?? null;
+}
+
+export function createOrReuseFollowupTask(
+  tasks: readonly TaskRecord[],
+  seed: FollowupSeed,
+): FollowupTaskCreationResult {
+  const normalizedTitle = normalizeContinuationText(seed.title);
+  const normalizedHints = normalizeFileHints(seed.file_hints);
+  const matchingTasks = tasks.filter((task) => (
+    task.goal_id === seed.goal_id
+    && task.source === "followup"
+    && task.source_task_id === seed.source_task_id
+    && normalizeContinuationText(task.title) === normalizedTitle
+    && normalizeFileHints(task.file_hints) === normalizedHints
+  ));
+
+  const duplicate = matchingTasks.find((task) => task.status !== "done") ?? null;
+  if (duplicate) {
+    return {
+      tasks: [...tasks],
+      createdTask: null,
+      duplicateTaskId: duplicate.id,
+      loopDetected: false,
+      blockerSeed: null,
+    };
+  }
+
+  if (matchingTasks.length >= 1) {
+    return {
+      tasks: [...tasks],
+      createdTask: null,
+      duplicateTaskId: null,
+      loopDetected: true,
+      blockerSeed: {
+        task_id: seed.source_task_id ?? `goal::${seed.goal_id}`,
+        question: `followup_loop_detected: ${seed.title}`,
+        severity: "medium",
+        status: "open",
+        resolution: null,
+        opened_at: seed.updated_at,
+        resolved_at: null,
+      },
+    };
+  }
+
+  const createdTask: TaskRecord = {
+    id: buildFollowupTaskId(seed),
+    goal_id: seed.goal_id,
+    title: seed.title.trim(),
+    status: "queued",
+    priority: "P1",
+    depends_on: [],
+    acceptance: dedupeNonEmpty(seed.acceptance),
+    file_hints: dedupeNonEmpty(seed.file_hints),
+    retry_count: 0,
+    last_error: null,
+    updated_at: seed.updated_at,
+    commit_hash: null,
+    review_status: "not_reviewed",
+    source: "followup",
+    source_task_id: seed.source_task_id,
+  };
+
+  return {
+    tasks: [...tasks, createdTask],
+    createdTask,
+    duplicateTaskId: null,
+    loopDetected: false,
+    blockerSeed: null,
+  };
+}
+
 export function reconcileOpenBlockerCount(state: AutonomyState, blockers: readonly BlockerRecord[]): AutonomyState {
   return {
     ...state,
@@ -430,6 +520,8 @@ export function materializeProposal(
     updated_at: now,
     commit_hash: null,
     review_status: "not_reviewed" as const,
+    source: "proposal" as const,
+    source_task_id: null,
   }));
 
   const taskIds = new Set(materializedTasks.map((task) => task.id));
@@ -480,6 +572,43 @@ export function materializeProposal(
     proposals: updatedProposals,
     state: nextState,
   };
+}
+
+function buildFollowupTaskId(seed: FollowupSeed): string {
+  const sourcePart = seed.source_task_id ? slugify(seed.source_task_id) : "goal";
+  const titlePart = slugify(seed.title);
+  return `followup-${sourcePart}-${titlePart}`;
+}
+
+function slugify(value: string): string {
+  const normalized = value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized.slice(0, 40) || "task";
+}
+
+function normalizeContinuationText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeFileHints(fileHints: readonly string[]): string {
+  return dedupeNonEmpty(fileHints).map((item) => item.toLowerCase()).sort().join("|");
+}
+
+function dedupeNonEmpty(items: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of items) {
+    const normalized = item.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
 }
 
 export function completeCurrentGoalIfEligible(

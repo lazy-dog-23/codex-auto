@@ -57,6 +57,12 @@ export interface ReportResult {
   has_recorded_run: boolean;
   results_scope_note: string | null;
   next_automation_reason: string | null;
+  auto_continue_state: string;
+  continuation_reason: string | null;
+  next_task_id: string | null;
+  next_task_title: string | null;
+  remaining_ready: number;
+  last_followup_summary: string | null;
   runtime_reason: string | null;
   healthy_runtime: boolean;
   runtime_warnings: ReportWarning[];
@@ -118,6 +124,12 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     hasRecordedRun: summarySnapshot.hasRecordedRun,
     resultsScopeNote: scopedResults.resultsScopeNote,
     nextAutomationReason,
+    autoContinueState: status.auto_continue_state,
+    continuationReason: status.continuation_reason,
+    nextTaskId: status.next_task_id,
+    nextTaskTitle: status.next_task_title,
+    remainingReady: status.remaining_ready,
+    lastFollowupSummary: status.last_followup_summary,
     runtimeWarnings,
   });
 
@@ -145,6 +157,12 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     has_recorded_run: summarySnapshot.hasRecordedRun,
     results_scope_note: scopedResults.resultsScopeNote,
     next_automation_reason: nextAutomationReason,
+    auto_continue_state: status.auto_continue_state,
+    continuation_reason: status.continuation_reason,
+    next_task_id: status.next_task_id,
+    next_task_title: status.next_task_title,
+    remaining_ready: status.remaining_ready,
+    last_followup_summary: status.last_followup_summary,
     runtime_reason: nextAutomationReason,
     healthy_runtime: healthyRuntime,
     runtime_warnings: runtimeWarnings,
@@ -184,6 +202,12 @@ function buildReportMessage(
     hasRecordedRun: boolean;
     resultsScopeNote: string | null;
     nextAutomationReason: string | null;
+    autoContinueState: string;
+    continuationReason: string | null;
+    nextTaskId: string | null;
+    nextTaskTitle: string | null;
+    remainingReady: number;
+    lastFollowupSummary: string | null;
     runtimeWarnings: readonly ReportWarning[];
   },
 ): string {
@@ -206,6 +230,11 @@ function buildReportMessage(
   const resultsScopePart = `results_scope_note=${formatNullableValue(options.resultsScopeNote)}`;
   const threadSummaryAtPart = `last_thread_summary_sent_at=${formatNullableValue(options.lastThreadSummarySentAt)}`;
   const inboxRunAtPart = `last_inbox_run_at=${formatNullableValue(options.lastInboxRunAt)}`;
+  const autoContinueStatePart = `auto_continue_state=${formatNullableValue(options.autoContinueState)}`;
+  const continuationReasonPart = `continuation_reason=${formatNullableValue(options.continuationReason)}`;
+  const nextTaskPart = `next_task=${options.nextTaskId ? `${options.nextTaskId}${options.nextTaskTitle ? `(${options.nextTaskTitle})` : ""}` : "none"}`;
+  const remainingReadyPart = `remaining_ready=${options.remainingReady}`;
+  const lastFollowupSummaryPart = `last_followup_summary=${formatNullableValue(options.lastFollowupSummary)}`;
   const nextAutomationReasonPart = `next_automation_reason=${formatNullableValue(options.nextAutomationReason)}`;
   const runtimePart = formatRuntimeWarnings(options.runtimeWarnings);
   return [
@@ -226,6 +255,11 @@ function buildReportMessage(
     resultsScopePart,
     threadSummaryAtPart,
     inboxRunAtPart,
+    autoContinueStatePart,
+    continuationReasonPart,
+    nextTaskPart,
+    remainingReadyPart,
+    lastFollowupSummaryPart,
     nextAutomationReasonPart,
     runtimePart,
   ].join(" ");

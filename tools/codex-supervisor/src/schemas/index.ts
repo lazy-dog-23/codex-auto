@@ -5,3 +5,4 @@ export * from "./goals.schema.js";
 export * from "./proposals.schema.js";
 export * from "./settings.schema.js";
 export * from "./results.schema.js";
+export * from "./install.schema.js";

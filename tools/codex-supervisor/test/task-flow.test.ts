@@ -6,6 +6,7 @@ import {
   applyUnblockRestoration,
   completeCurrentGoalIfEligible,
   completeWorkerTask,
+  createOrReuseFollowupTask,
   decideUnblockRestoration,
   failWorkerVerification,
   materializeProposal,
@@ -28,6 +29,8 @@ function makeTask(overrides: Partial<TaskRecord>): TaskRecord {
     updated_at: overrides.updated_at ?? "2026-01-01T00:00:00Z",
     commit_hash: overrides.commit_hash ?? null,
     review_status: overrides.review_status ?? "not_reviewed",
+    source: overrides.source ?? "proposal",
+    source_task_id: overrides.source_task_id ?? null,
   };
 }
 
@@ -216,6 +219,56 @@ describe("task flow", () => {
     expect(result.state.current_goal_id).toBe("goal-b");
     expect(result.state.run_mode).toBe("sprint");
     expect(result.state.sprint_active).toBe(true);
+  });
+
+  it("creates a follow-up task once and blocks repeated completed follow-ups from looping", () => {
+    const initialTasks = [
+      makeTask({ id: "task-source", status: "done" }),
+    ];
+
+    const created = createOrReuseFollowupTask(initialTasks, {
+      goal_id: "goal-a",
+      title: "Add regression coverage",
+      acceptance: ["regression check exists"],
+      file_hints: ["test/regression.test.ts"],
+      source_task_id: "task-source",
+      updated_at: "2026-01-06T06:00:00Z",
+    });
+
+    expect(created.createdTask?.source).toBe("followup");
+    expect(created.createdTask?.source_task_id).toBe("task-source");
+    expect(created.tasks).toHaveLength(2);
+
+    const duplicated = createOrReuseFollowupTask(created.tasks, {
+      goal_id: "goal-a",
+      title: "Add regression coverage",
+      acceptance: ["regression check exists"],
+      file_hints: ["test/regression.test.ts"],
+      source_task_id: "task-source",
+      updated_at: "2026-01-06T06:10:00Z",
+    });
+
+    expect(duplicated.createdTask).toBeNull();
+    expect(duplicated.duplicateTaskId).toBeTruthy();
+    expect(duplicated.tasks).toHaveLength(2);
+
+    const completedFollowup = duplicated.tasks.map((task) =>
+      task.id === duplicated.duplicateTaskId
+        ? { ...task, status: "done" as const }
+        : task,
+    );
+    const loopDetected = createOrReuseFollowupTask(completedFollowup, {
+      goal_id: "goal-a",
+      title: "Add regression coverage",
+      acceptance: ["regression check exists"],
+      file_hints: ["test/regression.test.ts"],
+      source_task_id: "task-source",
+      updated_at: "2026-01-06T06:20:00Z",
+    });
+
+    expect(loopDetected.createdTask).toBeNull();
+    expect(loopDetected.loopDetected).toBe(true);
+    expect(loopDetected.blockerSeed?.question).toContain("followup_loop_detected");
   });
 
   it("activates a chosen goal and demotes any other active goal back to approved", () => {

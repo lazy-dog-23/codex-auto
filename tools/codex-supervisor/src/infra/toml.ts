@@ -1,68 +1,45 @@
 import { readFile } from "node:fs/promises";
+import { parse, type TomlTable as SmolTomlTable, type TomlValue as SmolTomlValue } from "smol-toml";
 
-export type SimpleTomlValue = string | boolean | number;
-export type SimpleTomlDocument = Record<string, Record<string, SimpleTomlValue>>;
+export type TomlValue = SmolTomlValue;
+export type TomlDocument = SmolTomlTable;
+export type TomlTable = TomlDocument;
+export type TomlArray = Extract<TomlValue, readonly unknown[]>;
+export type TomlPrimitive = Exclude<TomlValue, TomlArray | TomlTable>;
 
-export function parseSimpleToml(text: string): SimpleTomlDocument {
-  const document: SimpleTomlDocument = { "": {} };
-  let currentSection = "";
+export type SimpleTomlValue = TomlValue;
+export type SimpleTomlDocument = TomlDocument;
 
-  for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-
-    if (line.startsWith("#")) {
-      continue;
-    }
-
-    const sectionMatch = line.match(/^\[(?<name>[^\[\]]+)\]$/);
-    if (sectionMatch?.groups?.name) {
-      currentSection = sectionMatch.groups.name.trim();
-      document[currentSection] ??= {};
-      continue;
-    }
-
-    if (line.startsWith("[[")) {
-      throw new Error(`Unsupported TOML array-of-tables at line ${index + 1}.`);
-    }
-
-    const keyValueMatch = line.match(/^(?<key>[A-Za-z0-9_.:-]+)\s*=\s*(?<value>.+)$/);
-    if (!keyValueMatch?.groups?.key || keyValueMatch.groups.value === undefined) {
-      throw new Error(`Unsupported TOML syntax at line ${index + 1}.`);
-    }
-
-    const key = keyValueMatch.groups.key.trim();
-    const rawValue = keyValueMatch.groups.value.trim();
-    const section = document[currentSection] ?? (document[currentSection] = {});
-    section[key] = parseSimpleTomlValue(rawValue, index + 1);
-  }
-
-  return document;
+export function parseToml(text: string): TomlDocument {
+  const normalized = text.startsWith("\ufeff") ? text.slice(1) : text;
+  return parse(normalized) as TomlDocument;
 }
 
-export async function readSimpleTomlFile(filePath: string): Promise<SimpleTomlDocument> {
+export async function readTomlFile(filePath: string): Promise<TomlDocument> {
   const text = await readFile(filePath, "utf8");
-  return parseSimpleToml(text);
+  return parseToml(text);
 }
 
-function parseSimpleTomlValue(rawValue: string, lineNumber: number): SimpleTomlValue {
-  if (/^".*"$/.test(rawValue)) {
-    return rawValue.slice(1, -1);
+export const parseSimpleToml = parseToml;
+export const readSimpleTomlFile = readTomlFile;
+
+export function lookupTomlValue(document: TomlDocument, path: readonly string[]): unknown {
+  let current: unknown = document;
+
+  for (const segment of path) {
+    if (!isTomlTable(current)) {
+      return undefined;
+    }
+
+    current = current[segment];
+    if (current === undefined) {
+      return undefined;
+    }
   }
 
-  if (rawValue === "true") {
-    return true;
-  }
+  return current;
+}
 
-  if (rawValue === "false") {
-    return false;
-  }
-
-  if (/^-?\d+$/.test(rawValue)) {
-    return Number(rawValue);
-  }
-
-  throw new Error(`Unsupported TOML value at line ${lineNumber}.`);
+function isTomlTable(value: unknown): value is TomlTable {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

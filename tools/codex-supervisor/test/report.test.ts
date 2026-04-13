@@ -89,6 +89,10 @@ describe("report command", () => {
     expect(report.latest_summary_reason).toBe("Heartbeat summary sent to the thread and Inbox.");
     expect(report.has_recorded_run).toBe(true);
     expect(report.results_scope_note).toBeNull();
+    expect(report.auto_continue_state).toBe("stopped");
+    expect(report.next_task_id).toBe("task-b");
+    expect(report.remaining_ready).toBe(1);
+    expect(report.last_followup_summary).toBe("Add a regression check for unblock flow.");
     expect(report.next_automation_reason).toContain("Current workspace is not a Git repository");
     expect(report.runtime_reason).toContain("Current workspace is not a Git repository");
     expect(report.open_blockers).toHaveLength(1);
@@ -104,6 +108,7 @@ describe("report command", () => {
     expect(report.message).toContain("open_blockers=1[blocker-a/task-c:medium]");
     expect(report.message).toContain("paused=yes(needs human review)");
     expect(report.message).toContain("goal_transition=none");
+    expect(report.message).toContain("auto_continue_state=stopped");
     expect(report.message).toContain("runtime=warning[not_a_git_repo]");
   });
 

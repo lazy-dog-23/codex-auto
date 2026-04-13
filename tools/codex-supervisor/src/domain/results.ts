@@ -1,6 +1,7 @@
 import type {
   AutonomyResults,
   AutonomyState,
+  ContinuationDecision,
   GoalTransitionSnapshot,
   ResultEntry,
   SummaryKind,
@@ -22,6 +23,8 @@ export interface ScopedResultsSummary {
   reviewResult: string | null;
   commitHash: string | null;
   commitMessage: string | null;
+  nextStepSummary: string | null;
+  continuationDecision: ContinuationDecision | null;
   resultsScopeNote: string | null;
 }
 
@@ -29,14 +32,16 @@ export function hasRecordedResultEntry(entry: ResultEntry): boolean {
   return (
     entry.status !== "not_run" ||
     entry.goal_id !== null ||
-    entry.task_id !== null ||
+    (entry.task_id !== null && entry.task_id !== undefined) ||
     entry.summary !== null ||
-    entry.happened_at !== null ||
-    entry.sent_at !== null ||
-    entry.verify_summary !== null ||
-    entry.hash !== null ||
-    entry.message !== null ||
-    entry.review_status !== null
+    (entry.happened_at !== null && entry.happened_at !== undefined) ||
+    (entry.sent_at !== null && entry.sent_at !== undefined) ||
+    (entry.verify_summary !== null && entry.verify_summary !== undefined) ||
+    (entry.hash !== null && entry.hash !== undefined) ||
+    (entry.message !== null && entry.message !== undefined) ||
+    (entry.review_status !== null && entry.review_status !== undefined) ||
+    (entry.next_step_summary !== null && entry.next_step_summary !== undefined) ||
+    (entry.continuation_decision !== null && entry.continuation_decision !== undefined)
   );
 }
 
@@ -108,6 +113,7 @@ export function scopeResultsSummary(results: AutonomyResults, currentGoalId: str
   const workerEntry = pickExecutionEntryForGoal(results.worker, currentGoalId);
   const reviewEntry = pickExecutionEntryForGoal(results.review, currentGoalId);
   const commitEntry = pickExecutionEntryForGoal(results.commit, currentGoalId);
+  const reporterEntry = pickExecutionEntryForGoal(results.reporter, currentGoalId);
 
   return {
     plannerSummary: plannerEntry?.summary ?? null,
@@ -116,6 +122,16 @@ export function scopeResultsSummary(results: AutonomyResults, currentGoalId: str
     reviewResult: reviewEntry?.summary ?? reviewEntry?.review_status ?? null,
     commitHash: commitEntry?.hash ?? null,
     commitMessage: commitEntry?.message ?? commitEntry?.summary ?? null,
+    nextStepSummary: reviewEntry?.next_step_summary
+      ?? reporterEntry?.next_step_summary
+      ?? workerEntry?.next_step_summary
+      ?? plannerEntry?.next_step_summary
+      ?? null,
+    continuationDecision: reviewEntry?.continuation_decision
+      ?? reporterEntry?.continuation_decision
+      ?? workerEntry?.continuation_decision
+      ?? plannerEntry?.continuation_decision
+      ?? null,
     resultsScopeNote: buildResultsScopeNote(results, currentGoalId),
   };
 }

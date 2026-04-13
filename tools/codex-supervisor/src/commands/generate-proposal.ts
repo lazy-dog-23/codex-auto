@@ -4,9 +4,9 @@ import type {
   CommandResult,
   GoalRecord,
   GoalsDocument,
-  ProposedTask,
   ProposalsDocument,
 } from "../contracts/autonomy.js";
+import { buildRepoAwareFallbackProposal } from "../domain/proposal.js";
 import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { appendJournalEntry } from "../infra/journal.js";
 import { detectGitRepository } from "../infra/git.js";
@@ -51,8 +51,9 @@ export async function runGenerateProposal(
       );
     }
 
-    const tasks = buildFallbackProposalTasks(targetGoal);
-    const summary = buildFallbackSummary(targetGoal, tasks.length);
+    const proposalPlan = await buildRepoAwareFallbackProposal(targetGoal, paths.repoRoot);
+    const tasks = proposalPlan.tasks;
+    const summary = proposalPlan.summary;
     const proposal = buildProposalFromTasks({
       goalId: targetGoal.id,
       summary,
@@ -68,14 +69,14 @@ export async function runGenerateProposal(
       ...resultsDoc,
       last_inbox_run_at: now,
       last_summary_kind: "normal_success" as const,
-      last_summary_reason: `Generated fallback proposal for ${targetGoal.id} without materializing tasks.json.`,
+      last_summary_reason: `Generated repo-aware fallback proposal for ${targetGoal.id} without materializing tasks.json.`,
       latest_goal_transition: null,
       planner: {
         ...resultsDoc.planner,
         status: "planned" as const,
         goal_id: targetGoal.id,
         task_id: null,
-        summary: `Generated fallback proposal for ${targetGoal.id} with ${tasks.length} task(s).`,
+        summary: `Generated repo-aware fallback proposal for ${targetGoal.id} with ${tasks.length} task(s).`,
         happened_at: now,
         sent_at: null,
         verify_summary: null,
@@ -92,14 +93,14 @@ export async function runGenerateProposal(
       actor: "supervisor",
       taskId: targetGoal.id,
       result: "planned",
-      summary: `Generated fallback proposal with ${tasks.length} task(s): ${summary}.`,
+      summary: `Generated repo-aware fallback proposal with ${tasks.length} task(s): ${summary}.`,
       verify: "not run (codex-autonomy generate-proposal)",
       blocker: "none",
     });
 
     return {
       ok: true,
-      message: `Generated proposal for ${targetGoal.id} with ${tasks.length} task(s).`,
+      message: `Generated repo-aware proposal for ${targetGoal.id} with ${tasks.length} task(s).`,
     };
   } finally {
     await releaseCycleLock(paths.cycleLockFile, lock);
@@ -158,105 +159,4 @@ function resolveTargetGoal(
   }
 
   return target;
-}
-
-function buildFallbackProposalTasks(goal: GoalRecord): ProposedTask[] {
-  const tasks: ProposedTask[] = [];
-
-  addTask(tasks, goal, "objective", "Clarify and scope the goal objective", [
-    `Objective: ${goal.objective}`,
-  ]);
-
-  if (goal.success_criteria.length > 0) {
-    addTask(tasks, goal, "criteria", "Implement the recorded success criteria", goal.success_criteria.map((item) => `Success criterion: ${item}`));
-  }
-
-  if (goal.constraints.length > 0) {
-    addTask(tasks, goal, "constraints", "Respect the recorded constraints", goal.constraints.map((item) => `Constraint: ${item}`));
-  }
-
-  if (goal.out_of_scope.length > 0) {
-    addTask(tasks, goal, "scope", "Keep out-of-scope work out of the plan", goal.out_of_scope.map((item) => `Out of scope: ${item}`));
-  }
-
-  addTask(tasks, goal, "verify", "Verify the proposal before task materialization", [
-    "The proposal can be reviewed without writing tasks.json.",
-  ]);
-
-  return tasks.slice(0, 5);
-}
-
-function addTask(
-  tasks: ProposedTask[],
-  goal: GoalRecord,
-  key: string,
-  title: string,
-  acceptance: string[],
-): void {
-  const previousTaskId = tasks.at(-1)?.id ?? null;
-  tasks.push({
-    id: buildProposalTaskId(goal.id, key),
-    title,
-    priority: tasks.length === 0 ? "P0" : "P1",
-    depends_on: previousTaskId ? [previousTaskId] : [],
-    acceptance: dedupeNonEmptyStrings(acceptance),
-    file_hints: [],
-  });
-}
-
-function buildProposalTaskId(goalId: string, key: string): string {
-  return `proposal-${slugify(goalId)}-${key}`;
-}
-
-function buildFallbackSummary(goal: GoalRecord, taskCount: number): string {
-  const sections = ["objective"];
-  if (goal.success_criteria.length > 0) {
-    sections.push("success criteria");
-  }
-  if (goal.constraints.length > 0) {
-    sections.push("constraints");
-  }
-  if (goal.out_of_scope.length > 0) {
-    sections.push("out-of-scope notes");
-  }
-
-  return `Fallback proposal derived from ${joinSections(sections)} and expanded into ${taskCount} task(s).`;
-}
-
-function joinSections(sections: string[]): string {
-  if (sections.length === 1) {
-    return sections[0] ?? "the recorded goal";
-  }
-
-  const head = sections.slice(0, -1);
-  const tail = sections.at(-1);
-  return `${head.join(", ")} and ${tail}`;
-}
-
-function dedupeNonEmptyStrings(items: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const item of items) {
-    const trimmed = item.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-
-    seen.add(trimmed);
-    result.push(trimmed);
-  }
-
-  return result;
-}
-
-function slugify(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-
-  return slug.length > 0 ? slug : "goal";
 }

@@ -37,6 +37,7 @@ import {
   getDefaultJournalMarkdown,
 } from "../scaffold/templates.js";
 import {
+  createDefaultInstallDocument,
   createDefaultGoalsDocument,
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
@@ -56,9 +57,15 @@ import type {
   RunMode,
   TasksDocument,
 } from "../contracts/autonomy.js";
+import {
+  getInstallMetadataPath,
+  getManagedControlSurfacePaths,
+  getManagedControlSurfaceRelativePaths,
+} from "../shared/paths.js";
 
 const execFileAsync = promisify(execFile);
 const LEGACY_GOAL_ID = "goal-legacy";
+const PRODUCT_VERSION = "0.1.0";
 
 const DEFAULT_TASKS: TasksDocument = {
   version: 1,
@@ -186,6 +193,15 @@ interface InstallSummary {
   codex_process_detected: boolean;
   background_worktree_prereqs: boolean;
   control_surface_files_created: number;
+  install_metadata_path: string;
+  install_metadata_written: boolean;
+  preflight: {
+    checked_paths: number;
+    missing_paths: string[];
+    managed_match_paths: string[];
+    managed_diverged_paths: string[];
+    foreign_occupied_paths: string[];
+  };
   next_automations: Array<{
     name: string;
     purpose: string;
@@ -199,6 +215,24 @@ interface InstallResult {
   message: string;
   summary: InstallSummary;
   warnings?: Array<{ code: string; message: string }>;
+}
+
+interface InstallPreflightSummary {
+  checked_paths: number;
+  missing_paths: string[];
+  managed_match_paths: string[];
+  managed_diverged_paths: string[];
+  foreign_occupied_paths: string[];
+}
+
+interface InstallFileEntry {
+  filePath: string;
+  content: string;
+}
+
+interface InstallJsonEntry {
+  filePath: string;
+  value: unknown;
 }
 
 interface InstallDependencies {
@@ -220,7 +254,77 @@ export async function runInstallCommand(
   const repoRoot = (await (dependencies.detectGitTopLevel ?? resolveGitTopLevel)(targetPath)) ?? targetPath;
   const isGitRepo = repoRoot !== targetPath || (await pathExists(path.join(targetPath, ".git")));
   const paths = resolveRepoPaths(repoRoot);
+  const installMetadataPath = getInstallMetadataPath(repoRoot);
+  const installMetadataExpectation = createInstallMetadataExpectation(".");
   const created: string[] = [];
+  const textFiles: Array<[string, string]> = [
+    [paths.agentsFile, getAgentsMarkdown() + "\n"],
+    [path.join(repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md"), getAutonomyPlanSkillMarkdown() + "\n"],
+    [path.join(repoRoot, ".agents", "skills", "$autonomy-work", "SKILL.md"), getAutonomyWorkSkillMarkdown() + "\n"],
+    [path.join(repoRoot, ".agents", "skills", "$autonomy-intake", "SKILL.md"), getAutonomyIntakeSkillMarkdown() + "\n"],
+    [path.join(repoRoot, ".agents", "skills", "$autonomy-review", "SKILL.md"), getAutonomyReviewSkillMarkdown() + "\n"],
+    [path.join(repoRoot, ".agents", "skills", "$autonomy-report", "SKILL.md"), getAutonomyReportSkillMarkdown() + "\n"],
+    [path.join(repoRoot, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), getAutonomySprintSkillMarkdown() + "\n"],
+    [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
+    [paths.configFile, getConfigTomlTemplate() + "\n"],
+    [paths.setupScript, getSetupWindowsScriptTemplate()],
+    [paths.verifyScript, getInstallVerifyScriptTemplate()],
+    [paths.smokeScript, getSmokeScriptTemplate()],
+    [path.join(paths.scriptsDir, "review.ps1"), getReviewScriptTemplate()],
+    [paths.goalFile, formatGoalMarkdown(null) + "\n"],
+    [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
+  ];
+
+  const jsonFiles: Array<[string, unknown]> = [
+    [paths.tasksFile, DEFAULT_TASKS],
+    [paths.goalsFile, createDefaultGoalsDocument()],
+    [paths.proposalsFile, createDefaultProposalsDocument()],
+    [paths.stateFile, createDefaultState()],
+    [paths.settingsFile, createDefaultSettingsDocument()],
+    [paths.resultsFile, createDefaultResultsDocument()],
+    [paths.blockersFile, DEFAULT_BLOCKERS],
+    [path.join(paths.schemaDir, "tasks.schema.json"), tasksSchema],
+    [path.join(paths.schemaDir, "goals.schema.json"), goalsSchema],
+    [path.join(paths.schemaDir, "proposals.schema.json"), proposalsSchema],
+    [path.join(paths.schemaDir, "state.schema.json"), stateSchema],
+    [path.join(paths.schemaDir, "settings.schema.json"), settingsSchema],
+    [path.join(paths.schemaDir, "results.schema.json"), resultsSchema],
+    [path.join(paths.schemaDir, "blockers.schema.json"), blockersSchema],
+  ];
+
+  const installPreflight = await inspectInstallPreflight({
+    textFiles,
+    jsonFiles,
+    installMetadataPath,
+    installMetadataExpectation,
+  });
+
+  if (installPreflight.foreign_occupied_paths.length > 0) {
+    return {
+      ok: false,
+      message: `Install blocked by foreign-occupied path(s): ${installPreflight.foreign_occupied_paths.join(", ")}.`,
+      summary: {
+        target_path: repoRoot,
+        is_git_repo: isGitRepo,
+        automation_ready: false,
+        codex_process_detected: false,
+        background_worktree_prereqs: false,
+        control_surface_files_created: 0,
+        install_metadata_path: installMetadataPath,
+        install_metadata_written: false,
+        preflight: installPreflight,
+        next_automations: buildNextAutomationSuggestions(isGitRepo),
+        warning: `Install preflight found foreign-occupied path(s): ${installPreflight.foreign_occupied_paths.join(", ")}.`,
+        private_automation_storage_untouched: true,
+      },
+      warnings: [
+        {
+          code: "foreign_occupied_paths",
+          message: `Install preflight found foreign-occupied path(s): ${installPreflight.foreign_occupied_paths.join(", ")}.`,
+        },
+      ],
+    };
+  }
 
   for (const directory of [
     path.dirname(paths.agentsFile),
@@ -238,46 +342,11 @@ export async function runInstallCommand(
   });
 
   try {
-    const textFiles: Array<[string, string]> = [
-      [paths.agentsFile, getAgentsMarkdown() + "\n"],
-      [path.join(repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md"), getAutonomyPlanSkillMarkdown() + "\n"],
-      [path.join(repoRoot, ".agents", "skills", "$autonomy-work", "SKILL.md"), getAutonomyWorkSkillMarkdown() + "\n"],
-      [path.join(repoRoot, ".agents", "skills", "$autonomy-intake", "SKILL.md"), getAutonomyIntakeSkillMarkdown() + "\n"],
-      [path.join(repoRoot, ".agents", "skills", "$autonomy-review", "SKILL.md"), getAutonomyReviewSkillMarkdown() + "\n"],
-      [path.join(repoRoot, ".agents", "skills", "$autonomy-report", "SKILL.md"), getAutonomyReportSkillMarkdown() + "\n"],
-      [path.join(repoRoot, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), getAutonomySprintSkillMarkdown() + "\n"],
-      [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
-      [paths.configFile, getConfigTomlTemplate() + "\n"],
-      [paths.setupScript, getSetupWindowsScriptTemplate()],
-      [paths.verifyScript, getInstallVerifyScriptTemplate()],
-      [paths.smokeScript, getSmokeScriptTemplate()],
-      [path.join(paths.scriptsDir, "review.ps1"), getReviewScriptTemplate()],
-      [paths.goalFile, formatGoalMarkdown(null) + "\n"],
-      [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
-    ];
-
     for (const [filePath, content] of textFiles) {
       if (await ensureTextFile(filePath, content)) {
         created.push(filePath);
       }
     }
-
-    const jsonFiles: Array<[string, unknown]> = [
-      [paths.tasksFile, DEFAULT_TASKS],
-      [paths.goalsFile, createDefaultGoalsDocument()],
-      [paths.proposalsFile, createDefaultProposalsDocument()],
-      [paths.stateFile, createDefaultState()],
-      [paths.settingsFile, createDefaultSettingsDocument()],
-      [paths.resultsFile, createDefaultResultsDocument()],
-      [paths.blockersFile, DEFAULT_BLOCKERS],
-      [path.join(paths.schemaDir, "tasks.schema.json"), tasksSchema],
-      [path.join(paths.schemaDir, "goals.schema.json"), goalsSchema],
-      [path.join(paths.schemaDir, "proposals.schema.json"), proposalsSchema],
-      [path.join(paths.schemaDir, "state.schema.json"), stateSchema],
-      [path.join(paths.schemaDir, "settings.schema.json"), settingsSchema],
-      [path.join(paths.schemaDir, "results.schema.json"), resultsSchema],
-      [path.join(paths.schemaDir, "blockers.schema.json"), blockersSchema],
-    ];
 
     for (const [filePath, value] of jsonFiles) {
       if (await ensureJsonFile(filePath, value)) {
@@ -285,16 +354,22 @@ export async function runInstallCommand(
       }
     }
 
+    const installMetadataWritten = await ensureInstallMetadataFile(
+      installMetadataPath,
+      installPreflight,
+      installMetadataExpectation,
+    );
+
     const normalization = await normalizeInstalledControlPlane(paths);
     const migratedFiles = normalization.migratedFiles;
 
     const codexProcessDetected = await (dependencies.detectCodexProcess ?? detectCodexProcess)();
-    const backgroundWorktreePrereqs = isGitRepo && (await hasBackgroundWorktreePrerequisites(paths));
+    const backgroundWorktreePrereqs = isGitRepo && (await hasBackgroundWorktreePrerequisites(paths, installMetadataPath));
     const automationReady = isGitRepo && backgroundWorktreePrereqs && codexProcessDetected;
     const warning = !isGitRepo
       ? `Target ${repoRoot} is not a Git repository; install completed as scaffolding only.`
       : automationReady
-        ? "Environment checks passed. Bind report_thread_id from the original thread and create goal work before status can turn ready_for_automation."
+        ? "Environment checks passed. Bind report_thread_id with codex-autonomy bind-thread and create goal work before status can turn ready_for_automation."
         : codexProcessDetected
           ? "Background worktree prerequisites are not yet satisfied."
           : "Codex process was not detected, so automation is not ready yet.";
@@ -305,6 +380,12 @@ export async function runInstallCommand(
       !codexProcessDetected ? { code: "codex_process_not_detected", message: "Codex process was not detected." } : null,
       !backgroundWorktreePrereqs
         ? { code: "background_worktree_not_ready", message: "Background worktree prerequisites are not ready." }
+        : null,
+      installPreflight.managed_diverged_paths.length > 0
+        ? {
+            code: "managed_paths_diverged",
+            message: `Preflight found existing managed file(s) that differ from the generated scaffold: ${installPreflight.managed_diverged_paths.join(", ")}.`,
+          }
         : null,
       migratedFiles > 0 ? { code: "control_plane_migrated", message: `Updated ${migratedFiles} existing control-plane document(s) to the latest contract.` } : null,
       normalization.placeholderGoalIds.length > 0
@@ -321,7 +402,7 @@ export async function runInstallCommand(
 
     return {
       ok: true,
-      message: buildInstallMessage(repoRoot, isGitRepo, automationReady, created.length),
+      message: buildInstallMessage(repoRoot, isGitRepo, automationReady, created.length, installPreflight),
       summary: {
         target_path: repoRoot,
         is_git_repo: isGitRepo,
@@ -329,6 +410,9 @@ export async function runInstallCommand(
         codex_process_detected: codexProcessDetected,
         background_worktree_prereqs: backgroundWorktreePrereqs,
         control_surface_files_created: created.length,
+        install_metadata_path: installMetadataPath,
+        install_metadata_written: installMetadataWritten,
+        preflight: installPreflight,
         next_automations: buildNextAutomationSuggestions(isGitRepo),
         warning,
         private_automation_storage_untouched: true,
@@ -368,6 +452,229 @@ async function ensureJsonFile(filePath: string, value: unknown): Promise<boolean
 
   await writeJsonAtomic(filePath, value);
   return true;
+}
+
+async function inspectInstallPreflight(options: {
+  textFiles: ReadonlyArray<InstallFileEntry | [string, string]>;
+  jsonFiles: ReadonlyArray<InstallJsonEntry | [string, unknown]>;
+  installMetadataPath: string;
+  installMetadataExpectation: {
+    version: number;
+    product_version: string;
+    installed_at: string;
+    managed_paths: string[];
+    source_repo: string;
+  };
+}): Promise<InstallPreflightSummary> {
+  const textEntries = options.textFiles.map(normalizeTextEntry);
+  const jsonEntries = options.jsonFiles.map(normalizeJsonEntry);
+  const managedMatchPaths = new Set<string>();
+  const missingPaths = new Set<string>();
+  const managedDivergedPaths = new Set<string>();
+  const foreignOccupiedPaths = new Set<string>();
+
+  for (const entry of [...textEntries, ...jsonEntries]) {
+    const existingState = await inspectTargetFileState(entry.filePath, entry.content);
+    if (existingState === "managed_match") {
+      managedMatchPaths.add(entry.filePath);
+    } else if (existingState === "missing") {
+      missingPaths.add(entry.filePath);
+    } else if (existingState === "managed_diverged") {
+      managedDivergedPaths.add(entry.filePath);
+    } else if (existingState === "foreign_occupied") {
+      foreignOccupiedPaths.add(entry.filePath);
+    }
+  }
+
+  const installMetadataState = await inspectInstallMetadataState(
+    options.installMetadataPath,
+    options.installMetadataExpectation,
+  );
+  if (installMetadataState === "managed_match") {
+    managedMatchPaths.add(options.installMetadataPath);
+  } else if (installMetadataState === "missing") {
+    missingPaths.add(options.installMetadataPath);
+  } else if (installMetadataState === "managed_diverged") {
+    managedDivergedPaths.add(options.installMetadataPath);
+  } else if (installMetadataState === "foreign_occupied") {
+    foreignOccupiedPaths.add(options.installMetadataPath);
+  }
+
+  return {
+    checked_paths: textEntries.length + jsonEntries.length + 1,
+    missing_paths: [...missingPaths],
+    managed_match_paths: [...managedMatchPaths],
+    managed_diverged_paths: [...managedDivergedPaths],
+    foreign_occupied_paths: [...foreignOccupiedPaths],
+  };
+}
+
+async function ensureInstallMetadataFile(
+  filePath: string,
+  preflight: InstallPreflightSummary,
+  expectation: {
+    version: number;
+    product_version: string;
+    installed_at: string;
+    managed_paths: string[];
+    source_repo: string;
+  },
+): Promise<boolean> {
+  if (await pathExists(filePath)) {
+    return false;
+  }
+
+  const metadata = {
+    ...expectation,
+    installed_at: new Date().toISOString(),
+    preflight: {
+      checked_paths: preflight.checked_paths,
+      missing_paths: preflight.missing_paths,
+      managed_match_paths: preflight.managed_match_paths,
+      managed_diverged_paths: preflight.managed_diverged_paths,
+      foreign_occupied_paths: preflight.foreign_occupied_paths,
+    },
+  };
+
+  await writeJsonAtomic(filePath, metadata);
+  return true;
+}
+
+function normalizeTextEntry(entry: InstallFileEntry | [string, string]): InstallFileEntry {
+  return Array.isArray(entry)
+    ? { filePath: entry[0], content: entry[1] }
+    : entry;
+}
+
+function normalizeJsonEntry(entry: InstallJsonEntry | [string, unknown]): InstallFileEntry {
+  if (Array.isArray(entry)) {
+    return {
+      filePath: entry[0],
+      content: `${JSON.stringify(entry[1], null, 2)}\n`,
+    };
+  }
+
+  return {
+    filePath: entry.filePath,
+    content: `${JSON.stringify(entry.value, null, 2)}\n`,
+  };
+}
+
+async function inspectTargetFileState(
+  filePath: string,
+  desiredContent: string,
+): Promise<"managed_match" | "missing" | "managed_diverged" | "foreign_occupied"> {
+  try {
+    const stats = await fs.lstat(filePath);
+    if (!stats.isFile()) {
+      return "foreign_occupied";
+    }
+  } catch (error) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "missing";
+    }
+    throw error;
+  }
+
+  const existing = await fs.readFile(filePath, "utf8");
+  return existing === desiredContent ? "managed_match" : "managed_diverged";
+}
+
+async function inspectInstallMetadataState(
+  filePath: string,
+  expectation: {
+    version: number;
+    product_version: string;
+    installed_at: string;
+    managed_paths: string[];
+    source_repo: string;
+  },
+): Promise<"managed_match" | "missing" | "managed_diverged" | "foreign_occupied"> {
+  try {
+    const stats = await fs.lstat(filePath);
+    if (!stats.isFile()) {
+      return "foreign_occupied";
+    }
+  } catch (error) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "missing";
+    }
+    throw error;
+  }
+
+  let existing: unknown;
+  try {
+    existing = await loadJsonFile(filePath);
+  } catch {
+    return "managed_diverged";
+  }
+
+  return matchesManagedInstallMetadata(existing, expectation) ? "managed_match" : "managed_diverged";
+}
+
+function matchesManagedInstallMetadata(
+  value: unknown,
+  expectation: {
+    version: number;
+    product_version: string;
+    installed_at: string;
+    managed_paths: string[];
+    source_repo: string;
+  },
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.version !== expectation.version) {
+    return false;
+  }
+
+  if (typeof record.product_version !== "string" || record.product_version.length === 0) {
+    return false;
+  }
+
+  if (typeof record.installed_at !== "string" || record.installed_at.length === 0) {
+    return false;
+  }
+
+  if (record.source_repo !== expectation.source_repo) {
+    return false;
+  }
+
+  if (!Array.isArray(record.managed_paths)) {
+    return false;
+  }
+
+  const existingManagedPaths = record.managed_paths
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.replace(/\\/g, "/"))
+    .sort();
+  const expectedManagedPaths = [...expectation.managed_paths]
+    .map((item) => item.replace(/\\/g, "/"))
+    .sort();
+
+  if (existingManagedPaths.length !== expectedManagedPaths.length) {
+    return false;
+  }
+
+  return existingManagedPaths.every((pathValue, index) => pathValue === expectedManagedPaths[index]);
+}
+
+function createInstallMetadataExpectation(sourceRepo: string): {
+  version: number;
+  product_version: string;
+  installed_at: string;
+  managed_paths: string[];
+  source_repo: string;
+} {
+  const document = createDefaultInstallDocument("1970-01-01T00:00:00.000Z", sourceRepo);
+  return {
+    ...document,
+    product_version: PRODUCT_VERSION,
+    managed_paths: getManagedControlSurfaceRelativePaths(),
+  };
 }
 
 async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRepoPaths>): Promise<{
@@ -613,6 +920,8 @@ function normalizeSettingsDocument(document: unknown): AutonomySettings {
     report_surface: isOneOf(merged.report_surface, ["thread_and_inbox"]) ? merged.report_surface : defaults.report_surface,
     auto_commit: isOneOf(merged.auto_commit, ["disabled", "autonomy_branch"]) ? merged.auto_commit : defaults.auto_commit,
     autonomy_branch: readNonEmptyString(merged.autonomy_branch, defaults.autonomy_branch),
+    auto_continue_within_goal: merged.auto_continue_within_goal !== false,
+    block_on_major_decision: merged.block_on_major_decision !== false,
     default_cruise_cadence: {
       planner_hours: normalizeInteger(cadence.planner_hours, defaults.default_cruise_cadence.planner_hours),
       worker_hours: normalizeInteger(cadence.worker_hours, defaults.default_cruise_cadence.worker_hours),
@@ -757,6 +1066,8 @@ function normalizeTaskRecord(
     updated_at: normalizeTimestamp(input.updated_at, options.now),
     commit_hash: readOptionalString(input.commit_hash),
     review_status: isOneOf(input.review_status, ["not_reviewed", "passed", "followup_required"]) ? input.review_status : "not_reviewed",
+    source: isOneOf(input.source, ["proposal", "followup"]) ? input.source : "proposal",
+    source_task_id: readOptionalString(input.source_task_id),
   };
 }
 
@@ -1075,7 +1386,10 @@ async function detectCodexProcess(): Promise<boolean> {
   return detectCodexProcessProbe(shell).running;
 }
 
-async function hasBackgroundWorktreePrerequisites(paths: ReturnType<typeof resolveRepoPaths>): Promise<boolean> {
+async function hasBackgroundWorktreePrerequisites(
+  paths: ReturnType<typeof resolveRepoPaths>,
+  installMetadataPath: string,
+): Promise<boolean> {
   const requiredPaths = [
     paths.agentsFile,
     paths.environmentFile,
@@ -1100,6 +1414,7 @@ async function hasBackgroundWorktreePrerequisites(paths: ReturnType<typeof resol
     path.join(paths.schemaDir, "settings.schema.json"),
     path.join(paths.schemaDir, "results.schema.json"),
     path.join(paths.schemaDir, "blockers.schema.json"),
+    installMetadataPath,
   ];
 
   for (const filePath of requiredPaths) {
@@ -1111,18 +1426,27 @@ async function hasBackgroundWorktreePrerequisites(paths: ReturnType<typeof resol
   return true;
 }
 
-function buildInstallMessage(repoRoot: string, isGitRepo: boolean, automationReady: boolean, createdCount: number): string {
+function buildInstallMessage(
+  repoRoot: string,
+  isGitRepo: boolean,
+  automationReady: boolean,
+  createdCount: number,
+  preflight: InstallPreflightSummary,
+): string {
   const base = createdCount > 0 ? `Installed codex-autonomy into ${repoRoot}.` : `codex-autonomy was already present in ${repoRoot}.`;
+  const preflightNote = preflight.managed_diverged_paths.length > 0
+    ? ` Preflight kept existing managed file(s) untouched: ${preflight.managed_diverged_paths.join(", ")}.`
+    : "";
 
   if (!isGitRepo) {
-    return `${base} Warning: target is not a Git repository, so install is not automation-ready.`;
+    return `${base}${preflightNote} Warning: target is not a Git repository, so install is not automation-ready.`;
   }
 
   if (!automationReady) {
-    return `${base} Warning: install completed, but automation is not ready yet. Use codex-autonomy inside the target repo after worktree and Codex runtime prerequisites are satisfied.`;
+    return `${base}${preflightNote} Warning: install completed, but automation is not ready yet. Use codex-autonomy inside the target repo after worktree and Codex runtime prerequisites are satisfied.`;
   }
 
-  return `${base} Environment prerequisites are ready. Bind report_thread_id and create goal work before status can become ready_for_automation.`;
+  return `${base}${preflightNote} Environment prerequisites are ready. Bind report_thread_id with codex-autonomy bind-thread and create goal work before status can become ready_for_automation.`;
 }
 
 function buildNextAutomationSuggestions(isGitRepo: boolean): Array<{ name: string; purpose: string }> {

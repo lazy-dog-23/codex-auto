@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runBootstrapCommand } from "../src/commands/bootstrap.js";
 import { runDoctor } from "../src/commands/doctor.js";
+import { runBindThreadCommand } from "../src/commands/bind-thread.js";
 import { runApproveProposal } from "../src/commands/approve-proposal.js";
 import { runGenerateProposal } from "../src/commands/generate-proposal.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
@@ -40,6 +41,13 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 }
 
 describe("command integration contracts", () => {
+  it("keeps README command examples aligned with the CLI contract", async () => {
+    const readme = await readFile(join(process.cwd(), "README.md"), "utf8");
+
+    expect(readme).toContain("codex-autonomy approve-proposal --goal-id <goalId>");
+    expect(readme).not.toContain("codex-autonomy approve-proposal <goal-id>");
+  });
+
   it("bootstrap creates the repo control surface and warns in a non-git workspace", async () => {
     const workspace = await makeTempWorkspace();
 
@@ -117,6 +125,45 @@ describe("command integration contracts", () => {
 
     expect(report.issues.some((issue) => issue.code === "config_toml_high_risk_approval_policy")).toBe(true);
     expect(report.issues.some((issue) => issue.code === "config_toml_high_risk_sandbox_mode")).toBe(true);
+  });
+
+  it("doctor accepts complex Codex TOML structures when required fields are present", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+
+    await writeFile(
+      join(workspace, ".codex", "config.toml"),
+      [
+        "# comment before the required keys",
+        'approval_policy = "on-request"',
+        'sandbox_mode = "workspace-write"',
+        'model = "gpt-5.4"',
+        'model_reasoning_effort = "xhigh"',
+        'service_tier = "fast"',
+        '',
+        '[sandbox_workspace_write]',
+        'network_access = true',
+        'allowed_hosts = ["localhost", "127.0.0.1"]',
+        'limits = { retries = 3, nested = { enabled = true } }',
+        '',
+        '[windows]',
+        'sandbox = "unelevated"',
+        '',
+        '[extra.section]',
+        'enabled = true',
+        '',
+        '[[plugins]]',
+        'name = "alpha"',
+        'enabled = true',
+        '',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const report = await runDoctor({ workspaceRoot: workspace });
+
+    expect(report.ok).toBe(true);
+    expect(report.issues.some((issue) => issue.code === "config_toml_invalid")).toBe(false);
   });
 
   it("status blocks automation when the workspace is not a git repo", async () => {
@@ -234,7 +281,27 @@ describe("command integration contracts", () => {
     )).rejects.toThrow(/report-thread-id/i);
   });
 
-  it("intake-goal followed by generate-proposal creates a conservative fallback proposal and rejects duplicates", async () => {
+  it("bind-thread updates report_thread_id independently of intake-goal", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+
+    const result = await runBindThreadCommand(
+      {
+        reportThreadId: "thread-456",
+      },
+      workspace,
+    );
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8")) as Record<string, unknown>;
+    const journalText = await readFile(join(workspace, "autonomy", "journal.md"), "utf8");
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain("thread-456");
+    expect(stateDoc.report_thread_id).toBe("thread-456");
+    expect(journalText).toContain("bind-thread");
+    expect(journalText).toContain("thread-456");
+  });
+
+  it("intake-goal followed by generate-proposal creates a repo-aware fallback proposal and rejects duplicates", async () => {
     const workspace = await makeTempWorkspace();
     await runBootstrapCommand(workspace);
 
@@ -272,8 +339,12 @@ describe("command integration contracts", () => {
     expect(proposalsDoc.proposals).toHaveLength(1);
     expect(proposalsDoc.proposals[0]?.goal_id).toBe(firstGoalId);
     expect(proposalsDoc.proposals[0]?.status).toBe("awaiting_confirmation");
-    expect(proposalsDoc.proposals[0]?.tasks).toHaveLength(3);
-    expect(proposalsDoc.proposals[0]?.tasks.every((task: { file_hints: string[] }) => task.file_hints.length === 0)).toBe(true);
+    expect((proposalsDoc.proposals[0]?.summary ?? "").toLowerCase()).toContain("repo-aware");
+    expect((proposalsDoc.proposals[0]?.tasks.length ?? 0)).toBeGreaterThan(0);
+    expect((proposalsDoc.proposals[0]?.tasks.length ?? 0)).toBeLessThanOrEqual(5);
+    expect(proposalsDoc.proposals[0]?.tasks.every((task: { acceptance: string[] }) => task.acceptance.length > 0)).toBe(true);
+    expect(proposalsDoc.proposals[0]?.tasks.some((task: { file_hints: string[] }) => task.file_hints.length > 0)).toBe(true);
+    expect(proposalsDoc.proposals[0]?.tasks.some((task: { file_hints: string[] }) => task.file_hints.includes("AGENTS.md") || task.file_hints.includes("README.md"))).toBe(true);
     expect(tasksDoc.tasks).toHaveLength(0);
     expect(resultsDoc.last_summary_kind).toBe("normal_success");
     expect(resultsDoc.planner.goal_id).toBe(firstGoalId);

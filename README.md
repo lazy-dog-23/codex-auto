@@ -13,18 +13,19 @@
 5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。
 6. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
 7. 在目标仓库运行 `codex-autonomy doctor` 查看环境与控制面健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree` 创建专用 background worktree。
-8. 初次本地闭环可以直接走：`codex-autonomy intake-goal --report-thread-id <thread-id> ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal <goal-id>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。
+8. 初次本地闭环推荐先显式绑定线程，再走目标流：`codex-autonomy bind-thread --report-thread-id <thread-id>` -> `codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。
 
 ## 日常命令
 
 - 源码仓库内：`node tools/codex-supervisor/dist/cli.js <command>`。
 - 目标仓库内：`codex-autonomy <command>`。
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
+- `codex-autonomy bind-thread --report-thread-id <threadId>`：把目标仓库的原线程绑定为唯一汇报线程。
 - `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。
 - `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
 - `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。
-- `codex-autonomy approve-proposal <goal-id>`：把提案物化为任务并激活该 goal。
+- `codex-autonomy approve-proposal --goal-id <goalId>`：把提案物化为任务并激活该 goal。
 - `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。
 - `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
@@ -57,6 +58,7 @@
 - `cruise cadence`：稳态巡航频率，指 Planner / Worker / Reviewer 在后台按固定周期醒来检查是否有可推进项。
 - `sprint heartbeat`：冲刺 runner 的唤醒间隔，不是任务时长。它只决定多久再醒一次，不代表一轮必须跑满这么久。
 - `kickoff`：goal 刚确认或需要立即推进时的立刻启动动作。kickoff 会先跑一轮，不等下一次 cadence / heartbeat。
+- `safe follow-up`：仍然属于已批准 goal 边界内的后续优化项。它会自动并入下一轮，不需要把线程当成审批门。
 
 冲刺模式的关键边界：
 
@@ -70,6 +72,7 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 - 正常成功：先落到 Inbox / journal / results，等 heartbeat 汇总回线程。
 - 异常、`blocked`、`review_pending`、commit 失败：立即回线程，避免用户长时间等不到信号。
+- 成功摘要只负责汇报，不负责卡住下一轮执行；只要没有越过已批准 goal 边界，后续 follow-up 会继续自动推进。
 - 这意味着“完成了”不等于“立刻刷线程”，而是“先记录，再按汇总节奏回报”；只有异常需要打断这个节奏。
 
 ## Automation 说明
@@ -81,6 +84,8 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 - Reviewer
 - Reporter
 - Sprint runner
+
+Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
 
 关于模型字段要注意一件事：
 

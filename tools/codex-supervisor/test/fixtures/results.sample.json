@@ -14,7 +14,9 @@
     "verify_summary": null,
     "hash": null,
     "message": null,
-    "review_status": null
+    "review_status": null,
+    "next_step_summary": null,
+    "continuation_decision": null
   },
   "worker": {
     "status": "passed",
@@ -26,7 +28,9 @@
     "verify_summary": "verify passed",
     "hash": null,
     "message": null,
-    "review_status": "passed"
+    "review_status": "passed",
+    "next_step_summary": null,
+    "continuation_decision": null
   },
   "review": {
     "status": "passed",
@@ -38,7 +42,9 @@
     "verify_summary": null,
     "hash": null,
     "message": null,
-    "review_status": "passed"
+    "review_status": "passed",
+    "next_step_summary": "Add a regression check for unblock flow.",
+    "continuation_decision": "auto_continued"
   },
   "commit": {
     "status": "passed",
@@ -50,7 +56,9 @@
     "verify_summary": null,
     "hash": "abc123",
     "message": "autonomy(goal-alpha/task-b): Wire status report",
-    "review_status": null
+    "review_status": null,
+    "next_step_summary": null,
+    "continuation_decision": null
   },
   "reporter": {
     "status": "sent",
@@ -62,6 +70,8 @@
     "verify_summary": null,
     "hash": null,
     "message": null,
-    "review_status": null
+    "review_status": null,
+    "next_step_summary": "Continue with the unblock regression check on the next loop.",
+    "continuation_decision": "auto_continued"
   }
 }

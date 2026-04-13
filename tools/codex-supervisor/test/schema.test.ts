@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { blockersSchema } from "../src/schemas/blockers.schema.js";
 import { goalsSchema } from "../src/schemas/goals.schema.js";
+import { installSchema } from "../src/schemas/install.schema.js";
 import { proposalsSchema } from "../src/schemas/proposals.schema.js";
 import { resultsSchema } from "../src/schemas/results.schema.js";
 import { settingsSchema } from "../src/schemas/settings.schema.js";
@@ -82,6 +83,14 @@ describe("schema fixtures", () => {
   it("accepts the sample results document", () => {
     const validate = createValidator(resultsSchema);
     const data = readJsonFixture("results.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts the sample install document", () => {
+    const validate = createValidator(installSchema);
+    const data = readJsonFixture("install.sample.json");
 
     expect(validate(data)).toBe(true);
     expect(validate.errors).toBeNull();

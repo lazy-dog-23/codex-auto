@@ -28,7 +28,7 @@ async function makeTempGitRepo(): Promise<string> {
 
 describe("install scaffold", () => {
   it("exposes the codex-autonomy entrypoint with a codex-supervisor alias", async () => {
-    const packageJson = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as {
+    const packageJson = JSON.parse(await readFile(join(process.cwd(), "tools", "codex-supervisor", "package.json"), "utf8")) as {
       name: string;
       bin: Record<string, string>;
     };
@@ -60,6 +60,11 @@ describe("install scaffold", () => {
     expect(result.summary.background_worktree_prereqs).toBe(true);
     expect(result.summary.warning).toContain("Bind report_thread_id");
     expect(result.summary.control_surface_files_created).toBeGreaterThan(0);
+    expect(result.summary.install_metadata_path).toBe(join(workspace, "autonomy", "install.json"));
+    expect(result.summary.install_metadata_written).toBe(true);
+    expect(result.summary.preflight.checked_paths).toBeGreaterThan(0);
+    expect(result.summary.preflight.managed_diverged_paths).toContain(join(workspace, "AGENTS.md"));
+    expect(result.summary.preflight.foreign_occupied_paths).toHaveLength(0);
     expect(result.summary.private_automation_storage_untouched).toBe(true);
     expect(result.summary.next_automations.map((item) => item.name)).toContain("planner-cruise");
     expect(result.summary.next_automations.map((item) => item.name)).toContain("worker-cruise");
@@ -85,6 +90,9 @@ describe("install scaffold", () => {
     );
     expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("No active goal.");
     expect(await readFile(join(workspace, "autonomy", "journal.md"), "utf8")).toContain("Append one entry per run");
+    expect(await readFile(join(workspace, "autonomy", "install.json"), "utf8")).toContain('"product_version": "0.1.0"');
+    expect(await readFile(join(workspace, "autonomy", "install.json"), "utf8")).toContain('"source_repo": "."');
+    expect(await readFile(join(workspace, "autonomy", "install.json"), "utf8")).toContain('"managed_paths"');
     expect(await readFile(join(workspace, "autonomy", "goals.json"), "utf8")).toContain('"goals"');
     expect(await readFile(join(workspace, "autonomy", "settings.json"), "utf8")).toContain('"autonomy_branch"');
     expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain('"reporter"');
@@ -413,6 +421,36 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("Review checks passed.");
     expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("review.local.ps1");
     expect(await readFile(join(workspace, "AGENTS.md"), "utf8")).toBe("# user owned\n");
+  });
+
+  it("classifies a diverged install.json as managed_diverged and does not overwrite it", async () => {
+    const workspace = await makeTempGitRepo();
+    await mkdir(join(workspace, "autonomy"), { recursive: true });
+    const divergedInstallMetadata = {
+      version: 1,
+      product_version: "0.1.0",
+      installed_at: "2026-01-01T00:00:00Z",
+      source_repo: "custom/source",
+      managed_paths: ["AGENTS.md"],
+    };
+    await writeFile(
+      join(workspace, "autonomy", "install.json"),
+      `${JSON.stringify(divergedInstallMetadata, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.summary.preflight.managed_diverged_paths).toContain(join(workspace, "autonomy", "install.json"));
+    expect(result.summary.install_metadata_written).toBe(false);
+    expect(JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8"))).toEqual(divergedInstallMetadata);
   });
 
   it("refreshes generated schema files when the installed contract changes", async () => {

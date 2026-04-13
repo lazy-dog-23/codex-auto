@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "product_version": "0.1.0",
+  "installed_at": "2026-04-13T00:00:00Z",
+  "managed_paths": [
+    "AGENTS.md",
+    ".agents/skills/$autonomy-plan/SKILL.md",
+    ".codex/config.toml",
+    "autonomy/install.json",
+    "scripts/review.ps1"
+  ],
+  "source_repo": "C:/Users/Administrator/Desktop/Project/codex-auto"
+}

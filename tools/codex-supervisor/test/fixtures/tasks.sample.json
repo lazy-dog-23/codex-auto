@@ -14,7 +14,9 @@
       "last_error": null,
       "updated_at": "2026-01-01T00:00:00Z",
       "commit_hash": null,
-      "review_status": "not_reviewed"
+      "review_status": "not_reviewed",
+      "source": "proposal",
+      "source_task_id": null
     },
     {
       "id": "task-b",
@@ -29,7 +31,9 @@
       "last_error": "previous verify failed",
       "updated_at": "2026-01-02T00:00:00Z",
       "commit_hash": "abc123",
-      "review_status": "passed"
+      "review_status": "passed",
+      "source": "proposal",
+      "source_task_id": null
     },
     {
       "id": "task-c",
@@ -44,7 +48,9 @@
       "last_error": null,
       "updated_at": "2026-01-03T00:00:00Z",
       "commit_hash": null,
-      "review_status": "not_reviewed"
+      "review_status": "not_reviewed",
+      "source": "followup",
+      "source_task_id": "task-b"
     },
     {
       "id": "task-d",
@@ -59,7 +65,9 @@
       "last_error": "schema mismatch",
       "updated_at": "2026-01-04T00:00:00Z",
       "commit_hash": null,
-      "review_status": "followup_required"
+      "review_status": "followup_required",
+      "source": "followup",
+      "source_task_id": "task-b"
     }
   ]
 }

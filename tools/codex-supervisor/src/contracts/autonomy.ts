@@ -27,6 +27,17 @@ export const REVIEW_STATUSES = [
   "followup_required"
 ] as const;
 
+export const TASK_SOURCES = [
+  "proposal",
+  "followup"
+] as const;
+
+export const CONTINUATION_DECISIONS = [
+  "none",
+  "auto_continued",
+  "needs_confirmation"
+] as const;
+
 export const PROPOSAL_STATUSES = [
   "awaiting_confirmation",
   "approved",
@@ -63,11 +74,19 @@ export const SUMMARY_KINDS = [
   "goal_transition",
 ] as const;
 
+export const AUTO_CONTINUE_STATES = [
+  "running",
+  "stopped",
+  "needs_confirmation",
+] as const;
+
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 export type RunMode = (typeof RUN_MODES)[number];
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
+export type TaskSource = (typeof TASK_SOURCES)[number];
+export type ContinuationDecision = (typeof CONTINUATION_DECISIONS)[number];
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 export type CycleStatus = (typeof CYCLE_STATUSES)[number];
 export type LastResult = (typeof LAST_RESULTS)[number];
@@ -78,6 +97,7 @@ export type InstallSource = (typeof INSTALL_SOURCES)[number];
 export type AutoCommitMode = (typeof AUTO_COMMIT_MODES)[number];
 export type ResultState = (typeof RESULT_STATES)[number];
 export type SummaryKind = (typeof SUMMARY_KINDS)[number];
+export type AutoContinueState = (typeof AUTO_CONTINUE_STATES)[number];
 
 export interface GoalTransitionSnapshot {
   from_goal_id: string;
@@ -141,6 +161,8 @@ export interface AutonomyTask {
   updated_at: string;
   commit_hash: string | null;
   review_status: ReviewStatus;
+  source: TaskSource;
+  source_task_id: string | null;
 }
 
 export interface TasksDocument {
@@ -161,6 +183,8 @@ export interface AutonomySettings {
   report_surface: ReportSurface;
   auto_commit: AutoCommitMode;
   autonomy_branch: string;
+  auto_continue_within_goal: boolean;
+  block_on_major_decision: boolean;
   default_cruise_cadence: CruiseCadence;
   default_sprint_heartbeat_minutes: number;
 }
@@ -176,6 +200,8 @@ export interface ResultEntry {
   hash?: string | null;
   message?: string | null;
   review_status?: ReviewStatus | null;
+  next_step_summary?: string | null;
+  continuation_decision?: ContinuationDecision | null;
 }
 
 export interface AutonomyResults {
@@ -229,6 +255,14 @@ export interface BlockersDocument {
   blockers: Blocker[];
 }
 
+export interface InstallDocument {
+  version: number;
+  product_version: string;
+  installed_at: string;
+  managed_paths: string[];
+  source_repo: string;
+}
+
 export interface RepoPaths {
   repoRoot: string;
   autonomyDir: string;
@@ -241,6 +275,7 @@ export interface RepoPaths {
   proposalsFile: string;
   settingsFile: string;
   resultsFile: string;
+  installFile: string;
   journalFile: string;
   goalFile: string;
   cycleLockFile: string;
@@ -309,6 +344,12 @@ export interface StatusSummary extends CommandResult {
   has_recorded_run: boolean;
   results_scope_note: string | null;
   next_automation_reason: string | null;
+  auto_continue_state: AutoContinueState;
+  continuation_reason: string | null;
+  next_task_id: string | null;
+  next_task_title: string | null;
+  remaining_ready: number;
+  last_followup_summary: string | null;
   results_summary: {
     planner_summary: string | null;
     worker_result: string | null;

@@ -2,6 +2,8 @@ import { Command } from "commander";
 
 import type {
   AutonomyResults,
+  AutonomySettings,
+  AutoContinueState,
   AutonomyState,
   BlockersDocument,
   GoalStatus,
@@ -12,16 +14,18 @@ import type {
   TasksDocument,
 } from "../contracts/autonomy.js";
 import { GOAL_STATUSES, TASK_STATUSES } from "../contracts/autonomy.js";
-import { countOpenBlockers } from "../domain/autonomy.js";
+import { countOpenBlockers, countReadyTasksForGoal, findNextReadyTask } from "../domain/autonomy.js";
 import { resolveSummarySnapshot, scopeResultsSummary } from "../domain/results.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess } from "../infra/process.js";
-import { resolveRepoPaths } from "../shared/paths.js";
+import { isManagedControlSurfaceRelativePath, resolveRepoPaths } from "../shared/paths.js";
+import { createDefaultAutonomySettings } from "../shared/policy.js";
 import {
   loadBlockersDocument,
   loadGoalsDocument,
   loadResultsDocument,
+  loadSettingsDocument,
   loadStateDocument,
   loadTasksDocument,
 } from "./control-plane.js";
@@ -109,6 +113,11 @@ function buildMessage(summary: StatusSummary): string {
     `results_scope_note=${formatNullableText(summary.results_scope_note)}`,
     `last_thread_summary_sent_at=${formatNullableText(summary.last_thread_summary_sent_at)}`,
     `last_inbox_run_at=${formatNullableText(summary.last_inbox_run_at)}`,
+    `auto_continue_state=${summary.auto_continue_state}`,
+    `continuation_reason=${formatNullableText(summary.continuation_reason)}`,
+    `next_task=${summary.next_task_id ? `${summary.next_task_id}${summary.next_task_title ? `(${summary.next_task_title})` : ""}` : "none"}`,
+    `remaining_ready=${summary.remaining_ready}`,
+    `last_followup_summary=${formatNullableText(summary.last_followup_summary)}`,
     `next_automation_reason=${formatNullableText(summary.next_automation_reason)}`,
     `ready_for_automation=${summary.ready_for_automation ? "yes" : "no"}`,
   ].join(" ");
@@ -174,12 +183,154 @@ function buildRuntimeAutomationReason(warnings: readonly { message: string }[]):
   return warnings.map((warning) => warning.message).join("; ");
 }
 
+function pushUniqueWarning(
+  warnings: Array<{ code: string; message: string }>,
+  code: string,
+  message: string,
+): void {
+  if (!warnings.some((warning) => warning.code === code && warning.message === message)) {
+    warnings.push({ code, message });
+  }
+}
+
+function extractDirtyPaths(statusLines: readonly string[]): string[] {
+  const paths = new Set<string>();
+
+  for (const statusLine of statusLines) {
+    if (statusLine.length < 4) {
+      continue;
+    }
+
+    const rawContent = statusLine.slice(3).trim();
+    if (!rawContent) {
+      continue;
+    }
+
+    const statusPaths = rawContent.includes(" -> ")
+      ? rawContent.split(" -> ")
+      : [rawContent];
+
+    for (const statusPath of statusPaths) {
+      const normalized = statusPath.replace(/^"+|"+$/g, "").replace(/\\/g, "/").trim();
+      if (normalized) {
+        paths.add(normalized);
+      }
+    }
+  }
+
+  return [...paths];
+}
+
+function classifyDirtyPaths(statusLines: readonly string[]): {
+  dirtyPaths: string[];
+  unmanagedDirtyPaths: string[];
+  managedOnly: boolean;
+} {
+  const dirtyPaths = extractDirtyPaths(statusLines);
+  const unmanagedDirtyPaths = dirtyPaths.filter((pathValue) => !isManagedControlSurfaceRelativePath(pathValue));
+
+  return {
+    dirtyPaths,
+    unmanagedDirtyPaths,
+    managedOnly: dirtyPaths.length > 0 && unmanagedDirtyPaths.length === 0,
+  };
+}
+
+function buildControlSurfaceDirtyOnlyMessage(scopes: readonly string[]): string {
+  const normalizedScopes = [...new Set(scopes)];
+  if (normalizedScopes.length === 0) {
+    return "Managed control surface changes are present.";
+  }
+
+  if (normalizedScopes.length === 1) {
+    return `Managed control surface changes are pending only in the ${normalizedScopes[0]}.`;
+  }
+
+  return `Managed control surface changes are pending only in the ${normalizedScopes.join(" and ")}.`;
+}
+
+function resolveRuntimeAutoContinueState(options: {
+  summaryAutoContinueState: AutoContinueState;
+  readyForAutomation: boolean;
+  autoContinueWithinGoal: boolean;
+}): AutoContinueState {
+  if (options.summaryAutoContinueState === "needs_confirmation") {
+    return "needs_confirmation";
+  }
+
+  if (options.readyForAutomation && options.autoContinueWithinGoal) {
+    return "running";
+  }
+
+  return "stopped";
+}
+
+function resolveRuntimeContinuationReason(options: {
+  summaryAutoContinueState: AutoContinueState;
+  summaryContinuationReason: string | null;
+  autoContinueState: AutoContinueState;
+  autoContinueWithinGoal: boolean;
+  nextAutomationReason: string | null;
+}): string | null {
+  if (options.autoContinueState === "needs_confirmation") {
+    return options.summaryContinuationReason ?? "Latest follow-up crosses a decision boundary and needs explicit confirmation.";
+  }
+
+  if (!options.autoContinueWithinGoal) {
+    return "auto_continue_within_goal is disabled in settings.json.";
+  }
+
+  if (options.autoContinueState === "running" && options.summaryAutoContinueState === "running") {
+    return options.summaryContinuationReason ?? options.nextAutomationReason;
+  }
+
+  return options.nextAutomationReason;
+}
+
+function resolveAutoContinueState(options: {
+  readyForAutomation: boolean;
+  autoContinueWithinGoal: boolean;
+  continuationDecision: "auto_continued" | "none" | "needs_confirmation" | null;
+}): AutoContinueState {
+  if (options.continuationDecision === "needs_confirmation") {
+    return "needs_confirmation";
+  }
+
+  if (options.readyForAutomation && options.autoContinueWithinGoal) {
+    return "running";
+  }
+
+  return "stopped";
+}
+
+function resolveContinuationReason(options: {
+  autoContinueState: AutoContinueState;
+  autoContinueWithinGoal: boolean;
+  continuationDecision: "auto_continued" | "none" | "needs_confirmation" | null;
+  nextAutomationReason: string | null;
+}): string | null {
+  if (options.autoContinueState === "needs_confirmation") {
+    return "Latest follow-up crosses a decision boundary and needs explicit confirmation.";
+  }
+
+  if (!options.autoContinueWithinGoal) {
+    return "auto_continue_within_goal is disabled in settings.json.";
+  }
+
+  if (options.continuationDecision === "auto_continued") {
+    return "Latest follow-up stayed within the approved goal boundary and was auto-continued.";
+  }
+
+  return options.nextAutomationReason;
+}
+
 export function buildStatusSummary(
   tasksDoc: TasksDocument,
   goalsDoc: GoalsDocument,
   state: AutonomyState,
   blockersDoc: BlockersDocument,
   resultsDoc: AutonomyResults,
+  settingsDoc: AutonomySettings = createDefaultAutonomySettings(),
 ): StatusSummary {
   const openBlockerCount = countOpenBlockers(blockersDoc.blockers);
   const tasksByStatus = countTaskStatuses(tasksDoc.tasks);
@@ -201,6 +352,8 @@ export function buildStatusSummary(
     (actionableTasks || pendingPlanningWork);
   const summarySnapshot = resolveSummarySnapshot(resultsDoc, state);
   const scopedResults = scopeResultsSummary(resultsDoc, resolvedCurrentGoalId);
+  const nextTask = findNextReadyTask(tasksDoc.tasks, resolvedCurrentGoalId);
+  const remainingReady = countReadyTasksForGoal(tasksDoc.tasks, resolvedCurrentGoalId);
 
   const warnings =
     [
@@ -258,6 +411,17 @@ export function buildStatusSummary(
     needsHumanReview: state.needs_human_review,
     openBlockerCount,
   });
+  const autoContinueState = resolveAutoContinueState({
+    readyForAutomation,
+    autoContinueWithinGoal: settingsDoc.auto_continue_within_goal,
+    continuationDecision: scopedResults.continuationDecision,
+  });
+  const continuationReason = resolveContinuationReason({
+    autoContinueState,
+    autoContinueWithinGoal: settingsDoc.auto_continue_within_goal,
+    continuationDecision: scopedResults.continuationDecision,
+    nextAutomationReason,
+  });
 
   const summary: StatusSummary = {
     ok: true,
@@ -288,6 +452,12 @@ export function buildStatusSummary(
     has_recorded_run: summarySnapshot.hasRecordedRun,
     results_scope_note: scopedResults.resultsScopeNote,
     next_automation_reason: nextAutomationReason,
+    auto_continue_state: autoContinueState,
+    continuation_reason: continuationReason,
+    next_task_id: nextTask?.id ?? null,
+    next_task_title: nextTask?.title ?? null,
+    remaining_ready: remainingReady,
+    last_followup_summary: scopedResults.nextStepSummary,
     results_summary: {
       planner_summary: scopedResults.plannerSummary,
       worker_result: scopedResults.workerResult,
@@ -308,18 +478,20 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const gitRepo = await detectGitRepository(repoRoot);
   const controlRoot = gitRepo?.path ?? repoRoot;
   const paths = resolveRepoPaths(controlRoot);
-  const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc] = await Promise.all([
+  const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc] = await Promise.all([
     loadTasksDocument(paths),
     loadGoalsDocument(paths),
     loadStateDocument(paths),
     loadBlockersDocument(paths),
     loadResultsDocument(paths),
+    loadSettingsDocument(paths),
   ]);
-  const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc);
+  const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc);
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
   const hasEligibleWork = hasActionableTasks(tasksDoc.tasks, summary.current_goal_id) || hasPlanningWork(goalsDoc.goals);
   const hasReportThread = Boolean(state.report_thread_id?.trim());
+  const controlSurfaceDirtyScopes: string[] = [];
 
   if (!hasEligibleWork) {
     readyForAutomation = false;
@@ -363,17 +535,22 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
 
   if (!gitRepo) {
     readyForAutomation = false;
-    warnings.push({
-      code: "not_a_git_repo",
-      message: "Current workspace is not a Git repository, so automation cannot run yet.",
-    });
+    pushUniqueWarning(warnings, "not_a_git_repo", "Current workspace is not a Git repository, so automation cannot run yet.");
   } else {
+    const repositoryDirty = classifyDirtyPaths(gitRepo.statusLines ?? []);
     if (gitRepo.dirty) {
-      readyForAutomation = false;
-      warnings.push({
-        code: "dirty_repository",
-        message: "Current repository is dirty.",
-      });
+      if (repositoryDirty.managedOnly) {
+        controlSurfaceDirtyScopes.push("repository");
+      } else {
+        readyForAutomation = false;
+        pushUniqueWarning(
+          warnings,
+          "repo_dirty_unmanaged",
+          repositoryDirty.unmanagedDirtyPaths.length > 0
+            ? `Current repository is dirty outside the managed control surface: ${repositoryDirty.unmanagedDirtyPaths.join(", ")}.`
+            : "Current repository is dirty, and Git did not report which unmanaged paths changed.",
+        );
+      }
     }
 
     const backgroundPath = getBackgroundWorktreePath(gitRepo.path);
@@ -382,89 +559,122 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
       backgroundWorktree = await getWorktreeSummary(backgroundPath);
     } catch (error) {
       readyForAutomation = false;
-      warnings.push({
-        code: "unsafe_background_worktree_path",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      pushUniqueWarning(warnings, "unsafe_background_worktree_path", error instanceof Error ? error.message : String(error));
     }
 
     if (!backgroundWorktree) {
       if (!warnings.some((warning) => warning.code === "unsafe_background_worktree_path")) {
         readyForAutomation = false;
-        warnings.push({
-          code: "missing_background_worktree",
-          message: `Background worktree is missing at ${backgroundPath}.`,
-        });
+        pushUniqueWarning(warnings, "missing_background_worktree", `Background worktree is missing at ${backgroundPath}.`);
       }
     } else {
+      const backgroundDirty = classifyDirtyPaths(backgroundWorktree.statusLines ?? []);
       if (backgroundWorktree.dirty) {
-        readyForAutomation = false;
-        warnings.push({
-          code: "dirty_background_worktree",
-          message: `Background worktree is dirty at ${backgroundPath}.`,
-        });
+        if (backgroundDirty.managedOnly) {
+          controlSurfaceDirtyScopes.push("background worktree");
+        } else {
+          readyForAutomation = false;
+          pushUniqueWarning(
+            warnings,
+            "dirty_background_worktree",
+            backgroundDirty.unmanagedDirtyPaths.length > 0
+              ? `Background worktree is dirty outside the managed control surface at ${backgroundPath}: ${backgroundDirty.unmanagedDirtyPaths.join(", ")}.`
+              : `Background worktree is dirty at ${backgroundPath}, and Git did not report which unmanaged paths changed.`,
+          );
+        }
       }
 
       if (backgroundWorktree.commonGitDir !== gitRepo.commonGitDir) {
         readyForAutomation = false;
-        warnings.push({
-          code: "unexpected_background_repo",
-          message: `Background worktree belongs to ${backgroundWorktree.commonGitDir}, expected ${gitRepo.commonGitDir}.`,
-        });
+        pushUniqueWarning(
+          warnings,
+          "unexpected_background_repo",
+          `Background worktree belongs to ${backgroundWorktree.commonGitDir}, expected ${gitRepo.commonGitDir}.`,
+        );
       }
 
       if (backgroundWorktree.branch !== DEFAULT_BACKGROUND_WORKTREE_BRANCH) {
         readyForAutomation = false;
-        warnings.push({
-          code: "unexpected_background_branch",
-          message: `Background worktree is on ${backgroundWorktree.branch ?? "detached HEAD"}, expected ${DEFAULT_BACKGROUND_WORKTREE_BRANCH}.`,
-        });
+        pushUniqueWarning(
+          warnings,
+          "unexpected_background_branch",
+          `Background worktree is on ${backgroundWorktree.branch ?? "detached HEAD"}, expected ${DEFAULT_BACKGROUND_WORKTREE_BRANCH}.`,
+        );
       }
 
       if (gitRepo.head && backgroundWorktree.head && backgroundWorktree.head !== gitRepo.head) {
         readyForAutomation = false;
-        warnings.push({
-          code: "background_worktree_head_mismatch",
-          message: `Background worktree is at ${backgroundWorktree.head}, expected ${gitRepo.head}.`,
-        });
+        pushUniqueWarning(
+          warnings,
+          "background_worktree_head_mismatch",
+          `Background worktree is at ${backgroundWorktree.head}, expected ${gitRepo.head}.`,
+        );
       }
     }
+  }
+
+  if (controlSurfaceDirtyScopes.length > 0) {
+    pushUniqueWarning(
+      warnings,
+      "control_surface_dirty_only",
+      buildControlSurfaceDirtyOnlyMessage(controlSurfaceDirtyScopes),
+    );
   }
 
   const lock = await inspectCycleLock(paths.cycleLockFile);
   if (lock.exists) {
     readyForAutomation = false;
-    warnings.push({
-      code: lock.stale ? "stale_cycle_lock" : "active_cycle_lock",
-      message: lock.stale ? lock.reason ?? "Cycle lock is stale." : "Cycle lock is active.",
-    });
+    pushUniqueWarning(
+      warnings,
+      lock.stale ? "stale_cycle_lock" : "active_cycle_lock",
+      lock.stale ? lock.reason ?? "Cycle lock is stale." : "Cycle lock is active.",
+    );
   }
 
   const powershell = discoverPowerShellExecutable();
   const codexProcess = detectCodexProcess(powershell ?? undefined);
   if (!codexProcess.probeOk) {
     readyForAutomation = false;
-    warnings.push({
-      code: "codex_process_probe_failed",
-      message: codexProcess.error ?? "Codex process probe failed.",
-    });
+    pushUniqueWarning(warnings, "codex_process_probe_failed", codexProcess.error ?? "Codex process probe failed.");
   } else if (!codexProcess.running) {
     readyForAutomation = false;
-    warnings.push({
-      code: "codex_not_running",
-      message: "Codex process was not detected.",
-    });
+    pushUniqueWarning(warnings, "codex_not_running", "Codex process was not detected.");
   }
 
   const nextAutomationReason = readyForAutomation
-    ? "Ready for automation: runtime checks passed and eligible work exists."
+    ? settingsDoc.auto_continue_within_goal
+      ? "Ready for follow-up autocontinue: runtime checks passed and eligible work exists."
+      : "Ready for automation: runtime checks passed and eligible work exists."
     : buildRuntimeAutomationReason(warnings);
+
+  if (readyForAutomation && settingsDoc.auto_continue_within_goal && hasEligibleWork) {
+    pushUniqueWarning(
+      warnings,
+      "ready_for_followup_autocontinue",
+      "Ready for follow-up autocontinue: runtime checks passed and eligible work exists.",
+    );
+  }
+
+  const autoContinueState = resolveRuntimeAutoContinueState({
+    summaryAutoContinueState: summary.auto_continue_state,
+    readyForAutomation,
+    autoContinueWithinGoal: settingsDoc.auto_continue_within_goal,
+  });
+  const continuationReason = resolveRuntimeContinuationReason({
+    summaryAutoContinueState: summary.auto_continue_state,
+    summaryContinuationReason: summary.continuation_reason,
+    autoContinueState,
+    autoContinueWithinGoal: settingsDoc.auto_continue_within_goal,
+    nextAutomationReason,
+  });
 
   const result: StatusSummary = {
     ...summary,
     ready_for_automation: readyForAutomation,
     next_automation_ready: readyForAutomation,
     next_automation_reason: nextAutomationReason,
+    auto_continue_state: autoContinueState,
+    continuation_reason: continuationReason,
     warnings: warnings.length > 0 ? warnings : undefined,
   };
 

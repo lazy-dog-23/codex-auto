@@ -65,8 +65,14 @@ describe("status command", () => {
     expect(summary.latest_summary_reason).toBe("Heartbeat summary sent to the thread and Inbox.");
     expect(summary.has_recorded_run).toBe(true);
     expect(summary.results_scope_note).toBeNull();
+    expect(summary.auto_continue_state).toBe("stopped");
+    expect(summary.next_task_id).toBe("task-b");
+    expect(summary.next_task_title).toBe("Wire status report");
+    expect(summary.remaining_ready).toBe(1);
+    expect(summary.last_followup_summary).toBe("Add a regression check for unblock flow.");
     expect(summary.next_automation_reason).toContain("open blocker");
     expect(summary.message).toContain("ready_for_automation=no");
+    expect(summary.message).toContain("auto_continue_state=stopped");
     expect(summary.message).toContain("summary_kind=thread_summary");
     expect(summary.message).toContain("next_automation_reason=There is 1 open blocker(s).");
   });
@@ -90,6 +96,8 @@ describe("status command", () => {
             updated_at: "2026-01-06T00:00:00Z",
             commit_hash: null,
             review_status: "not_reviewed",
+            source: "proposal",
+            source_task_id: null,
           },
         ],
       },
@@ -149,6 +157,10 @@ describe("status command", () => {
     expect(summary.report_thread_id).toBe("thread-99");
     expect(summary.sprint_active).toBe(true);
     expect(summary.results_summary?.worker_result).toBe("completed task-ready");
+    expect(summary.auto_continue_state).toBe("running");
+    expect(summary.continuation_reason).toBe("Ready for automation: active or planning work is available.");
+    expect(summary.next_task_id).toBe("task-ready");
+    expect(summary.remaining_ready).toBe(1);
     expect(summary.next_automation_reason).toBe("Ready for automation: active or planning work is available.");
   });
 
@@ -171,6 +183,8 @@ describe("status command", () => {
             updated_at: "2026-01-06T00:00:00Z",
             commit_hash: null,
             review_status: "not_reviewed",
+            source: "proposal",
+            source_task_id: null,
           },
         ],
       },
@@ -248,6 +262,8 @@ describe("status command", () => {
             updated_at: "2026-01-06T00:00:00Z",
             commit_hash: null,
             review_status: "not_reviewed",
+            source: "proposal",
+            source_task_id: null,
           },
         ],
       },
@@ -427,6 +443,8 @@ describe("status command", () => {
             updated_at: "2026-01-06T00:00:00Z",
             commit_hash: null,
             review_status: "not_reviewed",
+            source: "proposal",
+            source_task_id: null,
           },
         ],
       },
@@ -502,6 +520,8 @@ describe("status command", () => {
             updated_at: "2026-01-06T00:00:00Z",
             commit_hash: null,
             review_status: "not_reviewed",
+            source: "proposal",
+            source_task_id: null,
           },
         ],
       },
@@ -582,6 +602,8 @@ describe("status command", () => {
             updated_at: "2026-01-06T00:00:00Z",
             commit_hash: null,
             review_status: "not_reviewed",
+            source: "proposal",
+            source_task_id: null,
           },
         ],
       },

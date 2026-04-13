@@ -18,8 +18,10 @@ import type {
 
 export {
   AUTO_COMMIT_MODES,
+  AUTO_CONTINUE_STATES,
   BLOCKER_SEVERITIES,
   BLOCKER_STATUSES,
+  CONTINUATION_DECISIONS,
   CYCLE_STATUSES,
   DEFAULT_AUTONOMY_BRANCH,
   DEFAULT_BACKGROUND_BRANCH,
@@ -36,11 +38,13 @@ export {
   STALE_LOCK_AGE_MINUTES,
   TASK_PRIORITIES,
   TASK_PRIORITY_WEIGHT,
+  TASK_SOURCES,
   TASK_STATUSES,
 } from "../contracts/autonomy.js";
 
 export type {
   AutoCommitMode,
+  AutoContinueState,
   AutomationPromptSpec,
   AutomationPromptsResult,
   BackgroundWorktreeSettings,
@@ -49,6 +53,7 @@ export type {
   BlockerStatus,
   BlockersDocument,
   CommandResult,
+  ContinuationDecision,
   CruiseCadence,
   CycleStatus,
   DoctorCheck,
@@ -58,6 +63,7 @@ export type {
   GoalsDocument,
   GoalRecord,
   InstallSource,
+  InstallDocument,
   LastResult,
   LockRecord,
   ProposedTask,
@@ -71,6 +77,7 @@ export type {
   StatusSummary,
   AutonomyTask,
   TaskPriority,
+  TaskSource,
   TaskStatus,
   TasksDocument,
 } from "../contracts/autonomy.js";
@@ -202,4 +209,21 @@ export interface IntakeGoalInput {
 export interface ReviewOutcome {
   task: TaskRecord;
   state: AutonomyState;
+}
+
+export interface FollowupSeed {
+  goal_id: string;
+  title: string;
+  acceptance: string[];
+  file_hints: string[];
+  source_task_id: string | null;
+  updated_at: string;
+}
+
+export interface FollowupTaskCreationResult {
+  tasks: TaskRecord[];
+  createdTask: TaskRecord | null;
+  duplicateTaskId: string | null;
+  loopDetected: boolean;
+  blockerSeed: BlockerSeed | null;
 }

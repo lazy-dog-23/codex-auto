@@ -12,7 +12,7 @@ import {
 import { inspectCycleLock } from '../infra/lock.js';
 import { readJsonFile } from '../infra/json.js';
 import { discoverPowerShellExecutable, detectCodexProcess, getPowerShellVersion } from '../infra/process.js';
-import { readSimpleTomlFile } from '../infra/toml.js';
+import { readTomlFile } from '../infra/toml.js';
 import type { DiagnosticIssue, FileSnapshot, WorktreeSummary } from '../infra/types.js';
 import {
   blockersSchema,
@@ -335,9 +335,9 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
     return;
   }
 
-  let config: Awaited<ReturnType<typeof readSimpleTomlFile>>;
+  let config: Awaited<ReturnType<typeof readTomlFile>>;
   try {
-    config = await readSimpleTomlFile(configPath);
+    config = await readTomlFile(configPath);
   } catch (error) {
     issues.push({
       severity: 'error',
@@ -348,13 +348,12 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
     return;
   }
 
-  const root = config[''] ?? {};
-  const workspaceWrite = config['sandbox_workspace_write'] ?? {};
-  const windows = config['windows'] ?? {};
-  const approvalPolicy = String(root.approval_policy ?? '');
-  const sandboxMode = String(root.sandbox_mode ?? '');
+  const approvalPolicy = readTomlString(config, ['approval_policy']);
+  const sandboxMode = readTomlString(config, ['sandbox_mode']);
+  const workspaceNetworkAccess = readTomlValue(config, ['sandbox_workspace_write', 'network_access']);
+  const windowsSandbox = readTomlString(config, ['windows', 'sandbox']);
 
-  if (!['untrusted', 'on-request', 'never'].includes(approvalPolicy)) {
+  if (!['untrusted', 'on-request', 'never'].includes(approvalPolicy ?? '')) {
     issues.push({
       severity: 'error',
       code: 'config_toml_invalid',
@@ -363,7 +362,7 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
     });
   }
 
-  if (!['read-only', 'workspace-write', 'danger-full-access'].includes(sandboxMode)) {
+  if (!['read-only', 'workspace-write', 'danger-full-access'].includes(sandboxMode ?? '')) {
     issues.push({
       severity: 'error',
       code: 'config_toml_invalid',
@@ -372,7 +371,7 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
     });
   }
 
-  if (typeof workspaceWrite.network_access !== 'boolean') {
+  if (typeof workspaceNetworkAccess !== 'boolean') {
     issues.push({
       severity: 'error',
       code: 'config_toml_invalid',
@@ -381,7 +380,7 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
     });
   }
 
-  if (!['unelevated', 'elevated'].includes(String(windows.sandbox ?? ''))) {
+  if (!['unelevated', 'elevated'].includes(windowsSandbox ?? '')) {
     issues.push({
       severity: 'error',
       code: 'config_toml_invalid',
@@ -407,6 +406,36 @@ async function validateCodexConfig(configPath: string, issues: DiagnosticIssue[]
       path: configPath,
     });
   }
+}
+
+function readTomlValue(document: Record<string, unknown>, path: string[]): unknown {
+  let current: unknown = document;
+
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+
+    current = current[segment];
+    if (current === undefined) {
+      return undefined;
+    }
+  }
+
+  return current;
+}
+
+function readTomlString(document: Record<string, unknown>, path: string[]): string | null {
+  const value = readTomlValue(document, path);
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 async function existsPath(filePath: string): Promise<boolean> {

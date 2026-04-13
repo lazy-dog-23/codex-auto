@@ -1167,11 +1167,23 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$environmentFile = Join-Path $repoRoot '.codex/environments/environment.toml'
 
 function Assert-Exists {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Missing required path: $Path"
+    }
+}
+
+function Assert-True {
+    param(
+        [Parameter(Mandatory)][bool]$Condition,
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    if (-not $Condition) {
+        throw $Message
     }
 }
 
@@ -1200,6 +1212,45 @@ function Get-OptionalString {
     return $text
 }
 
+function Assert-EnvironmentContract {
+    param([Parameter(Mandatory)][string]$Path)
+
+    Assert-Exists $Path
+    $environmentText = Get-Content -LiteralPath $Path -Raw
+
+    if ($environmentText -notmatch '(?m)^\s*version\s*=\s*1\s*$') {
+        throw 'environment.toml must define version = 1.'
+    }
+
+    if ($environmentText -notmatch '(?ms)^\[setup\]\s*(?:.*?\r?\n)*?script\s*=\s*"pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1"\s*(?:\r?\n|$)') {
+        throw 'environment.toml setup script must point to scripts/setup.windows.ps1.'
+    }
+
+    $actionMatches = [regex]::Matches($environmentText, '(?ms)^\[\[actions\]\]\s*(.*?)(?=^\[\[actions\]\]|\z)')
+    if ($actionMatches.Count -lt 3) {
+        throw 'environment.toml must define verify, smoke, and review actions.'
+    }
+
+    foreach ($requiredAction in @(
+        @{ Name = 'verify'; Command = 'pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1' },
+        @{ Name = 'smoke'; Command = 'pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1' },
+        @{ Name = 'review'; Command = 'pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/review.ps1' }
+    )) {
+        $block = $null
+        foreach ($candidate in $actionMatches) {
+            $text = $candidate.Groups[1].Value
+            if ($text -match "(?m)^\s*name\s*=\s*""$([regex]::Escape([string]$requiredAction.Name))""\s*$") {
+                $block = $text
+                break
+            }
+        }
+
+        Assert-True ($null -ne $block) "Missing action '$($requiredAction.Name)' in environment.toml."
+        Assert-True ($block -match "(?m)^\s*command\s*=\s*""$([regex]::Escape([string]$requiredAction.Command))""\s*$") "Action '$($requiredAction.Name)' must point to scripts/$($requiredAction.Name).ps1."
+        Assert-True ($block -match '(?m)^\s*platform\s*=\s*"windows"\s*$') "Action '$($requiredAction.Name)' must target windows."
+    }
+}
+
 $smokeScript = Join-Path $repoRoot 'scripts/smoke.ps1'
 $reviewLocalScript = Join-Path $repoRoot 'scripts/review.local.ps1'
 $statePath = Join-Path $repoRoot 'autonomy/state.json'
@@ -1214,6 +1265,8 @@ Assert-Exists $resultsPath
 Assert-Exists $goalsPath
 Assert-Exists $tasksPath
 Assert-Exists $settingsPath
+
+Assert-EnvironmentContract -Path $environmentFile
 
 & $smokeScript
 if (-not $?) {

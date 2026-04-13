@@ -13,6 +13,8 @@ export const settingsSchema = {
     "report_surface",
     "auto_commit",
     "autonomy_branch",
+    "auto_continue_within_goal",
+    "block_on_major_decision",
     "default_cruise_cadence",
     "default_sprint_heartbeat_minutes",
   ],
@@ -39,6 +41,12 @@ export const settingsSchema = {
     autonomy_branch: {
       type: "string",
       minLength: 1,
+    },
+    auto_continue_within_goal: {
+      type: "boolean",
+    },
+    block_on_major_decision: {
+      type: "boolean",
     },
     default_cruise_cadence: {
       type: "object",

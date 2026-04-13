@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  InstallDocument,
   AutonomyResults,
   AutonomySettings,
   AutonomyState,
@@ -32,6 +33,8 @@ function emptyResultEntry(): ResultEntry {
     hash: null,
     message: null,
     review_status: null,
+    next_step_summary: null,
+    continuation_decision: null,
   };
 }
 
@@ -51,6 +54,16 @@ export function createDefaultProposalsDocument(): ProposalsDocument {
 
 export function createDefaultSettingsDocument(): AutonomySettings {
   return createDefaultAutonomySettings();
+}
+
+export function createDefaultInstallDocument(now: string, sourceRepo: string): InstallDocument {
+  return {
+    version: 1,
+    product_version: "0.1.0",
+    installed_at: now,
+    managed_paths: [],
+    source_repo: sourceRepo,
+  };
 }
 
 export function createDefaultResultsDocument(): AutonomyResults {
