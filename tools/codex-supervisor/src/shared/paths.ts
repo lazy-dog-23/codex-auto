@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { BackgroundWorktreeSettings, RepoPaths } from "../contracts/autonomy.js";
+import type { BackgroundWorktreeSettings, ManagedFileClass, RepoPaths } from "../contracts/autonomy.js";
 import { DEFAULT_BACKGROUND_BRANCH } from "../contracts/autonomy.js";
 
 const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
@@ -40,6 +40,38 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
 
 const NORMALIZED_MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.map((relativePath) =>
   normalizeManagedControlSurfacePath(relativePath),
+);
+
+const STATIC_TEMPLATE_RELATIVE_PATHS = [
+  "autonomy/schema/goals.schema.json",
+  "autonomy/schema/proposals.schema.json",
+  "autonomy/schema/tasks.schema.json",
+  "autonomy/schema/state.schema.json",
+  "autonomy/schema/settings.schema.json",
+  "autonomy/schema/results.schema.json",
+  "autonomy/schema/blockers.schema.json",
+  "autonomy/schema/verification.schema.json",
+] as const;
+
+const RUNTIME_STATE_RELATIVE_PATHS = [
+  "autonomy/goal.md",
+  "autonomy/journal.md",
+  "autonomy/install.json",
+  "autonomy/verification.json",
+  "autonomy/goals.json",
+  "autonomy/proposals.json",
+  "autonomy/tasks.json",
+  "autonomy/state.json",
+  "autonomy/results.json",
+  "autonomy/blockers.json",
+] as const;
+
+const NORMALIZED_STATIC_TEMPLATE_RELATIVE_PATHS = new Set(
+  STATIC_TEMPLATE_RELATIVE_PATHS.map((relativePath) => normalizeManagedControlSurfacePath(relativePath)),
+);
+
+const NORMALIZED_RUNTIME_STATE_RELATIVE_PATHS = new Set(
+  RUNTIME_STATE_RELATIVE_PATHS.map((relativePath) => normalizeManagedControlSurfacePath(relativePath)),
 );
 
 export function resolveRepoPaths(repoRoot = process.cwd()): RepoPaths {
@@ -98,6 +130,19 @@ export function isManagedControlSurfaceRelativePath(pathValue: string): boolean 
 export function getManagedControlSurfacePaths(repoRoot = process.cwd()): string[] {
   const resolvedRoot = path.resolve(repoRoot);
   return MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.map((relativePath) => path.join(resolvedRoot, relativePath));
+}
+
+export function getManagedFileClass(pathValue: string): ManagedFileClass {
+  const normalized = normalizeManagedControlSurfacePath(pathValue);
+  if (NORMALIZED_STATIC_TEMPLATE_RELATIVE_PATHS.has(normalized)) {
+    return "static_template";
+  }
+
+  if (NORMALIZED_RUNTIME_STATE_RELATIVE_PATHS.has(normalized)) {
+    return "runtime_state";
+  }
+
+  return "repo_customized";
 }
 
 export function getBackgroundWorktreeSettings(repoRoot = process.cwd()): BackgroundWorktreeSettings {

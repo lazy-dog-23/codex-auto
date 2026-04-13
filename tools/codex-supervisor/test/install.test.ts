@@ -96,7 +96,7 @@ describe("install scaffold", () => {
       product_version: string;
       source_repo: string;
       managed_paths: string[];
-      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string }>;
+      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string; management_class: string }>;
     };
     expect(installMetadata.product_version).toBe("0.1.0");
     expect(installMetadata.source_repo).toBe(".");
@@ -105,6 +105,7 @@ describe("install scaffold", () => {
     expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.template_id).toBe("agents_markdown");
     expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.installed_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.last_reconciled_product_version).toBe("0.1.0");
+    expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.management_class).toBe("repo_customized");
     expect(await readFile(join(workspace, "autonomy", "goals.json"), "utf8")).toContain('"goals"');
     expect(await readFile(join(workspace, "autonomy", "settings.json"), "utf8")).toContain('"autonomy_branch"');
     expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain('"reporter"');

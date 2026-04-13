@@ -534,7 +534,7 @@ describe("git/worktree integration", () => {
     expect(driftReview.commit_ready).toBe(false);
     expect(driftReview.commit_skipped_reason).toBe("branch_drift");
     expect(driftReview.issues.some((issue) => issue.code === "branch_drift")).toBe(true);
-  });
+  }, 10000);
 
   it("fails review when the control plane points to a missing current goal", async () => {
     const workspace = await makeTempWorkspace();

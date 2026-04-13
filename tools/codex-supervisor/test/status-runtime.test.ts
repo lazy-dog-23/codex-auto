@@ -7,6 +7,7 @@ const inspectCycleLockMock = vi.fn();
 const discoverPowerShellExecutableMock = vi.fn();
 const detectCodexProcessMock = vi.fn();
 const runProcessMock = vi.fn();
+const inspectManagedUpgradeStateMock = vi.fn();
 const loadTasksDocumentMock = vi.fn();
 const loadGoalsDocumentMock = vi.fn();
 const loadStateDocumentMock = vi.fn();
@@ -44,6 +45,10 @@ vi.mock("../src/commands/control-plane.js", () => ({
   loadVerificationDocument: loadVerificationDocumentMock,
 }));
 
+vi.mock("../src/commands/upgrade-managed.js", () => ({
+  inspectManagedUpgradeState: inspectManagedUpgradeStateMock,
+}));
+
 describe("status runtime gates", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -54,6 +59,7 @@ describe("status runtime gates", () => {
     discoverPowerShellExecutableMock.mockReset();
     detectCodexProcessMock.mockReset();
     runProcessMock.mockReset();
+    inspectManagedUpgradeStateMock.mockReset();
     loadTasksDocumentMock.mockReset();
     loadGoalsDocumentMock.mockReset();
     loadStateDocumentMock.mockReset();
@@ -70,6 +76,10 @@ describe("status runtime gates", () => {
       stderr: "",
       error: undefined,
     }));
+    inspectManagedUpgradeStateMock.mockResolvedValue({
+      state: "not_installed",
+      summary: null,
+    });
   });
 
   it("blocks automation when the background worktree branch diverges", async () => {
@@ -320,6 +330,265 @@ describe("status runtime gates", () => {
     expect(summary.auto_continue_state).toBe("running");
     expect(summary.warnings?.some((warning) => warning.code === "control_surface_dirty_only")).toBe(true);
     expect(summary.warnings?.some((warning) => warning.code === "ready_for_followup_autocontinue")).toBe(true);
+  });
+
+  it("does not stop automation when only advisory managed drift is present", async () => {
+    detectGitRepositoryMock.mockResolvedValue({
+      path: "C:/repo",
+      gitDir: ".git",
+      commonGitDir: "C:/repo/.git",
+      head: "abc123",
+      dirty: false,
+      statusLines: [],
+    });
+    getBackgroundWorktreePathMock.mockReturnValue("C:\\repo.__codex_bg");
+    getWorktreeSummaryMock.mockResolvedValue({
+      path: "C:\\repo.__codex_bg",
+      repoRoot: "C:/repo",
+      commonGitDir: "C:/repo/.git",
+      branch: "codex/background",
+      head: "abc123",
+      dirty: false,
+      statusLines: [],
+    });
+    inspectManagedUpgradeStateMock.mockResolvedValue({
+      state: "managed_advisory_drift",
+      summary: null,
+    });
+    loadTasksDocumentMock.mockResolvedValue({
+      version: 1,
+      tasks: [
+        {
+          id: "task-ready",
+          goal_id: "goal-1",
+          title: "Ready task",
+          status: "ready",
+          priority: "P1",
+          depends_on: [],
+          acceptance: [],
+          file_hints: [],
+          retry_count: 0,
+          last_error: null,
+          updated_at: "2026-04-12T00:00:00Z",
+          commit_hash: null,
+          review_status: "not_reviewed",
+          source: "proposal",
+          source_task_id: null,
+        },
+      ],
+    });
+    loadGoalsDocumentMock.mockResolvedValue({
+      version: 1,
+      goals: [
+        {
+          id: "goal-1",
+          title: "Goal 1",
+          objective: "Ship it",
+          success_criteria: ["done"],
+          constraints: [],
+          out_of_scope: [],
+          status: "active",
+          run_mode: "cruise",
+          created_at: "2026-04-12T00:00:00Z",
+          approved_at: "2026-04-12T00:10:00Z",
+          completed_at: null,
+        },
+      ],
+    });
+    loadStateDocumentMock.mockResolvedValue({
+      version: 1,
+      current_goal_id: "goal-1",
+      current_task_id: null,
+      cycle_status: "idle",
+      run_mode: "cruise",
+      last_planner_run_at: null,
+      last_worker_run_at: null,
+      last_result: "planned",
+      consecutive_worker_failures: 0,
+      needs_human_review: false,
+      open_blocker_count: 0,
+      report_thread_id: "thread-123",
+      autonomy_branch: "codex/autonomy",
+      sprint_active: false,
+      paused: false,
+      pause_reason: null,
+    });
+    loadBlockersDocumentMock.mockResolvedValue({
+      version: 1,
+      blockers: [],
+    });
+    loadResultsDocumentMock.mockResolvedValue({
+      version: 1,
+      planner: { status: "planned", goal_id: "goal-1", task_id: null, summary: "planned", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      worker: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+    });
+    loadSettingsDocumentMock.mockResolvedValue({
+      version: 1,
+      install_source: "local_package",
+      initial_confirmation_required: true,
+      report_surface: "thread_and_inbox",
+      auto_commit: "autonomy_branch",
+      autonomy_branch: "codex/autonomy",
+      auto_continue_within_goal: true,
+      block_on_major_decision: true,
+      default_cruise_cadence: {
+        planner_hours: 6,
+        worker_hours: 2,
+        reviewer_hours: 6,
+      },
+      default_sprint_heartbeat_minutes: 15,
+    });
+    inspectCycleLockMock.mockResolvedValue({
+      exists: false,
+      stale: false,
+    });
+    discoverPowerShellExecutableMock.mockReturnValue("pwsh");
+    detectCodexProcessMock.mockReturnValue({
+      running: true,
+      matches: ["Codex"],
+      executable: "pwsh",
+      probeOk: true,
+    });
+
+    const { runStatusCommand } = await import("../src/commands/status.js");
+    const summary = await runStatusCommand("C:/repo");
+
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.upgrade_state).toBe("managed_advisory_drift");
+    expect(summary.warnings?.some((warning) => warning.code === "managed_advisory_drift")).toBe(true);
+    expect(summary.next_automation_reason).toContain("Ready for");
+  });
+
+  it("blocks automation when static-template managed drift is present", async () => {
+    detectGitRepositoryMock.mockResolvedValue({
+      path: "C:/repo",
+      gitDir: ".git",
+      commonGitDir: "C:/repo/.git",
+      head: "abc123",
+      dirty: false,
+      statusLines: [],
+    });
+    getBackgroundWorktreePathMock.mockReturnValue("C:\\repo.__codex_bg");
+    getWorktreeSummaryMock.mockResolvedValue({
+      path: "C:\\repo.__codex_bg",
+      repoRoot: "C:/repo",
+      commonGitDir: "C:/repo/.git",
+      branch: "codex/background",
+      head: "abc123",
+      dirty: false,
+      statusLines: [],
+    });
+    inspectManagedUpgradeStateMock.mockResolvedValue({
+      state: "managed_diverged",
+      summary: null,
+    });
+    loadTasksDocumentMock.mockResolvedValue({
+      version: 1,
+      tasks: [
+        {
+          id: "task-ready",
+          goal_id: "goal-1",
+          title: "Ready task",
+          status: "ready",
+          priority: "P1",
+          depends_on: [],
+          acceptance: [],
+          file_hints: [],
+          retry_count: 0,
+          last_error: null,
+          updated_at: "2026-04-12T00:00:00Z",
+          commit_hash: null,
+          review_status: "not_reviewed",
+          source: "proposal",
+          source_task_id: null,
+        },
+      ],
+    });
+    loadGoalsDocumentMock.mockResolvedValue({
+      version: 1,
+      goals: [
+        {
+          id: "goal-1",
+          title: "Goal 1",
+          objective: "Ship it",
+          success_criteria: ["done"],
+          constraints: [],
+          out_of_scope: [],
+          status: "active",
+          run_mode: "cruise",
+          created_at: "2026-04-12T00:00:00Z",
+          approved_at: "2026-04-12T00:10:00Z",
+          completed_at: null,
+        },
+      ],
+    });
+    loadStateDocumentMock.mockResolvedValue({
+      version: 1,
+      current_goal_id: "goal-1",
+      current_task_id: null,
+      cycle_status: "idle",
+      run_mode: "cruise",
+      last_planner_run_at: null,
+      last_worker_run_at: null,
+      last_result: "planned",
+      consecutive_worker_failures: 0,
+      needs_human_review: false,
+      open_blocker_count: 0,
+      report_thread_id: "thread-123",
+      autonomy_branch: "codex/autonomy",
+      sprint_active: false,
+      paused: false,
+      pause_reason: null,
+    });
+    loadBlockersDocumentMock.mockResolvedValue({
+      version: 1,
+      blockers: [],
+    });
+    loadResultsDocumentMock.mockResolvedValue({
+      version: 1,
+      planner: { status: "planned", goal_id: "goal-1", task_id: null, summary: "planned", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      worker: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+    });
+    loadSettingsDocumentMock.mockResolvedValue({
+      version: 1,
+      install_source: "local_package",
+      initial_confirmation_required: true,
+      report_surface: "thread_and_inbox",
+      auto_commit: "autonomy_branch",
+      autonomy_branch: "codex/autonomy",
+      auto_continue_within_goal: true,
+      block_on_major_decision: true,
+      default_cruise_cadence: {
+        planner_hours: 6,
+        worker_hours: 2,
+        reviewer_hours: 6,
+      },
+      default_sprint_heartbeat_minutes: 15,
+    });
+    inspectCycleLockMock.mockResolvedValue({
+      exists: false,
+      stale: false,
+    });
+    discoverPowerShellExecutableMock.mockReturnValue("pwsh");
+    detectCodexProcessMock.mockReturnValue({
+      running: true,
+      matches: ["Codex"],
+      executable: "pwsh",
+      probeOk: true,
+    });
+
+    const { runStatusCommand } = await import("../src/commands/status.js");
+    const summary = await runStatusCommand("C:/repo");
+
+    expect(summary.ready_for_automation).toBe(false);
+    expect(summary.upgrade_state).toBe("managed_diverged");
+    expect(summary.warnings?.some((warning) => warning.code === "managed_diverged")).toBe(true);
   });
 
   it("normalizes git status paths and stabilizes after two identical snapshots", async () => {

@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { isDirectory, loadJsonFile, pathExists, writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
-import { getInstallMetadataPath, resolveRepoPaths } from "../shared/paths.js";
+import { getInstallMetadataPath, getManagedFileClass, resolveRepoPaths } from "../shared/paths.js";
 import {
   getAgentsMarkdown,
   getAutonomyIntakeSkillMarkdown,
@@ -58,6 +58,7 @@ interface ManagedControlSurfaceSpec {
   path: string;
   relative_path: string;
   template_id: string;
+  management_class: "static_template" | "repo_customized" | "runtime_state";
   kind: "text" | "json";
   content: string;
 }
@@ -67,6 +68,7 @@ interface ManagedInstallFileRecord {
   template_id: string;
   installed_hash: string;
   last_reconciled_product_version: string;
+  management_class: "static_template" | "repo_customized" | "runtime_state";
 }
 
 interface InstallMetadataDocument {
@@ -82,6 +84,8 @@ interface ManagedUpgradePlanEntry {
   path: string;
   relative_path: string;
   template_id: string;
+  management_class: "static_template" | "repo_customized" | "runtime_state";
+  upgrade_blocking: boolean;
   status: UpgradeDecision;
   reason: string;
   installed_hash: string | null;
@@ -100,6 +104,8 @@ interface UpgradeManagedSummary {
   auto_merge: number;
   manual_conflict: number;
   foreign_occupied: number;
+  blocking_drift: number;
+  advisory_drift: number;
   applied_paths: string[];
   pending_paths: string[];
 }
@@ -118,7 +124,7 @@ interface ManagedInstallMetadataState {
 }
 
 export interface ManagedUpgradeStateSummary {
-  state: "not_installed" | "managed_match" | "managed_diverged" | "metadata_incomplete";
+  state: "not_installed" | "managed_match" | "managed_advisory_drift" | "managed_diverged" | "metadata_incomplete";
   summary: UpgradeManagedSummary | null;
 }
 
@@ -155,10 +161,15 @@ export async function inspectManagedUpgradeState(targetPath: string): Promise<Ma
 
   const plan = await buildManagedUpgradePlan(buildManagedControlSurfaceSpecs(resolveRepoPaths(repoRoot)), metadata.document);
   const summary = summarizeManagedUpgradePlan(repoRoot, installMetadataPath, false, plan);
-  const hasDivergence = plan.some((entry) => entry.status !== "managed_match");
+  const hasBlockingDivergence = plan.some((entry) => entry.upgrade_blocking);
+  const hasAdvisoryDivergence = plan.some((entry) => !entry.upgrade_blocking && entry.status !== "managed_match");
 
   return {
-    state: hasDivergence ? "managed_diverged" : "managed_match",
+    state: hasBlockingDivergence
+      ? "managed_diverged"
+      : hasAdvisoryDivergence
+        ? "managed_advisory_drift"
+        : "managed_match",
     summary,
   };
 }
@@ -290,10 +301,13 @@ async function buildManagedUpgradePlan(
   for (const spec of specs) {
     const record = recordMap.get(spec.relative_path);
     if (!record) {
+      const managementClass = getManagedFileClass(spec.relative_path);
       plan.push({
         path: spec.path,
         relative_path: spec.relative_path,
         template_id: spec.template_id,
+        management_class: managementClass,
+        upgrade_blocking: isBlockingManagedFileClass(managementClass),
         status: "foreign_occupied",
         reason: "No managed metadata record exists for this path.",
         installed_hash: null,
@@ -311,11 +325,16 @@ async function buildManagedUpgradePlan(
   return plan;
 }
 
+function isBlockingManagedFileClass(managementClass: ManagedInstallFileRecord["management_class"]): boolean {
+  return managementClass === "static_template";
+}
+
 async function classifyManagedFile(
   spec: ManagedControlSurfaceSpec,
   record: ManagedInstallFileRecord,
 ): Promise<ManagedUpgradePlanEntry> {
   const desiredHash = hashContent(spec.content);
+  const upgradeBlocking = isBlockingManagedFileClass(record.management_class);
 
   try {
     const stats = await fs.lstat(spec.path);
@@ -324,6 +343,8 @@ async function classifyManagedFile(
         path: spec.path,
         relative_path: spec.relative_path,
         template_id: spec.template_id,
+        management_class: record.management_class,
+        upgrade_blocking: upgradeBlocking,
         status: "foreign_occupied",
         reason: "Managed path is occupied by a non-file entry.",
         installed_hash: record.installed_hash,
@@ -342,6 +363,8 @@ async function classifyManagedFile(
       path: spec.path,
       relative_path: spec.relative_path,
       template_id: spec.template_id,
+      management_class: record.management_class,
+      upgrade_blocking: upgradeBlocking,
       status: "safe_replace",
       reason: "Managed file is missing and can be recreated from the template.",
       installed_hash: record.installed_hash,
@@ -361,8 +384,12 @@ async function classifyManagedFile(
         path: spec.path,
         relative_path: spec.relative_path,
         template_id: spec.template_id,
+        management_class: record.management_class,
+        upgrade_blocking: false,
         status: "managed_match",
-        reason: "Managed file already matches the current template.",
+        reason: upgradeBlocking
+          ? "Managed file already matches the current template."
+          : "Managed file is aligned closely enough for its non-blocking management class.",
         installed_hash: record.installed_hash,
         current_hash: currentHash,
         desired_hash: desiredHash,
@@ -375,8 +402,12 @@ async function classifyManagedFile(
       path: spec.path,
       relative_path: spec.relative_path,
       template_id: spec.template_id,
+      management_class: record.management_class,
+      upgrade_blocking: upgradeBlocking,
       status: "safe_replace",
-      reason: "Managed file is unchanged since install and can be replaced safely.",
+      reason: upgradeBlocking
+        ? "Managed file is unchanged since install and can be replaced safely."
+        : "An updated product template is available, but this file is managed as advisory drift only.",
       installed_hash: record.installed_hash,
       current_hash: currentHash,
       desired_hash: desiredHash,
@@ -390,8 +421,12 @@ async function classifyManagedFile(
       path: spec.path,
       relative_path: spec.relative_path,
       template_id: spec.template_id,
+      management_class: record.management_class,
+      upgrade_blocking: false,
       status: "managed_match",
-      reason: "Managed file already matches the current template after local formatting or equivalent updates.",
+      reason: upgradeBlocking
+        ? "Managed file already matches the current template after local formatting or equivalent updates."
+        : "Managed file already matches the current template or an equivalent repo-specific variant.",
       installed_hash: record.installed_hash,
       current_hash: currentHash,
       desired_hash: desiredHash,
@@ -407,8 +442,12 @@ async function classifyManagedFile(
         path: spec.path,
         relative_path: spec.relative_path,
         template_id: spec.template_id,
+        management_class: record.management_class,
+        upgrade_blocking: upgradeBlocking,
         status: "auto_merge",
-        reason: "Managed JSON file can be merged additively without conflicting changes.",
+        reason: upgradeBlocking
+          ? "Managed JSON file can be merged additively without conflicting changes."
+          : "Managed JSON file can be merged additively, but the drift is advisory for this management class.",
         installed_hash: record.installed_hash,
         current_hash: currentHash,
         desired_hash: desiredHash,
@@ -422,8 +461,12 @@ async function classifyManagedFile(
     path: spec.path,
     relative_path: spec.relative_path,
     template_id: spec.template_id,
+    management_class: record.management_class,
+    upgrade_blocking: upgradeBlocking,
     status: "manual_conflict",
-    reason: "Managed file diverged from the installed baseline and cannot be safely reconciled automatically.",
+    reason: upgradeBlocking
+      ? "Managed file diverged from the installed baseline and cannot be safely reconciled automatically."
+      : "Managed file diverged from the installed baseline, but this path is advisory and does not block automation readiness.",
     installed_hash: record.installed_hash,
     current_hash: currentHash,
     desired_hash: desiredHash,
@@ -485,6 +528,7 @@ async function applyManagedUpgradePlan(
       template_id: spec.template_id,
       installed_hash: hashContent(await fs.readFile(spec.path, "utf8")),
       last_reconciled_product_version: PRODUCT_VERSION,
+      management_class: spec.management_class,
     };
   }));
 
@@ -498,7 +542,7 @@ async function applyManagedUpgradePlan(
 }
 
 function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPaths>): ManagedControlSurfaceSpec[] {
-  return [
+  const specs: Array<Omit<ManagedControlSurfaceSpec, "management_class">> = [
     {
       path: paths.agentsFile,
       relative_path: "AGENTS.md",
@@ -717,6 +761,11 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${JSON.stringify(verificationSchema, null, 2)}\n`,
     },
   ];
+
+  return specs.map((spec) => ({
+    ...spec,
+    management_class: getManagedFileClass(spec.relative_path),
+  }));
 }
 
 function buildPlanWarnings(plan: ManagedUpgradePlanEntry[]): Array<{ code: string; message: string }> {
@@ -745,6 +794,8 @@ function summarizeManagedUpgradePlan(
   plan: ManagedUpgradePlanEntry[],
 ): UpgradeManagedSummary {
   const counts = countManagedUpgradePlan(plan);
+  const blockingDrift = plan.filter((entry) => entry.upgrade_blocking && entry.status !== "managed_match").length;
+  const advisoryDrift = plan.filter((entry) => !entry.upgrade_blocking && entry.status !== "managed_match").length;
   return {
     target_path: repoRoot,
     install_metadata_path: installMetadataPath,
@@ -754,6 +805,8 @@ function summarizeManagedUpgradePlan(
     auto_merge: counts.auto_merge,
     manual_conflict: counts.manual_conflict,
     foreign_occupied: counts.foreign_occupied,
+    blocking_drift: blockingDrift,
+    advisory_drift: advisoryDrift,
     applied_paths: [],
     pending_paths: plan
       .filter((entry) => entry.status === "manual_conflict" || entry.status === "foreign_occupied")
@@ -764,7 +817,7 @@ function summarizeManagedUpgradePlan(
 function buildPlanMessage(summary: UpgradeManagedSummary): string {
   return [
     `Generated upgrade plan for ${summary.target_path}.`,
-    `managed_match=${summary.managed_match}, safe_replace=${summary.safe_replace}, auto_merge=${summary.auto_merge}, manual_conflict=${summary.manual_conflict}, foreign_occupied=${summary.foreign_occupied}.`,
+    `managed_match=${summary.managed_match}, safe_replace=${summary.safe_replace}, auto_merge=${summary.auto_merge}, manual_conflict=${summary.manual_conflict}, foreign_occupied=${summary.foreign_occupied}, blocking_drift=${summary.blocking_drift}, advisory_drift=${summary.advisory_drift}.`,
     summary.pending_paths.length > 0 ? `Pending manual review: ${summary.pending_paths.join(", ")}.` : "No manual review is required.",
   ].join(" ");
 }
@@ -920,6 +973,7 @@ function normalizeManagedInstallFileRecord(value: ManagedInstallFileRecord): Man
     template_id: value.template_id,
     installed_hash: value.installed_hash,
     last_reconciled_product_version: value.last_reconciled_product_version,
+    management_class: value.management_class ?? getManagedFileClass(value.path),
   };
 }
 

@@ -193,13 +193,21 @@ function buildLocalAutomationReason(options: {
   return "Eligible work is available, but runtime checks need to pass before the next automation run.";
 }
 
-function buildRuntimeAutomationReason(warnings: readonly { message: string }[]): string {
-  if (warnings.length === 0) {
+function buildRuntimeAutomationReason(warnings: readonly { code: string; message: string }[]): string {
+  const blockingWarnings = warnings.filter((warning) => !NON_BLOCKING_RUNTIME_WARNING_CODES.has(warning.code));
+  if (blockingWarnings.length === 0) {
     return "Ready for automation: runtime checks passed.";
   }
 
-  return warnings.map((warning) => warning.message).join("; ");
+  return blockingWarnings.map((warning) => warning.message).join("; ");
 }
+
+const NON_BLOCKING_RUNTIME_WARNING_CODES = new Set([
+  "control_surface_dirty_only",
+  "background_dirty_allowlisted",
+  "managed_advisory_drift",
+  "ready_for_followup_autocontinue",
+]);
 
 function pushUniqueWarning(
   warnings: Array<{ code: string; message: string }>,
@@ -585,10 +593,17 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   }
 
   if (upgradeState === "managed_diverged") {
+    readyForAutomation = false;
     pushUniqueWarning(
       warnings,
       "managed_diverged",
       "Managed control-surface files diverged from the current product templates. Run codex-autonomy upgrade-managed --target <repo> to inspect the guided upgrade plan.",
+    );
+  } else if (upgradeState === "managed_advisory_drift") {
+    pushUniqueWarning(
+      warnings,
+      "managed_advisory_drift",
+      "Managed repo-customized or runtime-state files differ from the latest product templates, but the drift is advisory only.",
     );
   } else if (upgradeState === "metadata_incomplete") {
     pushUniqueWarning(

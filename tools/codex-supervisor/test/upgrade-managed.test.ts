@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runInstallCommand } from "../src/commands/install.js";
-import { runUpgradeManagedCommand } from "../src/commands/upgrade-managed.js";
+import { inspectManagedUpgradeState, runUpgradeManagedCommand } from "../src/commands/upgrade-managed.js";
 import { getLegacyReviewScriptTemplates } from "../src/scaffold/templates.js";
 
 const tempRoots: string[] = [];
@@ -64,7 +64,7 @@ describe("upgrade-managed", () => {
     const installMetadataPath = join(workspace, "autonomy", "install.json");
     const installMetadata = JSON.parse(await readFile(installMetadataPath, "utf8")) as {
       product_version: string;
-      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string }>;
+      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string; management_class: string }>;
     };
 
     const reviewPath = join(workspace, "scripts", "review.ps1");
@@ -139,7 +139,7 @@ describe("upgrade-managed", () => {
     const updatedState = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
     const updatedInstall = JSON.parse(await readFile(installMetadataPath, "utf8")) as {
       product_version: string;
-      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string }>;
+      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string; management_class: string }>;
     };
 
     expect(updatedReview).toContain("Review checks passed.");
@@ -150,5 +150,36 @@ describe("upgrade-managed", () => {
     expect(updatedInstall.product_version).toBe("0.1.0");
     expect(updatedInstall.managed_files.find((item) => item.path === "scripts/review.ps1")?.last_reconciled_product_version).toBe("0.1.0");
     expect(updatedInstall.managed_files.find((item) => item.path === "autonomy/settings.json")?.last_reconciled_product_version).toBe("0.1.0");
+    expect(updatedInstall.managed_files.find((item) => item.path === "autonomy/settings.json")?.management_class).toBe("repo_customized");
+  });
+
+  it("treats repo-customized and runtime-state drift as advisory when static templates still match", async () => {
+    const workspace = await makeTempGitRepo();
+
+    const installResult = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+    expect(installResult.ok).toBe(true);
+
+    await writeFile(join(workspace, "AGENTS.md"), "# repo specific rules\n", "utf8");
+
+    const currentResults = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8")) as Record<string, unknown>;
+    currentResults.last_summary_reason = "runtime drift is expected";
+    await writeFile(join(workspace, "autonomy", "results.json"), `${JSON.stringify(currentResults, null, 2)}\n`, "utf8");
+
+    const state = await inspectManagedUpgradeState(workspace);
+    expect(state.state).toBe("managed_advisory_drift");
+    expect(state.summary?.blocking_drift).toBe(0);
+    expect(state.summary?.advisory_drift).toBeGreaterThanOrEqual(2);
+
+    const plan = await runUpgradeManagedCommand({ target: workspace });
+    expect(plan.plan.find((entry) => entry.relative_path === "AGENTS.md")?.management_class).toBe("repo_customized");
+    expect(plan.plan.find((entry) => entry.relative_path === "AGENTS.md")?.upgrade_blocking).toBe(false);
+    expect(plan.plan.find((entry) => entry.relative_path === "autonomy/results.json")?.management_class).toBe("runtime_state");
+    expect(plan.plan.find((entry) => entry.relative_path === "autonomy/results.json")?.upgrade_blocking).toBe(false);
   });
 });

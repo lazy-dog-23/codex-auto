@@ -316,6 +316,13 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
         message: 'Managed control-surface files diverged from the current product templates. Run codex-autonomy upgrade-managed --target <repo> to inspect the guided upgrade plan.',
         path: join(controlRoot, 'autonomy', 'install.json'),
       });
+    } else if (upgradeState.state === 'managed_advisory_drift') {
+      issues.push({
+        severity: 'info',
+        code: 'managed_advisory_drift',
+        message: 'Managed repo-customized or runtime-state files differ from the latest product templates, but the drift is advisory only.',
+        path: join(controlRoot, 'autonomy', 'install.json'),
+      });
     } else if (upgradeState.state === 'metadata_incomplete') {
       issues.push({
         severity: 'warn',

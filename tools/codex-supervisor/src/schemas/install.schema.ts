@@ -33,7 +33,7 @@ export const installSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["path", "template_id", "installed_hash", "last_reconciled_product_version"],
+        required: ["path", "template_id", "installed_hash", "last_reconciled_product_version", "management_class"],
         properties: {
           path: {
             type: "string",
@@ -50,6 +50,10 @@ export const installSchema = {
           last_reconciled_product_version: {
             type: "string",
             minLength: 1,
+          },
+          management_class: {
+            type: "string",
+            enum: ["static_template", "repo_customized", "runtime_state"],
           },
         },
       },

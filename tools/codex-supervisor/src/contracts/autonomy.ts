@@ -92,6 +92,12 @@ export const AUTO_CONTINUE_STATES = [
   "needs_confirmation",
 ] as const;
 
+export const MANAGED_FILE_CLASSES = [
+  "static_template",
+  "repo_customized",
+  "runtime_state",
+] as const;
+
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
@@ -112,6 +118,7 @@ export type AutoCommitMode = (typeof AUTO_COMMIT_MODES)[number];
 export type ResultState = (typeof RESULT_STATES)[number];
 export type SummaryKind = (typeof SUMMARY_KINDS)[number];
 export type AutoContinueState = (typeof AUTO_CONTINUE_STATES)[number];
+export type ManagedFileClass = (typeof MANAGED_FILE_CLASSES)[number];
 
 export interface GoalTransitionSnapshot {
   from_goal_id: string;
@@ -302,6 +309,7 @@ export interface ManagedInstallFile {
   template_id: string;
   installed_hash: string;
   last_reconciled_product_version: string;
+  management_class: ManagedFileClass;
 }
 
 export interface RepoPaths {

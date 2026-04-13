@@ -62,6 +62,7 @@ import type {
 } from "../contracts/autonomy.js";
 import {
   getInstallMetadataPath,
+  getManagedFileClass,
   getManagedControlSurfacePaths,
   getManagedControlSurfaceRelativePaths,
 } from "../shared/paths.js";
@@ -84,6 +85,7 @@ interface ManagedControlSurfaceSpec {
   path: string;
   relative_path: string;
   template_id: string;
+  management_class: "static_template" | "repo_customized" | "runtime_state";
   kind: "text" | "json";
   content: string;
 }
@@ -93,6 +95,7 @@ interface ManagedInstallFileRecord {
   template_id: string;
   installed_hash: string;
   last_reconciled_product_version: string;
+  management_class: "static_template" | "repo_customized" | "runtime_state";
 }
 
 interface InstallMetadataDocument {
@@ -638,7 +641,8 @@ function matchesManagedInstallMetadata(
       return entry.path === expected.path
         && entry.template_id === expected.template_id
         && entry.installed_hash === expected.installed_hash
-        && entry.last_reconciled_product_version === expected.last_reconciled_product_version;
+        && entry.last_reconciled_product_version === expected.last_reconciled_product_version
+        && entry.management_class === expected.management_class;
     });
 }
 
@@ -654,7 +658,7 @@ function createInstallMetadataExpectation(sourceRepo: string, managedFiles: Mana
 }
 
 function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPaths>): ManagedControlSurfaceSpec[] {
-  return [
+  const specs: Array<Omit<ManagedControlSurfaceSpec, "management_class">> = [
     {
       path: paths.agentsFile,
       relative_path: "AGENTS.md",
@@ -873,6 +877,11 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${JSON.stringify(verificationSchema, null, 2)}\n`,
     },
   ];
+
+  return specs.map((spec) => ({
+    ...spec,
+    management_class: getManagedFileClass(spec.relative_path),
+  }));
 }
 
 function buildManagedInstallFileRecords(specs: ManagedControlSurfaceSpec[]): ManagedInstallFileRecord[] {
@@ -881,6 +890,7 @@ function buildManagedInstallFileRecords(specs: ManagedControlSurfaceSpec[]): Man
     template_id: spec.template_id,
     installed_hash: hashContent(spec.content),
     last_reconciled_product_version: PRODUCT_VERSION,
+    management_class: spec.management_class,
   }));
 }
 
@@ -890,6 +900,7 @@ function normalizeManagedInstallFileRecord(value: ManagedInstallFileRecord): Man
     template_id: value.template_id,
     installed_hash: value.installed_hash,
     last_reconciled_product_version: value.last_reconciled_product_version,
+    management_class: value.management_class ?? getManagedFileClass(value.path),
   };
 }
 

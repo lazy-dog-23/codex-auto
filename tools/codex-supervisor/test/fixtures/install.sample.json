@@ -14,13 +14,15 @@
       "path": "AGENTS.md",
       "template_id": "agents_markdown",
       "installed_hash": "sha256:sample-agents",
-      "last_reconciled_product_version": "0.1.0"
+      "last_reconciled_product_version": "0.1.0",
+      "management_class": "repo_customized"
     },
     {
       "path": "scripts/review.ps1",
       "template_id": "review_script",
       "installed_hash": "sha256:sample-review",
-      "last_reconciled_product_version": "0.1.0"
+      "last_reconciled_product_version": "0.1.0",
+      "management_class": "repo_customized"
     }
   ],
   "source_repo": "C:/Users/Administrator/Desktop/Project/codex-auto"
