@@ -6,6 +6,15 @@
 
 `codex-supervisor` 负责安装、体检、状态汇总、提案/任务流转、prompt 输出和必要的阻断处理，不直接碰 Codex 内部数据库、automation TOML、SQLite 或其他未公开接口。
 
+## 本仓库提供什么
+
+- repo-local 自治控制面安装与升级
+- 线程绑定的 operator / reporting 工作流
+- `goal / proposal / task` 状态管理
+- 全局 router skill 与 relay manual-audit skill 分发
+- 已安装目标仓 `README.md` section 托管能力
+- Windows-first 验证与 worktree 准备流程
+
 ## 快速开始
 
 1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。
@@ -232,3 +241,7 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - 非 Git 目录允许 `bootstrap`，但 `status` 不会给出可运行 automation 的结论。
 - `ready_for_automation=false` 常见原因包括：没有 active goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用、目标仍在等待首次确认。
 - `upgrade_state=managed_advisory_drift` 不是阻断。它表示 repo-specific 或 live state 文件和最新产品模板不同，但当前仍可继续跑；如果你确认这些差异就是新的本地基线，可以执行 `codex-autonomy rebaseline-managed --target <repo>` 把它登记为新 baseline。
+
+## 许可证
+
+本仓库使用 MIT License 发布。见 [LICENSE](LICENSE)。
