@@ -12,6 +12,12 @@ import { isDirectory, loadJsonFile, pathExists, writeJsonAtomic, writeTextFileAt
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
 import { resolveRepoPaths, resolveRepoRoot } from "../shared/paths.js";
 import {
+  getOperatorThreadGuidance,
+  inspectThreadBindingContext,
+  type OperatorThreadAction,
+  type ThreadBindingState,
+} from "../shared/thread-context.js";
+import {
   blockersSchema,
   goalsSchema,
   proposalsSchema,
@@ -32,6 +38,7 @@ import {
   getConfigTomlTemplate,
   getEnvironmentTomlTemplate,
   getInstallVerifyScriptTemplate,
+  getReadmeManagedSectionMarkdown,
   getLegacyReviewScriptTemplates,
   getReviewScriptTemplate,
   getSetupWindowsScriptTemplate,
@@ -55,6 +62,7 @@ import type {
   AutonomySettings,
   AutonomyState,
   BlockersDocument,
+  CommandWarning,
   GoalsDocument,
   ProposalsDocument,
   RunMode,
@@ -63,10 +71,14 @@ import type {
 import {
   getInstallMetadataPath,
   getManagedFileClass,
-  getManagedControlSurfacePaths,
-  getManagedControlSurfaceRelativePaths,
 } from "../shared/paths.js";
 import { PRODUCT_VERSION } from "../shared/product.js";
+import {
+  MANAGED_README_SECTION_END,
+  MANAGED_README_SECTION_START,
+  classifyManagedReadme,
+  upsertManagedReadmeSection,
+} from "../shared/managed-readme.js";
 
 const execFileAsync = promisify(execFile);
 const LEGACY_GOAL_ID = "goal-legacy";
@@ -88,6 +100,9 @@ interface ManagedControlSurfaceSpec {
   management_class: "static_template" | "repo_customized" | "runtime_state";
   kind: "text" | "json";
   content: string;
+  content_mode?: "full_file" | "markdown_section";
+  section_start_marker?: string;
+  section_end_marker?: string;
 }
 
 interface ManagedInstallFileRecord {
@@ -96,6 +111,10 @@ interface ManagedInstallFileRecord {
   installed_hash: string;
   last_reconciled_product_version: string;
   management_class: "static_template" | "repo_customized" | "runtime_state";
+  baseline_origin?: "template" | "repo_specific";
+  content_mode?: "full_file" | "markdown_section";
+  section_start_marker?: string;
+  section_end_marker?: string;
 }
 
 interface InstallMetadataDocument {
@@ -236,6 +255,12 @@ interface InstallSummary {
     name: string;
     purpose: string;
   }>;
+  current_thread_id: string | null;
+  current_thread_source: string | null;
+  thread_binding_state: ThreadBindingState;
+  thread_binding_hint: string | null;
+  next_operator_action: OperatorThreadAction;
+  next_operator_command: string | null;
   warning: string | null;
   private_automation_storage_untouched: boolean;
 }
@@ -285,10 +310,11 @@ export async function runInstallCommand(
   const isGitRepo = repoRoot !== targetPath || (await pathExists(path.join(targetPath, ".git")));
   const paths = resolveRepoPaths(repoRoot);
   const installMetadataPath = getInstallMetadataPath(repoRoot);
-  const managedSpecs = buildManagedControlSurfaceSpecs(paths);
+  const requestedManagedSpecs = buildManagedControlSurfaceSpecs(paths);
+  const { managedSpecs, warnings: managedSpecWarnings } = await resolveInstallManagedSpecs(requestedManagedSpecs);
   const installMetadataExpectation = createInstallMetadataExpectation(".", managedSpecs);
   const created: string[] = [];
-  const textFiles = managedSpecs.filter((spec) => spec.kind === "text").map((spec) => [spec.path, spec.content] as [string, string]);
+  const textFiles = managedSpecs.filter((spec) => spec.kind === "text");
   const jsonFiles = managedSpecs.filter((spec) => spec.kind === "json").map((spec) => [spec.path, JSON.parse(spec.content)] as [string, unknown]);
 
   const installPreflight = await inspectInstallPreflight({
@@ -297,6 +323,8 @@ export async function runInstallCommand(
     installMetadataPath,
     installMetadataExpectation,
   });
+  const preflightThreadBindingContext = await loadRepoThreadBindingContext(paths);
+  const preflightOperatorGuidance = getOperatorThreadGuidance(preflightThreadBindingContext);
 
   if (installPreflight.foreign_occupied_paths.length > 0) {
     return {
@@ -313,6 +341,12 @@ export async function runInstallCommand(
         install_metadata_written: false,
         preflight: installPreflight,
         next_automations: buildNextAutomationSuggestions(isGitRepo),
+        current_thread_id: preflightThreadBindingContext.currentThreadId,
+        current_thread_source: preflightThreadBindingContext.currentThreadSource,
+        thread_binding_state: preflightThreadBindingContext.bindingState,
+        thread_binding_hint: preflightThreadBindingContext.bindingHint,
+        next_operator_action: preflightOperatorGuidance.nextOperatorAction,
+        next_operator_command: preflightOperatorGuidance.nextOperatorCommand,
         warning: `Install preflight found foreign-occupied path(s): ${installPreflight.foreign_occupied_paths.join(", ")}.`,
         private_automation_storage_untouched: true,
       },
@@ -321,6 +355,7 @@ export async function runInstallCommand(
           code: "foreign_occupied_paths",
           message: `Install preflight found foreign-occupied path(s): ${installPreflight.foreign_occupied_paths.join(", ")}.`,
         },
+        ...managedSpecWarnings,
       ],
     };
   }
@@ -341,9 +376,9 @@ export async function runInstallCommand(
   });
 
   try {
-    for (const [filePath, content] of textFiles) {
-      if (await ensureTextFile(filePath, content)) {
-        created.push(filePath);
+    for (const spec of textFiles) {
+      if (await ensureTextFile(spec)) {
+        created.push(spec.path);
       }
     }
 
@@ -358,6 +393,8 @@ export async function runInstallCommand(
     const codexProcessDetected = await (dependencies.detectCodexProcess ?? detectCodexProcess)();
     const backgroundWorktreePrereqs = isGitRepo && (await hasBackgroundWorktreePrerequisites(paths, installMetadataPath));
     const automationReady = isGitRepo && backgroundWorktreePrereqs && codexProcessDetected;
+    const threadBindingContext = await loadRepoThreadBindingContext(paths);
+    const operatorGuidance = getOperatorThreadGuidance(threadBindingContext);
     const warning = !isGitRepo
       ? `Target ${repoRoot} is not a Git repository; install completed in detect-only mode.`
       : automationReady
@@ -379,11 +416,12 @@ export async function runInstallCommand(
             message: `Preflight found existing managed file(s) that differ from the generated scaffold: ${installPreflight.managed_diverged_paths.join(", ")}.`,
           }
         : null,
+      ...managedSpecWarnings,
     ].filter((value): value is { code: string; message: string } => value !== null);
 
     return {
       ok: true,
-      message: buildInstallMessage(repoRoot, isGitRepo, automationReady, created.length, installPreflight),
+      message: buildInstallMessage(repoRoot, isGitRepo, automationReady, created.length, installPreflight, threadBindingContext, operatorGuidance),
       summary: {
         target_path: repoRoot,
         is_git_repo: isGitRepo,
@@ -395,6 +433,12 @@ export async function runInstallCommand(
         install_metadata_written: installMetadataWritten,
         preflight: installPreflight,
         next_automations: buildNextAutomationSuggestions(isGitRepo),
+        current_thread_id: threadBindingContext.currentThreadId,
+        current_thread_source: threadBindingContext.currentThreadSource,
+        thread_binding_state: threadBindingContext.bindingState,
+        thread_binding_hint: threadBindingContext.bindingHint,
+        next_operator_action: operatorGuidance.nextOperatorAction,
+        next_operator_command: operatorGuidance.nextOperatorCommand,
         warning,
         private_automation_storage_untouched: true,
       },
@@ -417,13 +461,88 @@ export function registerInstallCommand(program: Command): void {
     });
 }
 
-async function ensureTextFile(filePath: string, content: string): Promise<boolean> {
-  if (await pathExists(filePath)) {
+async function resolveInstallManagedSpecs(
+  specs: ManagedControlSurfaceSpec[],
+): Promise<{ managedSpecs: ManagedControlSurfaceSpec[]; warnings: CommandWarning[] }> {
+  const managedSpecs: ManagedControlSurfaceSpec[] = [];
+  const warnings: CommandWarning[] = [];
+
+  for (const spec of specs) {
+    if (!isMarkdownSectionManagedSpec(spec)) {
+      managedSpecs.push(spec);
+      continue;
+    }
+
+    try {
+      const stats = await fs.lstat(spec.path);
+      if (!stats.isFile()) {
+        warnings.push({
+          code: "readme_not_regular_file",
+          message: "README.md is not a regular file, so codex-autonomy left it unmanaged.",
+        });
+        continue;
+      }
+    } catch (error) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+        managedSpecs.push(spec);
+        continue;
+      }
+      throw error;
+    }
+
+    const existing = await fs.readFile(spec.path, "utf8");
+    const classified = classifyManagedReadme(existing);
+    if (classified.ok) {
+      managedSpecs.push(spec);
+      continue;
+    }
+
+    warnings.push({
+      code: classified.reasonCode ?? "readme_unmanaged",
+      message: classified.reasonMessage ?? "README.md is outside the managed section policy and was left unmanaged.",
+    });
+  }
+
+  return { managedSpecs, warnings };
+}
+
+async function ensureTextFile(spec: ManagedControlSurfaceSpec): Promise<boolean> {
+  if (!isMarkdownSectionManagedSpec(spec)) {
+    if (await pathExists(spec.path)) {
+      return false;
+    }
+
+    await writeTextFileAtomic(spec.path, spec.content);
+    return true;
+  }
+
+  let existingContent: string | null = null;
+  try {
+    const stats = await fs.lstat(spec.path);
+    if (!stats.isFile()) {
+      throw new CliError("README.md is not a regular file and cannot be managed automatically.", CLI_EXIT_CODES.validation);
+    }
+    existingContent = await fs.readFile(spec.path, "utf8");
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const updated = upsertManagedReadmeSection(existingContent, spec.content);
+  if (!updated.ok || typeof updated.content !== "string") {
+    throw new CliError(
+      updated.reasonMessage ?? "README.md cannot be managed as a bounded codex-autonomy section.",
+      CLI_EXIT_CODES.validation,
+    );
+  }
+
+  if (existingContent !== null && updated.mode === "no_change") {
     return false;
   }
 
-  await writeTextFileAtomic(filePath, content);
-  return true;
+  await writeTextFileAtomic(spec.path, updated.content);
+  return existingContent === null;
 }
 
 async function ensureJsonFile(filePath: string, value: unknown): Promise<boolean> {
@@ -436,12 +555,16 @@ async function ensureJsonFile(filePath: string, value: unknown): Promise<boolean
 }
 
 async function inspectInstallPreflight(options: {
-  textFiles: ReadonlyArray<InstallFileEntry | [string, string]>;
+  textFiles: ReadonlyArray<ManagedControlSurfaceSpec>;
   jsonFiles: ReadonlyArray<InstallJsonEntry | [string, unknown]>;
   installMetadataPath: string;
   installMetadataExpectation: InstallMetadataDocument;
 }): Promise<InstallPreflightSummary> {
-  const textEntries = options.textFiles.map(normalizeTextEntry);
+  const textEntries = options.textFiles.map((spec) => ({
+    filePath: spec.path,
+    content: spec.content,
+    spec,
+  }));
   const jsonEntries = options.jsonFiles.map(normalizeJsonEntry);
   const managedMatchPaths = new Set<string>();
   const missingPaths = new Set<string>();
@@ -449,7 +572,11 @@ async function inspectInstallPreflight(options: {
   const foreignOccupiedPaths = new Set<string>();
 
   for (const entry of [...textEntries, ...jsonEntries]) {
-    const existingState = await inspectTargetFileState(entry.filePath, entry.content);
+    const existingState = await inspectTargetFileState(
+      entry.filePath,
+      entry.content,
+      (entry as { spec?: ManagedControlSurfaceSpec }).spec,
+    );
     if (existingState === "managed_match") {
       managedMatchPaths.add(entry.filePath);
     } else if (existingState === "missing") {
@@ -509,10 +636,24 @@ async function ensureInstallMetadataFile(
   return true;
 }
 
-function normalizeTextEntry(entry: InstallFileEntry | [string, string]): InstallFileEntry {
-  return Array.isArray(entry)
-    ? { filePath: entry[0], content: entry[1] }
-    : entry;
+async function loadRepoThreadBindingContext(paths: ReturnType<typeof resolveRepoPaths>) {
+  if (!(await pathExists(paths.stateFile))) {
+    return inspectThreadBindingContext(null);
+  }
+
+  try {
+    const state = await loadJsonFile<unknown>(paths.stateFile);
+    if (state && typeof state === "object" && !Array.isArray(state)) {
+      const reportThreadId = typeof (state as Record<string, unknown>).report_thread_id === "string"
+        ? (state as Record<string, string>).report_thread_id
+        : null;
+      return inspectThreadBindingContext(reportThreadId);
+    }
+  } catch {
+    // Fall through to the default thread-context view when the state file is unreadable.
+  }
+
+  return inspectThreadBindingContext(null);
 }
 
 function normalizeJsonEntry(entry: InstallJsonEntry | [string, unknown]): InstallFileEntry {
@@ -532,6 +673,7 @@ function normalizeJsonEntry(entry: InstallJsonEntry | [string, unknown]): Instal
 async function inspectTargetFileState(
   filePath: string,
   desiredContent: string,
+  spec?: ManagedControlSurfaceSpec,
 ): Promise<"managed_match" | "missing" | "managed_diverged" | "foreign_occupied"> {
   try {
     const stats = await fs.lstat(filePath);
@@ -546,6 +688,14 @@ async function inspectTargetFileState(
   }
 
   const existing = await fs.readFile(filePath, "utf8");
+  if (spec && isMarkdownSectionManagedSpec(spec)) {
+    const updated = upsertManagedReadmeSection(existing, desiredContent);
+    if (!updated.ok) {
+      return "managed_diverged";
+    }
+    return updated.mode === "no_change" ? "managed_match" : "managed_diverged";
+  }
+
   return existing === desiredContent ? "managed_match" : "managed_diverged";
 }
 
@@ -642,17 +792,26 @@ function matchesManagedInstallMetadata(
         && entry.template_id === expected.template_id
         && entry.installed_hash === expected.installed_hash
         && entry.last_reconciled_product_version === expected.last_reconciled_product_version
-        && entry.management_class === expected.management_class;
+        && entry.management_class === expected.management_class
+        && (entry.baseline_origin ?? "template") === (expected.baseline_origin ?? "template")
+        && (entry.content_mode ?? "full_file") === (expected.content_mode ?? "full_file")
+        && (entry.section_start_marker ?? null) === (expected.section_start_marker ?? null)
+        && (entry.section_end_marker ?? null) === (expected.section_end_marker ?? null);
     });
 }
 
 function createInstallMetadataExpectation(sourceRepo: string, managedFiles: ManagedControlSurfaceSpec[]): InstallMetadataDocument {
+  const managedPaths = Array.from(new Set([
+    "autonomy/install.json",
+    ...managedFiles.map((spec) => spec.relative_path),
+  ])).sort();
+
   return {
     version: 1,
     product_version: PRODUCT_VERSION,
     installed_at: "1970-01-01T00:00:00.000Z",
     source_repo: sourceRepo,
-    managed_paths: getManagedControlSurfaceRelativePaths(),
+    managed_paths: managedPaths,
     managed_files: buildManagedInstallFileRecords(managedFiles),
   };
 }
@@ -665,6 +824,16 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "agents_markdown",
       kind: "text",
       content: `${getAgentsMarkdown()}\n`,
+    },
+    {
+      path: paths.readmeFile,
+      relative_path: "README.md",
+      template_id: "readme_markdown_section",
+      kind: "text",
+      content: getReadmeManagedSectionMarkdown(),
+      content_mode: "markdown_section",
+      section_start_marker: MANAGED_README_SECTION_START,
+      section_end_marker: MANAGED_README_SECTION_END,
     },
     {
       path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md"),
@@ -888,9 +1057,13 @@ function buildManagedInstallFileRecords(specs: ManagedControlSurfaceSpec[]): Man
   return specs.map((spec) => ({
     path: spec.relative_path,
     template_id: spec.template_id,
-    installed_hash: hashContent(spec.content),
+    installed_hash: getManagedSpecHash(spec, spec.content),
     last_reconciled_product_version: PRODUCT_VERSION,
     management_class: spec.management_class,
+    baseline_origin: "template",
+    content_mode: spec.content_mode,
+    section_start_marker: spec.section_start_marker,
+    section_end_marker: spec.section_end_marker,
   }));
 }
 
@@ -901,6 +1074,10 @@ function normalizeManagedInstallFileRecord(value: ManagedInstallFileRecord): Man
     installed_hash: value.installed_hash,
     last_reconciled_product_version: value.last_reconciled_product_version,
     management_class: value.management_class ?? getManagedFileClass(value.path),
+    baseline_origin: value.baseline_origin === "repo_specific" ? "repo_specific" : "template",
+    content_mode: value.content_mode === "markdown_section" ? "markdown_section" : "full_file",
+    section_start_marker: typeof value.section_start_marker === "string" ? value.section_start_marker : undefined,
+    section_end_marker: typeof value.section_end_marker === "string" ? value.section_end_marker : undefined,
   };
 }
 
@@ -918,6 +1095,18 @@ function isManagedInstallFileRecord(value: unknown): value is ManagedInstallFile
     && record.installed_hash.trim().length > 0
     && typeof record.last_reconciled_product_version === "string"
     && record.last_reconciled_product_version.trim().length > 0;
+}
+
+function isMarkdownSectionManagedSpec(spec: ManagedControlSurfaceSpec): boolean {
+  return spec.kind === "text" && spec.content_mode === "markdown_section";
+}
+
+function getManagedSpecHash(spec: ManagedControlSurfaceSpec, content: string): string {
+  if (!isMarkdownSectionManagedSpec(spec)) {
+    return hashContent(content);
+  }
+
+  return hashContent(content.replace(/\r\n/g, "\n").trimEnd());
 }
 
 function hashContent(content: string): string {
@@ -1681,21 +1870,26 @@ function buildInstallMessage(
   automationReady: boolean,
   createdCount: number,
   preflight: InstallPreflightSummary,
+  threadBindingContext: ReturnType<typeof inspectThreadBindingContext>,
+  operatorGuidance: ReturnType<typeof getOperatorThreadGuidance>,
 ): string {
   const base = createdCount > 0 ? `Installed codex-autonomy into ${repoRoot}.` : `codex-autonomy was already present in ${repoRoot}.`;
   const preflightNote = preflight.managed_diverged_paths.length > 0
     ? ` Preflight kept existing managed file(s) untouched: ${preflight.managed_diverged_paths.join(", ")}.`
     : "";
+  const operatorNote = threadBindingContext.bindingHint
+    ? ` ${threadBindingContext.bindingHint}${operatorGuidance.nextOperatorCommand ? ` Next operator command: ${operatorGuidance.nextOperatorCommand}.` : ""}`
+    : "";
 
   if (!isGitRepo) {
-    return `${base}${preflightNote} Warning: target is not a Git repository, so install stayed in detect-only mode.`;
+    return `${base}${preflightNote} Warning: target is not a Git repository, so install stayed in detect-only mode.${operatorNote}`;
   }
 
   if (!automationReady) {
-    return `${base}${preflightNote} Warning: install completed in detect-only mode. Existing managed files were left untouched. Use codex-autonomy upgrade-managed for a guided reconcile plan.`;
+    return `${base}${preflightNote} Warning: install completed in detect-only mode. Existing managed files were left untouched. Use codex-autonomy upgrade-managed for a guided reconcile plan.${operatorNote}`;
   }
 
-  return `${base}${preflightNote} Environment prerequisites are ready. Existing managed files were left untouched. Use codex-autonomy upgrade-managed for a guided reconcile plan.`;
+  return `${base}${preflightNote} Environment prerequisites are ready. Existing managed files were left untouched. Use codex-autonomy upgrade-managed for a guided reconcile plan.${operatorNote}`;
 }
 
 function buildNextAutomationSuggestions(isGitRepo: boolean): Array<{ name: string; purpose: string }> {

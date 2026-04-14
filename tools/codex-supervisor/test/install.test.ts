@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runInstallCommand } from "../src/commands/install.js";
 import { getLegacyReviewScriptTemplates } from "../src/scaffold/templates.js";
@@ -12,7 +12,12 @@ import { getLegacyReviewScriptTemplates } from "../src/scaffold/templates.js";
 const tempRoots: string[] = [];
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
+beforeEach(() => {
+  delete process.env.CODEX_THREAD_ID;
+});
+
 afterEach(async () => {
+  delete process.env.CODEX_THREAD_ID;
   while (tempRoots.length > 0) {
     const target = tempRoots.pop();
     if (target) {
@@ -68,6 +73,9 @@ describe("install scaffold", () => {
     expect(result.summary.preflight.managed_diverged_paths).toContain(join(workspace, "AGENTS.md"));
     expect(result.summary.preflight.foreign_occupied_paths).toHaveLength(0);
     expect(result.summary.private_automation_storage_untouched).toBe(true);
+    expect(result.summary.thread_binding_state).toBe("unbound_current_unavailable");
+    expect(result.summary.next_operator_action).toBe("bind_explicit_thread");
+    expect(result.summary.next_operator_command).toBe("codex-autonomy bind-thread --report-thread-id <id>");
     expect(result.summary.next_automations.map((item) => item.name)).toContain("planner-cruise");
     expect(result.summary.next_automations.map((item) => item.name)).toContain("worker-cruise");
     expect(result.summary.next_automations.map((item) => item.name)).toContain("reviewer-cruise");
@@ -78,6 +86,9 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, ".codex", "environments", "environment.toml"), "utf8")).toContain(
       'name = "review"',
     );
+    expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain(
+      'approval_policy = "never"',
+    );
     expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("Review checks passed.");
     expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("review.local.ps1");
     expect(await readFile(join(workspace, "scripts", "verify.ps1"), "utf8")).toContain("Install verify passed.");
@@ -87,8 +98,32 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-report", "SKILL.md"), "utf8")).toContain(
       "heartbeat summary",
     );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-report", "SKILL.md"), "utf8")).toContain(
+      "codex-autonomy status",
+    );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-report", "SKILL.md"), "utf8")).toContain(
+      "thread_binding_state",
+    );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-report", "SKILL.md"), "utf8")).toContain(
+      "git_runtime_probe_deferred",
+    );
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
       "wake-up interval",
+    );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
+      "ready_for_automation=false",
+    );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
+      "git status --short",
+    );
+    expect(await readFile(join(workspace, "README.md"), "utf8")).toContain(
+      "codex-autonomy bind-thread",
+    );
+    expect(await readFile(join(workspace, "README.md"), "utf8")).toContain(
+      "<!-- codex-autonomy:managed:start -->",
+    );
+    expect(await readFile(join(workspace, "README.md"), "utf8")).toContain(
+      "report_thread_id",
     );
     expect(await readFile(join(workspace, "autonomy", "goal.md"), "utf8")).toContain("No active goal.");
     expect(await readFile(join(workspace, "autonomy", "journal.md"), "utf8")).toContain("Append one entry per run");
@@ -112,6 +147,104 @@ describe("install scaffold", () => {
     expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('service_tier = "fast"');
     expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('model_reasoning_effort = "xhigh"');
     expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('model = "gpt-5.4"');
+  });
+
+  it("appends a managed README section without replacing existing repo content", async () => {
+    const workspace = await makeTempGitRepo();
+    const existingReadme = [
+      "# Target Repo",
+      "",
+      "This is repo-specific documentation.",
+      "",
+      "## Existing Notes",
+      "",
+      "- keep me",
+      "",
+    ].join("\n");
+    await writeFile(join(workspace, "README.md"), existingReadme, "utf8");
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    const readme = await readFile(join(workspace, "README.md"), "utf8");
+    expect(readme).toContain("# Target Repo");
+    expect(readme).toContain("This is repo-specific documentation.");
+    expect(readme).toContain("<!-- codex-autonomy:managed:start -->");
+    expect(readme).toContain("<!-- codex-autonomy:managed:end -->");
+    expect(readme).toContain("codex-autonomy install --target <repo>");
+    expect(readme).toContain("relay completion event");
+
+    const installMetadata = JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8")) as {
+      managed_paths: string[];
+      managed_files: Array<{
+        path: string;
+        template_id: string;
+        content_mode?: string;
+        section_start_marker?: string;
+        section_end_marker?: string;
+      }>;
+    };
+    const readmeRecord = installMetadata.managed_files.find((item) => item.path === "README.md");
+    expect(readmeRecord?.template_id).toBe("readme_markdown_section");
+    expect(readmeRecord?.content_mode).toBe("markdown_section");
+    expect(readmeRecord?.section_start_marker).toBe("<!-- codex-autonomy:managed:start -->");
+    expect(readmeRecord?.section_end_marker).toBe("<!-- codex-autonomy:managed:end -->");
+    expect(installMetadata.managed_paths).toContain("README.md");
+  });
+
+  it("leaves oversized README files unmanaged and reports an advisory warning", async () => {
+    const workspace = await makeTempGitRepo();
+    const oversizedReadme = `# Large README\n\n${"x".repeat(25 * 1024)}`;
+    await writeFile(join(workspace, "README.md"), oversizedReadme, "utf8");
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "readme_too_large" }),
+      ]),
+    );
+    expect(await readFile(join(workspace, "README.md"), "utf8")).toBe(oversizedReadme);
+
+    const installMetadata = JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8")) as {
+      managed_paths: string[];
+      managed_files: Array<{ path: string }>;
+    };
+    expect(installMetadata.managed_paths).not.toContain("README.md");
+    expect(installMetadata.managed_files.find((item) => item.path === "README.md")).toBeUndefined();
+  });
+
+  it("surfaces bind-current-thread guidance when install runs inside a Codex thread", async () => {
+    const workspace = await makeTempGitRepo();
+    process.env.CODEX_THREAD_ID = "thread-install-123";
+
+    const result = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.summary.current_thread_id).toBe("thread-install-123");
+    expect(result.summary.thread_binding_state).toBe("unbound_current_available");
+    expect(result.summary.next_operator_action).toBe("bind_current_thread");
+    expect(result.summary.next_operator_command).toBe("codex-autonomy bind-thread");
+    expect(result.message).toContain("Next operator command: codex-autonomy bind-thread.");
   });
 
   it("marks a non-Git target as not ready while still installing the scaffold in detect-only mode", async () => {

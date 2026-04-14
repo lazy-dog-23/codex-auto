@@ -30,6 +30,7 @@ vi.mock("../src/infra/lock.js", () => ({
 vi.mock("../src/infra/process.js", () => ({
   discoverPowerShellExecutable: discoverPowerShellExecutableMock,
   detectCodexProcess: detectCodexProcessMock,
+  isChildProcessSpawnBlocked: (error?: string) => typeof error === "string" && /\b(?:EPERM|EACCES)\b/i.test(error),
   commandSucceeded: (result: { exitCode: number | null; error?: string | undefined }) =>
     result.exitCode === 0 && !result.error,
   runProcess: runProcessMock,
@@ -204,6 +205,139 @@ describe("status runtime gates", () => {
 
     expect(summary.ready_for_automation).toBe(false);
     expect(summary.warnings?.some((warning) => warning.code === "unexpected_background_branch")).toBe(true);
+  });
+
+  it("keeps automation ready when runtime shell probes are deferred inside a thread environment", async () => {
+    detectGitRepositoryMock.mockResolvedValue({
+      path: "C:/repo",
+      gitDir: "C:/repo/.git/worktrees/codex-background",
+      commonGitDir: "C:/repo/.git",
+      head: "abc123",
+      dirty: false,
+      statusLines: [],
+      probeMode: "filesystem",
+    });
+    getBackgroundWorktreePathMock.mockReturnValue("C:\\repo.__codex_bg");
+    getWorktreeSummaryMock.mockResolvedValue({
+      path: "C:\\repo.__codex_bg",
+      repoRoot: "C:/repo",
+      commonGitDir: "C:/repo/.git",
+      branch: "codex/background",
+      head: "abc123",
+      dirty: false,
+      statusLines: [],
+      probeMode: "filesystem",
+    });
+    loadTasksDocumentMock.mockResolvedValue({
+      version: 1,
+      tasks: [
+        {
+          id: "task-ready",
+          goal_id: "goal-1",
+          title: "Ready task",
+          status: "ready",
+          priority: "P1",
+          depends_on: [],
+          acceptance: [],
+          file_hints: [],
+          retry_count: 0,
+          last_error: null,
+          updated_at: "2026-04-12T00:00:00Z",
+          commit_hash: null,
+          review_status: "not_reviewed",
+          source: "proposal",
+          source_task_id: null,
+        },
+      ],
+    });
+    loadGoalsDocumentMock.mockResolvedValue({
+      version: 1,
+      goals: [
+        {
+          id: "goal-1",
+          title: "Goal 1",
+          objective: "Ship it",
+          success_criteria: ["done"],
+          constraints: [],
+          out_of_scope: [],
+          status: "active",
+          run_mode: "sprint",
+          created_at: "2026-04-12T00:00:00Z",
+          approved_at: "2026-04-12T00:10:00Z",
+          completed_at: null,
+        },
+      ],
+    });
+    loadStateDocumentMock.mockResolvedValue({
+      version: 1,
+      current_goal_id: "goal-1",
+      current_task_id: null,
+      cycle_status: "idle",
+      run_mode: "sprint",
+      last_planner_run_at: null,
+      last_worker_run_at: null,
+      last_result: "planned",
+      consecutive_worker_failures: 0,
+      needs_human_review: false,
+      open_blocker_count: 0,
+      report_thread_id: "thread-123",
+      autonomy_branch: "codex/autonomy",
+      sprint_active: true,
+      paused: false,
+      pause_reason: null,
+    });
+    loadBlockersDocumentMock.mockResolvedValue({
+      version: 1,
+      blockers: [],
+    });
+    loadResultsDocumentMock.mockResolvedValue({
+      version: 1,
+      planner: { status: "planned", goal_id: "goal-1", task_id: null, summary: "planned", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      worker: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+    });
+    loadSettingsDocumentMock.mockResolvedValue({
+      version: 1,
+      install_source: "local_package",
+      initial_confirmation_required: true,
+      report_surface: "thread_and_inbox",
+      auto_commit: "autonomy_branch",
+      autonomy_branch: "codex/autonomy",
+      auto_continue_within_goal: true,
+      block_on_major_decision: true,
+      default_cruise_cadence: {
+        planner_hours: 6,
+        worker_hours: 2,
+        reviewer_hours: 6,
+      },
+      default_sprint_heartbeat_minutes: 15,
+    });
+    inspectCycleLockMock.mockResolvedValue({
+      exists: false,
+      stale: false,
+    });
+    discoverPowerShellExecutableMock.mockReturnValue("C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    detectCodexProcessMock.mockReturnValue({
+      running: false,
+      matches: [],
+      executable: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      probeOk: false,
+      error: "Child process execution is blocked in this environment, so Codex process detection was skipped. spawnSync pwsh EPERM",
+    });
+
+    const { runStatusCommand } = await import("../src/commands/status.js");
+    const summary = await runStatusCommand("C:/repo");
+
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.automation_state).toBe("ready");
+    expect(summary.next_automation_reason).toContain("Ready for");
+    expect(summary.warnings?.some((warning) => warning.code === "git_runtime_probe_deferred")).toBe(true);
+    expect(summary.warnings?.some((warning) => warning.code === "background_runtime_probe_deferred")).toBe(true);
+    expect(summary.warnings?.some((warning) => warning.code === "codex_process_probe_deferred")).toBe(true);
+    expect(summary.warnings?.some((warning) => warning.code === "not_a_git_repo")).toBe(false);
+    expect(summary.warnings?.some((warning) => warning.code === "codex_process_probe_failed")).toBe(false);
   });
 
   it("keeps automation ready when only managed control-surface files are dirty", async () => {
@@ -743,5 +877,39 @@ describe("status runtime gates", () => {
     expect(probe?.transient).toBe(false);
     expect(probe?.head).toBe("def456");
     expect(probe?.attempts).toBe(3);
+  });
+
+  it("falls back to filesystem Git metadata when child process execution is blocked", async () => {
+    runProcessMock.mockImplementation((command: string, args: string[], options?: { cwd?: string }) => ({
+      command,
+      args,
+      cwd: options?.cwd ?? "C:/repo",
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      error: new Error(`spawnSync ${command} EPERM`).message,
+    }));
+
+    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const workspace = await mkdtemp(join(tmpdir(), "codex-status-runtime-"));
+    const gitDir = join(workspace, ".git");
+
+    await mkdir(gitDir, { recursive: true });
+    await mkdir(join(gitDir, "refs", "heads", "codex"), { recursive: true });
+    await writeFile(join(gitDir, "HEAD"), "ref: refs/heads/codex/autonomy\n", "utf8");
+    await writeFile(join(gitDir, "refs", "heads", "codex", "autonomy"), "abc123\n", "utf8");
+
+    const { probeWorktreeState } = await import("../src/infra/worktree-state.js");
+    const probe = await probeWorktreeState(workspace, { allowFilesystemFallback: true });
+
+    expect(probe).not.toBeNull();
+    expect(probe?.probeMode).toBe("filesystem");
+    expect(probe?.repoRoot.replace(/\\/g, "/")).toBe(workspace.replace(/\\/g, "/"));
+    expect(probe?.branch).toBe("codex/autonomy");
+    expect(probe?.head).toBe("abc123");
+    expect(probe?.dirty).toBe(false);
+    expect(probe?.statusLines).toEqual([]);
   });
 });

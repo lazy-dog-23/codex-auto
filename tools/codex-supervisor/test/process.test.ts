@@ -1,14 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.fn();
+const existsSyncMock = vi.fn();
 
 vi.mock("node:child_process", () => ({
   spawnSync: spawnSyncMock,
 }));
 
+vi.mock("node:fs", () => ({
+  existsSync: existsSyncMock,
+}));
+
 describe("process helpers", () => {
   beforeEach(() => {
     spawnSyncMock.mockReset();
+    existsSyncMock.mockReset();
   });
 
   it("builds a Codex detection script with an exact process allowlist", async () => {
@@ -55,5 +61,20 @@ describe("process helpers", () => {
     expect(result.probeOk).toBe(false);
     expect(result.running).toBe(false);
     expect(result.error).toContain("EPERM");
+  });
+
+  it("falls back to a filesystem-resolved PowerShell path when direct probing is blocked", async () => {
+    spawnSyncMock.mockReturnValue({
+      status: null,
+      stdout: "",
+      stderr: "",
+      error: new Error("spawnSync pwsh EPERM"),
+    });
+    existsSyncMock.mockImplementation((targetPath: string) => targetPath === "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+
+    const { discoverPowerShellExecutable } = await import("../src/infra/process.js");
+    const result = discoverPowerShellExecutable();
+
+    expect(result).toBe("C:\\Program Files\\PowerShell\\7\\pwsh.exe");
   });
 });

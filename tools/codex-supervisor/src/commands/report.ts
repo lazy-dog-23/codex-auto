@@ -27,6 +27,7 @@ const REPORT_BLOCKING_WARNING_CODES = new Set([
   "active_cycle_lock",
   "stale_cycle_lock",
   "missing_report_thread_id",
+  "operator_thread_mismatch",
   "managed_diverged",
   "managed_metadata_incomplete",
   "upgrade_probe_failed",
@@ -50,6 +51,10 @@ export interface ReportResult {
   pause_reason: string | null;
   run_mode: string | null;
   report_thread_id: string | null;
+  current_thread_id: string | null;
+  current_thread_source: string | null;
+  thread_binding_state: string;
+  thread_binding_hint: string | null;
   blockers_open: number;
   open_blockers: BlockerRecord[];
   latest_verify_summary: string | null;
@@ -132,6 +137,9 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     commitHash: latestCommitHash,
     commitMessage: latestCommitMessage,
     reportThreadId: state.report_thread_id,
+    currentThreadId: status.current_thread_id,
+    threadBindingState: status.thread_binding_state,
+    threadBindingHint: status.thread_binding_hint,
     runMode: state.run_mode,
     goalTransition,
     lastThreadSummarySentAt,
@@ -170,6 +178,10 @@ export async function runReport(repoRoot = process.cwd()): Promise<ReportResult>
     pause_reason: state.pause_reason,
     run_mode: state.run_mode,
     report_thread_id: state.report_thread_id,
+    current_thread_id: status.current_thread_id,
+    current_thread_source: status.current_thread_source,
+    thread_binding_state: status.thread_binding_state,
+    thread_binding_hint: status.thread_binding_hint,
     blockers_open: blockersOpen,
     open_blockers: openBlockers,
     latest_verify_summary: latestVerifySummary,
@@ -230,6 +242,9 @@ function buildReportMessage(
     commitHash: string | null;
     commitMessage: string | null;
     reportThreadId: string | null;
+    currentThreadId: string | null;
+    threadBindingState: string;
+    threadBindingHint: string | null;
     runMode: string | null;
     goalTransition: string | null;
     lastThreadSummarySentAt: string | null;
@@ -269,6 +284,9 @@ function buildReportMessage(
     ? `paused=yes${options.pauseReason ? `(${options.pauseReason})` : ""}`
     : "paused=no";
   const reportThreadPart = `report_thread=${formatNullableValue(options.reportThreadId)}`;
+  const currentThreadPart = `current_thread=${formatNullableValue(options.currentThreadId)}`;
+  const threadBindingStatePart = `thread_binding_state=${formatNullableValue(options.threadBindingState)}`;
+  const threadBindingHintPart = `thread_binding_hint=${formatNullableValue(options.threadBindingHint)}`;
   const runModePart = `run_mode=${formatNullableValue(options.runMode)}`;
   const transitionPart = options.goalTransition ? `goal_transition=${options.goalTransition}` : "goal_transition=none";
   const summaryKindPart = `summary_kind=${formatNullableValue(options.latestSummaryKind)}`;
@@ -304,6 +322,9 @@ function buildReportMessage(
     blockersPart,
     pausePart,
     reportThreadPart,
+    currentThreadPart,
+    threadBindingStatePart,
+    threadBindingHintPart,
     runModePart,
     transitionPart,
     summaryKindPart,

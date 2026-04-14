@@ -54,6 +54,7 @@ export interface GitRepositoryInfo {
   head: string | null;
   dirty: boolean;
   statusLines: string[];
+  probeMode?: 'git' | 'filesystem';
   stable?: boolean;
   transient?: boolean;
   reason?: string;
@@ -71,6 +72,7 @@ export interface WorktreeSummary {
   head: string | null;
   dirty: boolean;
   statusLines: string[];
+  probeMode?: 'git' | 'filesystem';
   stable?: boolean;
   transient?: boolean;
   reason?: string;

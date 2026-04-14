@@ -7,24 +7,26 @@
 ## 快速开始
 
 1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。
-2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀，同时在当前机器的 `CODEX_HOME/skills/personal` 下安装全局 `codex-autonomy-router` skill。
+2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀，同时在当前机器的 `CODEX_HOME/skills/personal` 下同步分发全局 `codex-autonomy-router` 和 `codex-relay-manual-audit` skills。
 3. 在目标仓库优先使用 `codex-autonomy ...`。例如：`codex-autonomy install --target <repoB>`。
 4. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。
 5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
 6. 在目标仓库运行 `codex-autonomy doctor` 查看环境与控制面健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree` 创建专用 background worktree。
-7. 初次本地闭环推荐先显式绑定线程，再走目标流：`codex-autonomy bind-thread --report-thread-id <thread-id>` -> `codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。仓库第一次绑定原线程时，`--report-thread-id` 不能省略。
+7. 初次本地闭环优先在当前 Codex 线程里直接运行 `codex-autonomy bind-thread`，它会在当前环境暴露 `CODEX_THREAD_ID` 时自动把当前线程绑定为 `report_thread_id`；如果当前环境拿不到线程身份，再回退到 `codex-autonomy bind-thread --report-thread-id <thread-id>`。绑定完成后再走目标流：`codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。
 
 ## 日常命令
 
 - 标准路径：`codex-autonomy <command>`。
 - 可先用 `codex-autonomy --version` 确认当前机器级 CLI 版本；全局 router skill 也会把它作为“是否需要先刷新本机产品版本”的判断信号之一。
-- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“把 auto 装进当前项目”“目标是……”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本，再继续路由到 intake / status / report / review / merge 流。
+- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
+- relay completion event 现在带固定 envelope：`[Codex Relay Callback]`、`Event-Type: codex.relay.dispatch.completed.v1`，以及 `BEGIN_CODEX_RELAY_CALLBACK_JSON` / `END_CODEX_RELAY_CALLBACK_JSON` 之间的机读 JSON。router / operator 要把它当成状态回传，而不是新的 goal intake。
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
 - `codex-autonomy rebaseline-managed --target <repo>`：把 advisory managed drift 重新登记为当前仓库的 repo-specific 基线，不改文件内容，只更新 `autonomy/install.json` 元数据。
-- `codex-autonomy bind-thread --report-thread-id <threadId>`：把目标仓库的原线程绑定为唯一汇报线程。
+- 目标仓 `README.md` 现在只按 section 托管：只更新 `<!-- codex-autonomy:managed:start -->` 到 `<!-- codex-autonomy:managed:end -->` 之间的内容；默认要求整文件 `<= 24 KiB`、托管 section `<= 8 KiB`。README 超限、含 NUL、marker 损坏或不是常规文本文件时，只给 advisory warning，不自动覆盖，也不会被 `rebaseline-managed` 当成新基线。
+- `codex-autonomy bind-thread [--report-thread-id <threadId>]`：优先把当前 Codex 线程绑定为唯一汇报线程；如果当前环境没有公开当前线程身份，再显式提供 `--report-thread-id`。
 - `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`：构建并安装 `codex-autonomy` 到全局 npm 前缀。
-- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-router-skill.ps1`：只同步/刷新这台机器上的全局 `codex-autonomy-router` skill，不重装 CLI。
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-router-skill.ps1`：只同步/刷新这台机器上的全局 `codex-autonomy-router` 和 `codex-relay-manual-audit` skills，不重装 CLI。
 - `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。
 - `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
@@ -34,7 +36,7 @@
 - `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
-- `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；主仓库或 background worktree dirty 时会拒绝继续。
+- `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
 - `codex-autonomy emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner 五类 prompt 与建议 cadence。
 - `codex-autonomy pause` / `resume`：暂停或恢复自治循环。
 - `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。
@@ -50,7 +52,7 @@
 - `AGENTS.md`：硬规则与运行约定。
 - `.agents/skills/$autonomy-plan`、`$autonomy-work`、`$autonomy-intake`、`$autonomy-review`、`$autonomy-report`、`$autonomy-sprint`：repo skills。
 - `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。
-- `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
+- `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `approval_policy = "never"`、`sandbox_mode = "workspace-write"`、`model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
 - `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
 - `autonomy/verification.json`：goal 级 closeout gate；体检、安全、健壮性类 goal 只有在 required verification axis 清零后才能真正完成。
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
@@ -122,6 +124,13 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 5. 已安装就先尝试对齐到当前本地产品版本
 6. 最后把你的自然语言请求路由到 intake / proposal / status / report / review / merge
 
+补充约束：
+
+- `汇报当前情况` 优先以 `codex-autonomy status` 为准，不把先前 `doctor` 的观察混成当前阻塞原因。
+- `确认提案` 必须走 `codex-autonomy approve-proposal --goal-id <goalId>`，不能只口头确认。
+- `用冲刺模式推进这个目标` 和 `继续当前目标` 在 sprint 目标上必须收口到 repo-local `$autonomy-sprint` 的单轮闭环，而不是直接跳过控制面去改业务代码。
+- `用巡航模式推进这个目标` 先切到 `cruise`，再按当前 ready 状态给出下一步；不要把 cruise 偷偷改成自由发挥式 sprint。
+
 这意味着：
 
 - 新项目第一次接入，不需要你先手工判断“装没装”
@@ -130,6 +139,35 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 
 ## Review 扩展点
 
+## Relay 手动审计
+
+`codex-autonomy` 在 relay 联调里保持“手动操作台”定位，不额外引入 repo 内 relay CLI 或自治控制面 schema。推荐做法是：
+
+1. 在源线程使用 `threadRelay` MCP 工具操作目标项目线程
+2. 优先用全局 `codex-relay-manual-audit` skill 跑固定场景矩阵
+3. 先判定问题属于 `codex-thread-relay-mcp` 还是 `codex-autonomy`
+4. 修复后先跑最小复现，再回到完整矩阵复测
+
+固定场景矩阵至少包括：
+
+- trusted project 枚举
+- 创建空线程
+- brand-new remembered thread 首次 `relay_send_wait`
+- `relay_dispatch` 按 `threadId`、精确 `threadName`、唯一 `query` 复用
+- `relay_dispatch_async` create-and-send / 复用已有线程
+- `relay_dispatch_status` 查询完成态与 `callbackStatus`
+- `relay_dispatch_deliver` 重试 `pending` / `failed` callback
+- `relay_dispatch_recover` 恢复可安全续等的 target turn，并补送 `pending` / `failed` callback
+- 无效 `threadId`
+- 模糊 `query`
+- busy target
+- timeout
+- reply missing
+- app-server unavailable
+- same-project nested callback 自动投递、`callback_pending` 与手动 deliver
+- worker 中断、stale queued/running dispatch、recoverable timed-out turn 的恢复
+- relay completion callback event 必须被 router 当成状态/汇报事件，而不是新的 goal intake
+
 - 默认 `scripts/review.ps1` 会先跑 `scripts/smoke.ps1`，再检查 `autonomy/state.json`、`goals.json`、`tasks.json`、`results.json`、`settings.json` 的基础一致性。
 - 如果仓库需要更贴近业务效果的检查，可以在目标仓库额外放一个 `scripts/review.local.ps1`；基础 review 会自动调用它。
 - `scripts/review.local.ps1` 适合放页面冒烟、接口探测、样例数据回归、关键输出校验这类项目特定逻辑。
@@ -137,6 +175,8 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 ## 结果语义
 
 - `status` 和 `report` 会优先展示“当前 goal 的最近 planner/worker/review/commit 结果”，不再把历史 goal 的执行结果混进当前 goal 摘要。
+- `status` 现在还会显式给出 `current_thread_id`、`thread_binding_state` 和 `thread_binding_hint`，用来区分“repo 运行时已就绪”和“当前线程是不是已绑定的 operator thread”。
+- `install`、`upgrade-managed`、`rebaseline-managed` 的结果现在也会给出 `current_thread_id`、`thread_binding_state`、`next_operator_action`、`next_operator_command`，用来说明当前线程接下来应该绑定、继续还是显式 rebind。
 - 如果当前 goal 还没有自己的执行结果，但最近一次 worker/review/commit 属于别的 goal，输出里会明确给出 `results_scope_note`。
 - 当仓库还没有任何已记录运行时，`summary_kind` 会显示为 `none`，`summary_reason` 会明确说明 `No recorded autonomy run yet.`，不再伪装成成功。
 - `goal_transition` 只认 `autonomy/results.json` 里显式记录的 transition 元数据，不再靠历史 completed goals 反推。
@@ -179,7 +219,7 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 ## 运行边界
 
 - 产品源码仓库和活跃目标仓库是两件事。这个仓库维护产品源码，安装后才把控制面落到目标仓库。
-- `install` 的 `automation_ready` 只表示环境前置条件基本齐全；目标仓库仍然需要 `report_thread_id` 和可推进 goal/task，`status` 才会变成 `ready_for_automation=true`。
+- `install` 的 `automation_ready` 只表示环境前置条件基本齐全；目标仓库仍然需要 `report_thread_id` 和可推进 goal/task，`status` 才会变成 `ready_for_automation=true`。如果当前线程身份可用但还没绑定，优先在该线程里运行 `codex-autonomy bind-thread`；如果当前线程身份不可用，则显式提供 `--report-thread-id`。
 - `status` 现在会额外给出 `automation_state`。常见值包括：
   - `ready`：有可推进项，且运行时检查通过
   - `idle_completed`：已批准工作已经完成，当前只是空闲，不是异常

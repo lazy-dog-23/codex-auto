@@ -103,6 +103,14 @@ export const AUTOMATION_STATES = [
   "idle_no_work",
 ] as const;
 
+export const THREAD_BINDING_STATES = [
+  "bound_to_current",
+  "bound_to_other",
+  "bound_without_current_thread",
+  "unbound_current_available",
+  "unbound_current_unavailable",
+] as const;
+
 export const MANAGED_FILE_CLASSES = [
   "static_template",
   "repo_customized",
@@ -131,6 +139,7 @@ export type SummaryKind = (typeof SUMMARY_KINDS)[number];
 export type AutoContinueState = (typeof AUTO_CONTINUE_STATES)[number];
 export type AutomationState = (typeof AUTOMATION_STATES)[number];
 export type ManagedFileClass = (typeof MANAGED_FILE_CLASSES)[number];
+export type ThreadBindingState = (typeof THREAD_BINDING_STATES)[number];
 
 export interface GoalTransitionSnapshot {
   from_goal_id: string;
@@ -322,10 +331,15 @@ export interface ManagedInstallFile {
   installed_hash: string;
   last_reconciled_product_version: string;
   management_class: ManagedFileClass;
+  baseline_origin?: "template" | "repo_specific";
+  content_mode?: "full_file" | "markdown_section";
+  section_start_marker?: string;
+  section_end_marker?: string;
 }
 
 export interface RepoPaths {
   repoRoot: string;
+  readmeFile: string;
   autonomyDir: string;
   schemaDir: string;
   locksDir: string;
@@ -397,6 +411,10 @@ export interface StatusSummary extends CommandResult {
   latest_commit_hash?: string | null;
   latest_commit_message?: string | null;
   report_thread_id: string | null;
+  current_thread_id: string | null;
+  current_thread_source: string | null;
+  thread_binding_state: ThreadBindingState;
+  thread_binding_hint: string | null;
   autonomy_branch: string | null;
   sprint_active: boolean;
   last_thread_summary_sent_at: string | null;

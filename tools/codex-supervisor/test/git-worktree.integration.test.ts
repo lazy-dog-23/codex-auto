@@ -333,6 +333,54 @@ describe("git/worktree integration", () => {
     await expect(readFile(join(firstPrepare.backgroundPath, "autonomy", "journal.md"), "utf8")).rejects.toThrow();
   });
 
+  it("realigns a stale dirty background worktree that only contains allowlisted changes and then resyncs repo drift", async () => {
+    const workspace = await makeTempWorkspace();
+    const gitHome = join(workspace, ".git-home");
+    const gitConfigGlobal = join(gitHome, "gitconfig");
+    await mkdir(gitHome, { recursive: true });
+    await writeFile(gitConfigGlobal, "", "utf8");
+    process.env.HOME = gitHome;
+    process.env.USERPROFILE = gitHome;
+    process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+    runGit(workspace, ["init"]);
+    runGit(workspace, ["config", "user.name", "Codex Test"]);
+    runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+
+    const bootstrap = await runBootstrapCommand(workspace);
+    expect(bootstrap.ok).toBe(true);
+
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+
+    const firstPrepare = await runPrepareWorktree({ workspaceRoot: workspace });
+    expect(firstPrepare.ok).toBe(true);
+    if (!firstPrepare.backgroundPath) {
+      throw new Error("Expected a background worktree path.");
+    }
+
+    await appendFile(join(workspace, "README.md"), "\n<!-- advance repo head -->\n", "utf8");
+    runGit(workspace, ["add", "-A"]);
+    runGit(workspace, ["commit", "-m", "advance main repo head"]);
+    const secondHead = runGit(workspace, ["rev-parse", "HEAD"]);
+
+    await appendFile(join(firstPrepare.backgroundPath, "autonomy", "journal.md"), "\n<!-- stale background marker -->\n", "utf8");
+    await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- current repo marker -->\n", "utf8");
+
+    const secondPrepare = await runPrepareWorktree({ workspaceRoot: workspace });
+    expect(secondPrepare.ok).toBe(true);
+    expect(secondPrepare.action).toBe("aligned");
+    expect(secondPrepare.head).toBe(secondHead);
+    expect(secondPrepare.message).toContain("synchronized");
+
+    const backgroundHead = runGit(firstPrepare.backgroundPath, ["rev-parse", "HEAD"]);
+    expect(backgroundHead).toBe(secondHead);
+
+    const backgroundJournal = await readFile(join(firstPrepare.backgroundPath, "autonomy", "journal.md"), "utf8");
+    expect(backgroundJournal).toContain("current repo marker");
+    expect(backgroundJournal).not.toContain("stale background marker");
+  });
+
   it("rejects redirected background worktree paths", async () => {
     const workspace = await makeTempWorkspace();
     const gitHome = join(workspace, ".git-home");

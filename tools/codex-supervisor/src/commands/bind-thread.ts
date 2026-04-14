@@ -6,6 +6,7 @@ import { appendJournalEntry } from "../infra/journal.js";
 import { detectGitRepository } from "../infra/git.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
+import { resolveReportThreadBinding } from "../shared/thread-context.js";
 import { loadStateDocument, writeStateDocument } from "./control-plane.js";
 
 interface BindThreadOptions {
@@ -17,11 +18,6 @@ export async function runBindThreadCommand(
   options: BindThreadOptions = {},
   repoRoot = process.cwd(),
 ): Promise<CommandResult> {
-  const reportThreadId = options.reportThreadId?.trim();
-  if (!reportThreadId) {
-    throw new CliError("bind-thread requires --report-thread-id.", CLI_EXIT_CODES.usage);
-  }
-
   const gitRepo = await detectGitRepository(options.workspaceRoot?.trim() || repoRoot);
   const controlRoot = gitRepo?.path ?? repoRoot;
   const paths = resolveRepoPaths(controlRoot);
@@ -30,6 +26,17 @@ export async function runBindThreadCommand(
   try {
     const now = new Date().toISOString();
     const state = await loadStateDocument(paths);
+    const resolvedBinding = resolveReportThreadBinding({
+      explicitReportThreadId: options.reportThreadId,
+      existingReportThreadId: null,
+    });
+    const reportThreadId = resolvedBinding.reportThreadId;
+    if (!reportThreadId) {
+      throw new CliError(
+        "Current thread identity is unavailable in this environment. Run codex-autonomy bind-thread --report-thread-id <id>.",
+        CLI_EXIT_CODES.usage,
+      );
+    }
     const previousThreadId = state.report_thread_id?.trim() || null;
     const updatedState = {
       ...state,
@@ -63,9 +70,9 @@ export async function runBindThreadCommand(
 export function registerBindThreadCommand(program: Command): void {
   program
     .command("bind-thread")
-    .requiredOption("--report-thread-id <id>", "Report thread id to bind")
+    .option("--report-thread-id <id>", "Report thread id to bind")
     .option("--workspace-root <path>", "Workspace root to inspect")
-    .description("Bind the originating thread id directly in the repo control plane")
+    .description("Bind the originating thread id directly in the repo control plane; defaults to the current thread when available")
     .action(async (options: BindThreadOptions) => {
       const result = await runBindThreadCommand(options);
       console.log(JSON.stringify(result, null, 2));

@@ -35,10 +35,10 @@ Write-Host "Installing codex-autonomy into global prefix: $globalPrefix"
 Invoke-Npm -Arguments @('install', '-g', '--force', '--prefix', $globalPrefix, $packageRoot)
 
 if (Test-Path -LiteralPath $routerSkillInstaller) {
-    Write-Host 'Installing global codex-autonomy router skill...'
+    Write-Host 'Installing global codex-autonomy skills...'
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $routerSkillInstaller
     if ($LASTEXITCODE -ne 0) {
-        throw "Router skill install failed with exit code $LASTEXITCODE."
+        throw "Global skill install failed with exit code $LASTEXITCODE."
     }
 }
 

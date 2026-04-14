@@ -55,6 +55,22 @@ export const installSchema = {
             type: "string",
             enum: ["static_template", "repo_customized", "runtime_state"],
           },
+          baseline_origin: {
+            type: "string",
+            enum: ["template", "repo_specific"],
+          },
+          content_mode: {
+            type: "string",
+            enum: ["full_file", "markdown_section"],
+          },
+          section_start_marker: {
+            type: "string",
+            minLength: 1,
+          },
+          section_end_marker: {
+            type: "string",
+            minLength: 1,
+          },
         },
       },
     },

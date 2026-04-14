@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type {
   AutonomyResults,
@@ -20,7 +20,12 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(testDir, "fixtures");
 const tempRoots: string[] = [];
 
+beforeEach(() => {
+  delete process.env.CODEX_THREAD_ID;
+});
+
 afterEach(async () => {
+  delete process.env.CODEX_THREAD_ID;
   while (tempRoots.length > 0) {
     const target = tempRoots.pop();
     if (target) {
@@ -352,7 +357,10 @@ describe("status command", () => {
 
     expect(summary.ready_for_automation).toBe(false);
     expect(summary.next_automation_ready).toBe(false);
-    expect(summary.next_automation_reason).toBe("Bind report_thread_id from the originating thread before automation can run.");
+    expect(summary.thread_binding_state).toBe("unbound_current_unavailable");
+    expect(summary.next_automation_reason).toBe(
+      "Current thread identity is unavailable in this environment. Run codex-autonomy bind-thread --report-thread-id <id> before automation can run.",
+    );
   });
 
   it("marks completed goal queues as idle_completed instead of generic blocked", () => {

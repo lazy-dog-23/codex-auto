@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type {
   AutonomyResults,
@@ -20,7 +20,12 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(testDir, "fixtures");
 const tempRoots: string[] = [];
 
+beforeEach(() => {
+  delete process.env.CODEX_THREAD_ID;
+});
+
 afterEach(async () => {
+  delete process.env.CODEX_THREAD_ID;
   while (tempRoots.length > 0) {
     const target = tempRoots.pop();
     if (target) {
@@ -345,7 +350,7 @@ describe("report command", () => {
 
     expect(report.healthy_runtime).toBe(false);
     expect(report.runtime_warnings.some((warning) => warning.code === "missing_report_thread_id")).toBe(true);
-    expect(report.runtime_reason).toContain("report_thread_id");
+    expect(report.runtime_reason).toContain("Current thread identity is unavailable");
   });
 
   it("does not reuse previous-goal execution summaries for the current goal", async () => {

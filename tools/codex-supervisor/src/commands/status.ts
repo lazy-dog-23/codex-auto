@@ -21,9 +21,10 @@ import { isGoalCompletionBlockedByVerification, summarizeVerification } from "..
 import { detectGlobalCliInstall } from "../infra/cli-install.js";
 import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
 import { inspectCycleLock } from "../infra/lock.js";
-import { discoverPowerShellExecutable, detectCodexProcess } from "../infra/process.js";
+import { discoverPowerShellExecutable, detectCodexProcess, isChildProcessSpawnBlocked } from "../infra/process.js";
 import { isAutonomyRuntimeAllowlistedPath, resolveRepoPaths } from "../shared/paths.js";
 import { createDefaultAutonomySettings } from "../shared/policy.js";
+import { inspectThreadBindingContext } from "../shared/thread-context.js";
 import { inspectManagedUpgradeState } from "./upgrade-managed.js";
 import {
   loadBlockersDocument,
@@ -141,6 +142,9 @@ function buildMessage(summary: StatusSummary): string {
     `last_result=${summary.last_result}`,
     `commit=${formatNullableText(summary.latest_commit_hash)}`,
     `report_thread=${formatNullableText(summary.report_thread_id)}`,
+    `current_thread=${formatNullableText(summary.current_thread_id)}`,
+    `thread_binding_state=${summary.thread_binding_state}`,
+    `thread_binding_hint=${formatNullableText(summary.thread_binding_hint)}`,
     `autonomy_branch=${formatNullableText(summary.autonomy_branch)}`,
     `summary_kind=${formatNullableText(summary.latest_summary_kind)}`,
     `summary_reason=${formatNullableText(summary.latest_summary_reason)}`,
@@ -176,6 +180,7 @@ function buildLocalAutomationReason(options: {
   verificationPending: number;
   completionBlockedByVerification: boolean;
   hasReportThread: boolean;
+  currentThreadId: string | null;
   goalPointerMismatch: boolean;
   multipleActiveGoals: boolean;
   paused: boolean;
@@ -189,7 +194,11 @@ function buildLocalAutomationReason(options: {
   }
 
   if (!options.hasReportThread && (options.actionableTasks || options.pendingPlanningWork)) {
-    return "Bind report_thread_id from the originating thread before automation can run.";
+    if (options.currentThreadId) {
+      return `Current thread identity is available as ${options.currentThreadId}, but report_thread_id is not bound yet. Run codex-autonomy bind-thread from this operator thread before automation can run.`;
+    }
+
+    return "Current thread identity is unavailable in this environment. Run codex-autonomy bind-thread --report-thread-id <id> before automation can run.";
   }
 
   if (options.multipleActiveGoals) {
@@ -290,6 +299,10 @@ const NON_BLOCKING_RUNTIME_WARNING_CODES = new Set([
   "background_dirty_allowlisted",
   "managed_advisory_drift",
   "ready_for_followup_autocontinue",
+  "git_runtime_probe_deferred",
+  "background_runtime_probe_deferred",
+  "codex_process_probe_deferred",
+  "operator_thread_mismatch",
 ]);
 
 function pushUniqueWarning(
@@ -496,6 +509,7 @@ export function buildStatusSummary(
   options: {
     upgradeState?: string | null;
     cliInstallState?: string | null;
+    threadBindingContext?: ReturnType<typeof inspectThreadBindingContext>;
   } = {},
 ): StatusSummary {
   const openBlockerCount = countOpenBlockers(blockersDoc.blockers);
@@ -507,6 +521,7 @@ export function buildStatusSummary(
   const actionableTasks = hasActionableTasks(tasksDoc.tasks, resolvedCurrentGoalId);
   const pendingPlanningWork = hasPlanningWork(goalsDoc.goals);
   const hasReportThread = Boolean(state.report_thread_id?.trim());
+  const threadBindingContext = options.threadBindingContext ?? inspectThreadBindingContext(state.report_thread_id, {});
   const readyForAutomation =
     activeGoalCount <= 1 &&
     goalPointerMismatch === false &&
@@ -577,6 +592,7 @@ export function buildStatusSummary(
     verificationPending: verificationSummary.pending,
     completionBlockedByVerification,
     hasReportThread,
+    currentThreadId: threadBindingContext.currentThreadId,
     goalPointerMismatch,
     multipleActiveGoals: activeGoalCount > 1,
     paused: state.paused,
@@ -631,6 +647,10 @@ export function buildStatusSummary(
     latest_commit_hash: scopedResults.commitHash,
     latest_commit_message: scopedResults.commitMessage,
     report_thread_id: state.report_thread_id,
+    current_thread_id: threadBindingContext.currentThreadId,
+    current_thread_source: threadBindingContext.currentThreadSource,
+    thread_binding_state: threadBindingContext.bindingState,
+    thread_binding_hint: threadBindingContext.bindingHint,
     autonomy_branch: state.autonomy_branch,
     sprint_active: state.sprint_active,
     last_thread_summary_sent_at: summarySnapshot.lastThreadSummarySentAt,
@@ -673,7 +693,7 @@ export function buildStatusSummary(
 }
 
 export async function runStatusCommand(repoRoot = process.cwd()): Promise<StatusSummary> {
-  const gitRepo = await detectGitRepository(repoRoot);
+  const gitRepo = await detectGitRepository(repoRoot, { allowFilesystemFallback: true });
   const controlRoot = gitRepo?.path ?? repoRoot;
   const paths = resolveRepoPaths(controlRoot);
   const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc, verificationDoc] = await Promise.all([
@@ -696,6 +716,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const summary = buildStatusSummary(tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc, verificationDoc, {
     upgradeState,
     cliInstallState,
+    threadBindingContext: inspectThreadBindingContext(state.report_thread_id),
   });
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
@@ -719,8 +740,13 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     readyForAutomation = false;
     warnings.push({
       code: "missing_report_thread_id",
-      message: "report_thread_id is not bound to the originating thread yet.",
+      message: summary.thread_binding_hint
+        ?? "Current thread identity is unavailable in this environment. Run codex-autonomy bind-thread --report-thread-id <id> before automation can run.",
     });
+  }
+
+  if (summary.thread_binding_state === "bound_to_other" && summary.thread_binding_hint) {
+    pushUniqueWarning(warnings, "operator_thread_mismatch", summary.thread_binding_hint);
   }
 
   if (state.cycle_status !== "idle") {
@@ -778,6 +804,14 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     readyForAutomation = false;
     pushUniqueWarning(warnings, "not_a_git_repo", "Current workspace is not a Git repository, so automation cannot run yet.");
   } else {
+    if (gitRepo.probeMode === "filesystem") {
+      pushUniqueWarning(
+        warnings,
+        "git_runtime_probe_deferred",
+        "Git runtime probes were deferred because child process execution is blocked in this environment.",
+      );
+    }
+
     const repositoryDirty = {
       dirtyPaths: gitRepo.managedDirtyPaths || gitRepo.unmanagedDirtyPaths
         ? [...(gitRepo.managedDirtyPaths ?? []), ...(gitRepo.unmanagedDirtyPaths ?? [])]
@@ -785,7 +819,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
       unmanagedDirtyPaths: gitRepo.unmanagedDirtyPaths ?? classifyDirtyPaths(gitRepo.statusLines ?? []).unmanagedDirtyPaths,
       managedOnly: gitRepo.managedControlSurfaceOnly ?? classifyDirtyPaths(gitRepo.statusLines ?? []).managedOnly,
     };
-    if (gitRepo.transient) {
+    if (gitRepo.probeMode !== "filesystem" && gitRepo.transient) {
       readyForAutomation = false;
       pushUniqueWarning(
         warnings,
@@ -793,7 +827,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
         "Repository Git state is still changing between probes; retry once the worktree stabilizes.",
       );
     }
-    if (gitRepo.dirty) {
+    if (gitRepo.probeMode !== "filesystem" && gitRepo.dirty) {
       if (repositoryDirty.managedOnly) {
         controlSurfaceDirtyScopes.push("repository");
         pushUniqueWarning(
@@ -816,7 +850,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     const backgroundPath = getBackgroundWorktreePath(gitRepo.path);
     let backgroundWorktree = null;
     try {
-      backgroundWorktree = await getWorktreeSummary(backgroundPath);
+      backgroundWorktree = await getWorktreeSummary(backgroundPath, { allowFilesystemFallback: true });
     } catch (error) {
       readyForAutomation = false;
       pushUniqueWarning(warnings, "unsafe_background_worktree_path", error instanceof Error ? error.message : String(error));
@@ -828,6 +862,14 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
         pushUniqueWarning(warnings, "missing_background_worktree", `Background worktree is missing at ${backgroundPath}.`);
       }
     } else {
+      if (backgroundWorktree.probeMode === "filesystem") {
+        pushUniqueWarning(
+          warnings,
+          "background_runtime_probe_deferred",
+          `Background worktree runtime probes were deferred at ${backgroundPath} because child process execution is blocked in this environment.`,
+        );
+      }
+
       const backgroundDirty = {
         dirtyPaths: backgroundWorktree.managedDirtyPaths || backgroundWorktree.unmanagedDirtyPaths
           ? [...(backgroundWorktree.managedDirtyPaths ?? []), ...(backgroundWorktree.unmanagedDirtyPaths ?? [])]
@@ -835,7 +877,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
         unmanagedDirtyPaths: backgroundWorktree.unmanagedDirtyPaths ?? classifyDirtyPaths(backgroundWorktree.statusLines ?? []).unmanagedDirtyPaths,
         managedOnly: backgroundWorktree.managedControlSurfaceOnly ?? classifyDirtyPaths(backgroundWorktree.statusLines ?? []).managedOnly,
       };
-      if (backgroundWorktree.transient) {
+      if (backgroundWorktree.probeMode !== "filesystem" && backgroundWorktree.transient) {
         readyForAutomation = false;
         pushUniqueWarning(
           warnings,
@@ -843,7 +885,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
           `Background worktree at ${backgroundPath} is still changing between probes; retry once it stabilizes.`,
         );
       }
-      if (backgroundWorktree.dirty) {
+      if (backgroundWorktree.probeMode !== "filesystem" && backgroundWorktree.dirty) {
         if (backgroundDirty.managedOnly) {
           controlSurfaceDirtyScopes.push("background worktree");
           pushUniqueWarning(
@@ -913,8 +955,16 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const powershell = discoverPowerShellExecutable();
   const codexProcess = detectCodexProcess(powershell ?? undefined);
   if (!codexProcess.probeOk) {
-    readyForAutomation = false;
-    pushUniqueWarning(warnings, "codex_process_probe_failed", codexProcess.error ?? "Codex process probe failed.");
+    if (isChildProcessSpawnBlocked(codexProcess.error)) {
+      pushUniqueWarning(
+        warnings,
+        "codex_process_probe_deferred",
+        codexProcess.error ?? "Codex process detection was deferred because child process execution is blocked in this environment.",
+      );
+    } else {
+      readyForAutomation = false;
+      pushUniqueWarning(warnings, "codex_process_probe_failed", codexProcess.error ?? "Codex process probe failed.");
+    }
   } else if (!codexProcess.running) {
     readyForAutomation = false;
     pushUniqueWarning(warnings, "codex_not_running", "Codex process was not detected.");

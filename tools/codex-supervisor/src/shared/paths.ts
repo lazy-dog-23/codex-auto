@@ -5,6 +5,7 @@ import { DEFAULT_BACKGROUND_BRANCH } from "../contracts/autonomy.js";
 
 const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   "AGENTS.md",
+  "README.md",
   ".agents/skills/$autonomy-plan/SKILL.md",
   ".agents/skills/$autonomy-work/SKILL.md",
   ".agents/skills/$autonomy-intake/SKILL.md",
@@ -39,7 +40,7 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
 ] as const;
 
 const AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS = [
-  ...MANAGED_CONTROL_SURFACE_RELATIVE_PATHS,
+  ...MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.filter((relativePath) => relativePath !== "README.md"),
   "AGENTS.override.md",
   "TEAM_GUIDE.md",
 ] as const;
@@ -93,6 +94,7 @@ export function resolveRepoPaths(repoRoot = process.cwd()): RepoPaths {
 
   return {
     repoRoot: resolvedRoot,
+    readmeFile: path.join(resolvedRoot, "README.md"),
     autonomyDir,
     schemaDir: path.join(autonomyDir, "schema"),
     locksDir: path.join(autonomyDir, "locks"),

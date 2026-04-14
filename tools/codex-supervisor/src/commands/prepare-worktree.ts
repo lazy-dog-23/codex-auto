@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import { Command } from "commander";
 
-import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, ensureGitSafeDirectory, getBackgroundWorktreePath, getRepositoryHead, getWorktreeSummary, prepareBackgroundWorktree } from "../infra/git.js";
+import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, discardManagedRuntimeChanges, ensureGitSafeDirectory, getBackgroundWorktreePath, getRepositoryHead, getWorktreeSummary, prepareBackgroundWorktree } from "../infra/git.js";
 import { listDirectoryEntries, pathExists } from "../infra/json.js";
 import { commandSucceeded, runProcess } from "../infra/process.js";
 import { probeWorktreeState } from "../infra/worktree-state.js";
@@ -305,19 +305,25 @@ async function createOrAlignBackgroundWorktree(
     }
 
     if (backgroundSummary.branch !== branch || backgroundSummary.head !== repoHead) {
-      return {
-        ok: false,
-        branch,
-        message: `Background worktree at ${backgroundPath} has allowlisted changes but is not aligned to ${branch}@${repoHead}. Refusing to realign a dirty worktree.`,
-      };
+      try {
+        await discardManagedRuntimeChanges(backgroundPath, backgroundState?.managedDirtyPaths ?? backgroundSummary.managedDirtyPaths ?? []);
+      } catch (error) {
+        return {
+          ok: false,
+          branch,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
     }
 
-    return {
-      ok: true,
-      action: "validated",
-      branch: backgroundSummary.branch ?? branch,
-      message: `Background worktree at ${backgroundPath} already contains allowlisted autonomy runtime changes.`,
-    };
+    if (backgroundSummary.branch === branch && backgroundSummary.head === repoHead) {
+      return {
+        ok: true,
+        action: "validated",
+        branch: backgroundSummary.branch ?? branch,
+        message: `Background worktree at ${backgroundPath} already contains allowlisted autonomy runtime changes.`,
+      };
+    }
   }
 
   if (backgroundSummary.branch !== branch || backgroundSummary.head !== repoHead) {

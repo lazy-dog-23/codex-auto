@@ -52,6 +52,8 @@ export function buildPlannerAutomationPrompt(): string {
     "- Write `autonomy/*.json` with atomic temp-file then rename semantics.",
     "- Update only autonomy state files and `autonomy/journal.md`.",
     "- Append exactly one journal entry for the run; do not rewrite older entries.",
+    "- Approval prompts may be disabled; never rely on a later approval gate to stop unsafe work.",
+    "- Never run destructive or high-impact operations such as force push, history rewrite, bulk delete, deploy, credential changes, or writes outside the target repo.",
     "- Never commit, push, or deploy.",
     "- If the background worktree is dirty or the run must pause for human review, stop immediately.",
   ]);
@@ -81,6 +83,8 @@ export function buildWorkerAutomationPrompt(): string {
     "- Write `autonomy/*.json` with atomic temp-file then rename semantics.",
     "- Update only the task state, blockers, state summary, results summary, and `autonomy/journal.md`.",
     "- Append exactly one journal entry for the run; do not rewrite older entries.",
+    "- Approval prompts may be disabled; treat destructive or high-impact operations as forbidden unless the approved goal explicitly requires them and the control surface recorded that decision.",
+    "- Never delete or overwrite user files outside the exact task scope, and never write outside the target repo root.",
     "- Never push or deploy; never commit anywhere except `codex/autonomy` after verify and review pass.",
   ]);
 }
@@ -106,6 +110,7 @@ export function buildReviewerAutomationPrompt(): string {
     "- Write `autonomy/*.json` with atomic temp-file then rename semantics.",
     "- Update only the review status, blockers, results summary, and `autonomy/journal.md`.",
     "- Append exactly one journal entry for the run; do not rewrite older entries.",
+    "- Approval prompts may be disabled; if a follow-up would require destructive or high-impact operations, convert it into a blocker instead of continuing.",
     "- Never commit, push, or deploy.",
   ]);
 }
@@ -137,6 +142,7 @@ export function buildReporterAutomationPrompt(): string {
     "- Send successful runs only as heartbeat summaries, not as immediate per-run spam.",
     "- Do not flood the thread with routine success updates when a heartbeat summary will cover them.",
     "- Keep detailed command traces, diffs, and run records in Inbox.",
+    "- If approval prompts are disabled, explicitly call out any blocked destructive or high-impact step instead of implying it will be approved later.",
     "- Do not change business code.",
     "- Do not commit, push, or deploy.",
   ]);
@@ -168,6 +174,8 @@ export function buildSprintAutomationPrompt(): string {
     "- Write `autonomy/*.json` with atomic temp-file then rename semantics.",
     "- Update only autonomy state files, results summary, and `autonomy/journal.md`.",
     "- Append exactly one journal entry for the run; do not rewrite older entries.",
+    "- Approval prompts may be disabled; never use that as a reason to perform destructive or high-impact operations automatically.",
+    "- Never run force push, history rewrite, bulk delete, deploy, credential changes, or writes outside the target repo; surface them as blockers instead.",
     "- Never push or deploy; allow commits only through the worker rule on `codex/autonomy` after verify and review pass.",
   ]);
 }

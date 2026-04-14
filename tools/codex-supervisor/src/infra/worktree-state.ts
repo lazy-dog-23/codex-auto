@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { commandSucceeded, runProcess } from "./process.js";
@@ -20,6 +21,7 @@ export interface WorktreeStateProbe extends WorktreeStatusSnapshot {
   commonGitDir: string;
   branch: string | null;
   head: string | null;
+  probeMode: "git" | "filesystem";
   stable: boolean;
   transient: boolean;
   reason?: "transient_git_state";
@@ -29,6 +31,7 @@ export interface WorktreeStateProbe extends WorktreeStatusSnapshot {
 export interface WorktreeStateProbeOptions {
   maxAttempts?: number;
   debounceMs?: number;
+  allowFilesystemFallback?: boolean;
 }
 
 interface WorktreeProbeSnapshot extends WorktreeStatusSnapshot {
@@ -104,30 +107,35 @@ export async function probeWorktreeState(
   options: WorktreeStateProbeOptions = {},
 ): Promise<WorktreeStateProbe | null> {
   const repoRoot = await readRepositoryRoot(worktreePath);
-  if (!repoRoot) {
+  if (repoRoot) {
+    const snapshot = await readStableWorktreeSnapshot(repoRoot, options);
+
+    return {
+      path: resolve(worktreePath),
+      repoRoot,
+      gitDir: snapshot.snapshot.gitDir,
+      commonGitDir: snapshot.snapshot.commonGitDir,
+      branch: snapshot.snapshot.branch,
+      head: snapshot.snapshot.head,
+      probeMode: "git",
+      dirty: snapshot.snapshot.dirty,
+      statusLines: snapshot.snapshot.statusLines,
+      normalizedStatusLines: snapshot.snapshot.normalizedStatusLines,
+      managedDirtyPaths: snapshot.snapshot.managedDirtyPaths,
+      unmanagedDirtyPaths: snapshot.snapshot.unmanagedDirtyPaths,
+      managedControlSurfaceOnly: snapshot.snapshot.managedControlSurfaceOnly,
+      stable: snapshot.stable,
+      transient: snapshot.transient,
+      reason: snapshot.reason,
+      attempts: snapshot.attempts,
+    };
+  }
+
+  if (!options.allowFilesystemFallback) {
     return null;
   }
 
-  const snapshot = await readStableWorktreeSnapshot(repoRoot, options);
-
-  return {
-    path: resolve(worktreePath),
-    repoRoot,
-    gitDir: snapshot.snapshot.gitDir,
-    commonGitDir: snapshot.snapshot.commonGitDir,
-    branch: snapshot.snapshot.branch,
-    head: snapshot.snapshot.head,
-    dirty: snapshot.snapshot.dirty,
-    statusLines: snapshot.snapshot.statusLines,
-    normalizedStatusLines: snapshot.snapshot.normalizedStatusLines,
-    managedDirtyPaths: snapshot.snapshot.managedDirtyPaths,
-    unmanagedDirtyPaths: snapshot.snapshot.unmanagedDirtyPaths,
-    managedControlSurfaceOnly: snapshot.snapshot.managedControlSurfaceOnly,
-    stable: snapshot.stable,
-    transient: snapshot.transient,
-    reason: snapshot.reason,
-    attempts: snapshot.attempts,
-  };
+  return readFilesystemWorktreeState(worktreePath);
 }
 
 async function readRepositoryRoot(worktreePath: string): Promise<string | null> {
@@ -138,6 +146,34 @@ async function readRepositoryRoot(worktreePath: string): Promise<string | null> 
 
   const root = result.stdout.trim();
   return root.length > 0 ? root : null;
+}
+
+async function readFilesystemWorktreeState(worktreePath: string): Promise<WorktreeStateProbe | null> {
+  const gitMarkers = await findGitMarkers(worktreePath);
+  if (!gitMarkers) {
+    return null;
+  }
+
+  const headState = await readHeadState(gitMarkers.gitDir, gitMarkers.commonGitDir);
+
+  return {
+    path: resolve(worktreePath),
+    repoRoot: gitMarkers.repoRoot,
+    gitDir: gitMarkers.gitDir,
+    commonGitDir: gitMarkers.commonGitDir,
+    branch: headState.branch,
+    head: headState.head,
+    probeMode: "filesystem",
+    dirty: false,
+    statusLines: [],
+    normalizedStatusLines: [],
+    managedDirtyPaths: [],
+    unmanagedDirtyPaths: [],
+    managedControlSurfaceOnly: false,
+    stable: false,
+    transient: false,
+    attempts: 0,
+  };
 }
 
 function readRepositoryMetadata(repoRoot: string): {
@@ -246,4 +282,126 @@ function arrayEquals(left: readonly string[], right: readonly string[]): boolean
   }
 
   return true;
+}
+
+async function findGitMarkers(startPath: string): Promise<{
+  repoRoot: string;
+  gitDir: string;
+  commonGitDir: string;
+} | null> {
+  let currentPath = resolve(startPath);
+  const currentStat = await tryStat(currentPath);
+  if (currentStat?.isFile()) {
+    currentPath = dirname(currentPath);
+  }
+
+  while (true) {
+    const gitMarkerPath = join(currentPath, ".git");
+    const gitMarkerStat = await tryStat(gitMarkerPath);
+
+    if (gitMarkerStat?.isDirectory()) {
+      const gitDir = gitMarkerPath;
+      return {
+        repoRoot: currentPath,
+        gitDir,
+        commonGitDir: await resolveCommonGitDir(gitDir),
+      };
+    }
+
+    if (gitMarkerStat?.isFile()) {
+      const gitDir = await resolveGitDirFromFile(gitMarkerPath, currentPath);
+      if (gitDir) {
+        return {
+          repoRoot: currentPath,
+          gitDir,
+          commonGitDir: await resolveCommonGitDir(gitDir),
+        };
+      }
+    }
+
+    const parentPath = dirname(currentPath);
+    if (parentPath === currentPath) {
+      return null;
+    }
+
+    currentPath = parentPath;
+  }
+}
+
+async function resolveGitDirFromFile(gitFilePath: string, repoRoot: string): Promise<string | null> {
+  try {
+    const contents = (await readFile(gitFilePath, "utf8")).trim();
+    const prefix = "gitdir:";
+    if (!contents.toLowerCase().startsWith(prefix)) {
+      return null;
+    }
+
+    const gitDir = contents.slice(prefix.length).trim();
+    if (!gitDir) {
+      return null;
+    }
+
+    return resolve(repoRoot, gitDir);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCommonGitDir(gitDir: string): Promise<string> {
+  const commondirPath = join(gitDir, "commondir");
+  try {
+    const commondir = (await readFile(commondirPath, "utf8")).trim();
+    if (!commondir) {
+      return gitDir;
+    }
+
+    return resolve(gitDir, commondir);
+  } catch {
+    return gitDir;
+  }
+}
+
+async function readHeadState(gitDir: string, commonGitDir: string): Promise<{
+  branch: string | null;
+  head: string | null;
+}> {
+  const headFilePath = join(gitDir, "HEAD");
+  try {
+    const headContents = (await readFile(headFilePath, "utf8")).trim();
+    if (!headContents) {
+      return { branch: null, head: null };
+    }
+
+    if (headContents.startsWith("ref:")) {
+      const ref = headContents.slice("ref:".length).trim();
+      const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
+      try {
+        const refContents = (await readFile(join(commonGitDir, ...ref.split("/")), "utf8")).trim();
+        return {
+          branch,
+          head: refContents.length > 0 ? refContents : null,
+        };
+      } catch {
+        return { branch, head: null };
+      }
+    }
+
+    return {
+      branch: null,
+      head: headContents,
+    };
+  } catch {
+    return {
+      branch: null,
+      head: null,
+    };
+  }
+}
+
+async function tryStat(targetPath: string) {
+  try {
+    return await stat(targetPath);
+  } catch {
+    return null;
+  }
 }

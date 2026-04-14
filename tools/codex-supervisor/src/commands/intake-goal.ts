@@ -6,6 +6,7 @@ import { appendJournalEntry } from "../infra/journal.js";
 import { detectGitRepository } from "../infra/git.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
+import { resolveReportThreadBinding } from "../shared/thread-context.js";
 import {
   createGoalRecord,
   loadGoalsDocument,
@@ -47,12 +48,24 @@ export async function runIntakeGoal(options: IntakeGoalOptions, repoRoot = proce
     const now = new Date().toISOString();
     const goalsDoc = await loadGoalsDocument(paths);
     const state = await loadStateDocument(paths);
-    const reportThreadId = options.reportThreadId?.trim() || state.report_thread_id;
+    const resolvedBinding = resolveReportThreadBinding({
+      explicitReportThreadId: options.reportThreadId,
+      existingReportThreadId: state.report_thread_id,
+    });
+    const reportThreadId = resolvedBinding.reportThreadId;
 
     if (!reportThreadId) {
       throw new CliError(
-        "intake-goal requires --report-thread-id when the repo has not bound an originating thread yet.",
+        "Current thread identity is unavailable in this environment. Run codex-autonomy bind-thread --report-thread-id <id> before intake-goal.",
         CLI_EXIT_CODES.usage,
+      );
+    }
+
+    if (!options.reportThreadId?.trim() && resolvedBinding.threadContext.bindingState === "bound_to_other") {
+      throw new CliError(
+        resolvedBinding.threadContext.bindingHint
+        ?? "Current thread does not match the bound report_thread_id. Continue from the bound thread or rebind explicitly.",
+        CLI_EXIT_CODES.blocked,
       );
     }
 

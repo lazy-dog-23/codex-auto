@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runBootstrapCommand } from "../src/commands/bootstrap.js";
 import { runDoctor } from "../src/commands/doctor.js";
@@ -26,7 +26,12 @@ import type { BlockersDocument, TasksDocument } from "../src/contracts/autonomy.
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const tempRoots: string[] = [];
 
+beforeEach(() => {
+  delete process.env.CODEX_THREAD_ID;
+});
+
 afterEach(async () => {
+  delete process.env.CODEX_THREAD_ID;
   while (tempRoots.length > 0) {
     const target = tempRoots.pop();
     if (target) {
@@ -299,9 +304,30 @@ describe("command integration contracts", () => {
     expect(stateDoc.report_thread_id).toBe("thread-123");
   });
 
-  it("requires report_thread_id when intake-goal binds the first originating thread", async () => {
+  it("auto-binds the current thread when intake-goal runs inside a Codex thread", async () => {
     const workspace = await makeTempWorkspace();
     await runBootstrapCommand(workspace);
+    process.env.CODEX_THREAD_ID = "thread-auto-123";
+
+    const result = await runIntakeGoal(
+      {
+        title: "Upgrade autonomy",
+        objective: "Ship the v2 autonomy control plane",
+        successCriteria: ["goal exists"],
+        runMode: "sprint",
+      },
+      workspace,
+    );
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+
+    expect(result.ok).toBe(true);
+    expect(stateDoc.report_thread_id).toBe("thread-auto-123");
+  });
+
+  it("requires explicit report_thread_id when intake-goal cannot resolve the current thread", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    delete process.env.CODEX_THREAD_ID;
 
     await expect(runIntakeGoal(
       {
@@ -311,7 +337,20 @@ describe("command integration contracts", () => {
         runMode: "sprint",
       },
       workspace,
-    )).rejects.toThrow(/report-thread-id/i);
+    )).rejects.toThrow(/Current thread identity is unavailable/i);
+  });
+
+  it("bind-thread auto-resolves the current thread id when available", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    process.env.CODEX_THREAD_ID = "thread-auto-bind";
+
+    const result = await runBindThreadCommand({}, workspace);
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8")) as Record<string, unknown>;
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain("thread-auto-bind");
+    expect(stateDoc.report_thread_id).toBe("thread-auto-bind");
   });
 
   it("bind-thread updates report_thread_id independently of intake-goal", async () => {
@@ -332,6 +371,23 @@ describe("command integration contracts", () => {
     expect(stateDoc.report_thread_id).toBe("thread-456");
     expect(journalText).toContain("bind-thread");
     expect(journalText).toContain("thread-456");
+  });
+
+  it("blocks intake-goal when the current thread differs from the bound report thread", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await runBindThreadCommand({ reportThreadId: "thread-bound" }, workspace);
+    process.env.CODEX_THREAD_ID = "thread-other";
+
+    await expect(runIntakeGoal(
+      {
+        title: "Mismatch goal",
+        objective: "Do not silently reuse another thread binding",
+        successCriteria: ["blocked"],
+        runMode: "sprint",
+      },
+      workspace,
+    )).rejects.toThrow(/current thread is thread-other/i);
   });
 
   it("intake-goal followed by generate-proposal creates a repo-aware fallback proposal and rejects duplicates", async () => {

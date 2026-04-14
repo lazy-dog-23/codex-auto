@@ -10,6 +10,12 @@ import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
 import { getInstallMetadataPath, getManagedFileClass, resolveRepoPaths } from "../shared/paths.js";
 import { PRODUCT_VERSION } from "../shared/product.js";
 import {
+  getOperatorThreadGuidance,
+  inspectThreadBindingContext,
+  type OperatorThreadAction,
+  type ThreadBindingState,
+} from "../shared/thread-context.js";
+import {
   getAgentsMarkdown,
   getAutonomyIntakeSkillMarkdown,
   getAutonomyPlanSkillMarkdown,
@@ -20,6 +26,7 @@ import {
   getConfigTomlTemplate,
   getEnvironmentTomlTemplate,
   getInstallVerifyScriptTemplate,
+  getReadmeManagedSectionMarkdown,
   getReviewScriptTemplate,
   getSetupWindowsScriptTemplate,
   getSmokeScriptTemplate,
@@ -44,6 +51,13 @@ import {
   tasksSchema,
   verificationSchema,
 } from "../schemas/index.js";
+import {
+  MANAGED_README_SECTION_END,
+  MANAGED_README_SECTION_START,
+  classifyManagedReadme,
+  extractManagedReadmeSection,
+  upsertManagedReadmeSection,
+} from "../shared/managed-readme.js";
 
 type UpgradeDecision = "managed_match" | "safe_replace" | "auto_merge" | "manual_conflict" | "foreign_occupied";
 
@@ -65,6 +79,9 @@ interface ManagedControlSurfaceSpec {
   management_class: "static_template" | "repo_customized" | "runtime_state";
   kind: "text" | "json";
   content: string;
+  content_mode?: "full_file" | "markdown_section";
+  section_start_marker?: string;
+  section_end_marker?: string;
 }
 
 interface ManagedInstallFileRecord {
@@ -73,6 +90,10 @@ interface ManagedInstallFileRecord {
   installed_hash: string;
   last_reconciled_product_version: string;
   management_class: "static_template" | "repo_customized" | "runtime_state";
+  baseline_origin?: "template" | "repo_specific";
+  content_mode?: "full_file" | "markdown_section";
+  section_start_marker?: string;
+  section_end_marker?: string;
 }
 
 interface InstallMetadataDocument {
@@ -112,6 +133,12 @@ interface UpgradeManagedSummary {
   advisory_drift: number;
   applied_paths: string[];
   pending_paths: string[];
+  current_thread_id: string | null;
+  current_thread_source: string | null;
+  thread_binding_state: ThreadBindingState;
+  thread_binding_hint: string | null;
+  next_operator_action: OperatorThreadAction;
+  next_operator_command: string | null;
 }
 
 interface UpgradeManagedResult {
@@ -129,6 +156,12 @@ interface RebaselineManagedSummary {
   rebaselined_paths: string[];
   skipped_paths: string[];
   blocking_paths: string[];
+  current_thread_id: string | null;
+  current_thread_source: string | null;
+  thread_binding_state: ThreadBindingState;
+  thread_binding_hint: string | null;
+  next_operator_action: OperatorThreadAction;
+  next_operator_command: string | null;
 }
 
 interface RebaselineManagedResult {
@@ -151,6 +184,7 @@ export interface ManagedUpgradeStateSummary {
 export async function inspectManagedUpgradeState(targetPath: string): Promise<ManagedUpgradeStateSummary> {
   const repoRoot = path.resolve(targetPath);
   const installMetadataPath = getInstallMetadataPath(repoRoot);
+  const paths = resolveRepoPaths(repoRoot);
 
   if (!(await pathExists(installMetadataPath))) {
     return {
@@ -180,7 +214,10 @@ export async function inspectManagedUpgradeState(targetPath: string): Promise<Ma
   }
 
   const plan = await buildManagedUpgradePlan(buildManagedControlSurfaceSpecs(resolveRepoPaths(repoRoot)), metadata.document);
-  const summary = summarizeManagedUpgradePlan(repoRoot, installMetadataPath, false, plan);
+  const summary = attachOperatorThreadGuidance(
+    summarizeManagedUpgradePlan(repoRoot, installMetadataPath, false, plan),
+    await loadRepoThreadBindingContext(paths),
+  );
   const hasBlockingDivergence = plan.some((entry) => entry.upgrade_blocking);
   const hasAdvisoryDivergence = plan.some((entry) => !entry.upgrade_blocking && entry.status !== "managed_match");
 
@@ -207,7 +244,10 @@ export async function runUpgradeManagedCommand(options: UpgradeManagedOptions = 
   const metadata = await loadManagedInstallMetadata(installMetadataPath);
   const specs = buildManagedControlSurfaceSpecs(paths);
   const plan = await buildManagedUpgradePlan(specs, metadata.document);
-  const summary = summarizeManagedUpgradePlan(targetPath, installMetadataPath, options.apply === true, plan);
+  const summary = attachOperatorThreadGuidance(
+    summarizeManagedUpgradePlan(targetPath, installMetadataPath, options.apply === true, plan),
+    await loadRepoThreadBindingContext(paths),
+  );
 
   if (!options.apply) {
     return {
@@ -257,7 +297,10 @@ export async function runRebaselineManagedCommand(
   const metadata = await loadManagedInstallMetadata(installMetadataPath);
   const specs = buildManagedControlSurfaceSpecs(paths);
   const plan = await buildManagedUpgradePlan(specs, metadata.document);
-  const summary = summarizeManagedRebaselinePlan(targetPath, installMetadataPath, plan);
+  const summary = attachOperatorThreadGuidance(
+    summarizeManagedRebaselinePlan(targetPath, installMetadataPath, plan),
+    await loadRepoThreadBindingContext(paths),
+  );
 
   if (summary.advisory_candidates === 0) {
     return {
@@ -367,6 +410,43 @@ async function loadManagedInstallMetadata(filePath: string): Promise<ManagedInst
   };
 }
 
+async function loadRepoThreadBindingContext(paths: ReturnType<typeof resolveRepoPaths>) {
+  if (!(await pathExists(paths.stateFile))) {
+    return inspectThreadBindingContext(null);
+  }
+
+  try {
+    const state = await loadJsonFile<unknown>(paths.stateFile);
+    if (state && typeof state === "object" && !Array.isArray(state)) {
+      const reportThreadId = typeof (state as Record<string, unknown>).report_thread_id === "string"
+        ? (state as Record<string, string>).report_thread_id
+        : null;
+      return inspectThreadBindingContext(reportThreadId);
+    }
+  } catch {
+    // Fall through to a default thread-context view when the state file cannot be read.
+  }
+
+  return inspectThreadBindingContext(null);
+}
+
+function attachOperatorThreadGuidance<T extends UpgradeManagedSummary | RebaselineManagedSummary>(
+  summary: T,
+  threadBindingContext: ReturnType<typeof inspectThreadBindingContext>,
+): T {
+  const operatorGuidance = getOperatorThreadGuidance(threadBindingContext);
+
+  return {
+    ...summary,
+    current_thread_id: threadBindingContext.currentThreadId,
+    current_thread_source: threadBindingContext.currentThreadSource,
+    thread_binding_state: threadBindingContext.bindingState,
+    thread_binding_hint: threadBindingContext.bindingHint,
+    next_operator_action: operatorGuidance.nextOperatorAction,
+    next_operator_command: operatorGuidance.nextOperatorCommand,
+  };
+}
+
 function normalizeInstallMetadataDocument(value: unknown): InstallMetadataDocument {
   const input = isPlainObject(value) ? value : {};
   const managedFiles = Array.isArray(input.managed_files)
@@ -399,6 +479,11 @@ async function buildManagedUpgradePlan(
   for (const spec of specs) {
     const record = recordMap.get(spec.relative_path);
     if (!record) {
+      if (isMarkdownSectionManagedSpec(spec)) {
+        plan.push(await classifyUntrackedManagedReadmeFile(spec));
+        continue;
+      }
+
       const managementClass = getManagedFileClass(spec.relative_path);
       plan.push({
         path: spec.path,
@@ -410,7 +495,7 @@ async function buildManagedUpgradePlan(
         reason: "No managed metadata record exists for this path.",
         installed_hash: null,
         current_hash: null,
-        desired_hash: hashContent(spec.content),
+        desired_hash: getManagedSpecHash(spec, spec.content),
         last_reconciled_product_version: null,
         action: "manual",
       });
@@ -431,8 +516,13 @@ async function classifyManagedFile(
   spec: ManagedControlSurfaceSpec,
   record: ManagedInstallFileRecord,
 ): Promise<ManagedUpgradePlanEntry> {
-  const desiredHash = hashContent(spec.content);
+  if (isMarkdownSectionManagedSpec(spec)) {
+    return classifyManagedReadmeFile(spec, record);
+  }
+
+  const desiredHash = getManagedSpecHash(spec, spec.content);
   const upgradeBlocking = isBlockingManagedFileClass(record.management_class);
+  const baselineOrigin = record.baseline_origin === "repo_specific" ? "repo_specific" : "template";
 
   try {
     const stats = await fs.lstat(spec.path);
@@ -477,7 +567,7 @@ async function classifyManagedFile(
   const currentHash = hashContent(currentContent);
 
   if (currentHash === record.installed_hash) {
-    if (!upgradeBlocking && record.last_reconciled_product_version === PRODUCT_VERSION) {
+    if (!upgradeBlocking && baselineOrigin === "repo_specific" && record.last_reconciled_product_version === PRODUCT_VERSION) {
       return {
         path: spec.path,
         relative_path: spec.relative_path,
@@ -494,7 +584,7 @@ async function classifyManagedFile(
       };
     }
 
-    if (contentMatchesTemplate(spec.kind, currentContent, spec.content)) {
+    if (contentMatchesTemplate(spec, currentContent)) {
       return {
         path: spec.path,
         relative_path: spec.relative_path,
@@ -531,7 +621,7 @@ async function classifyManagedFile(
     };
   }
 
-  if (contentMatchesTemplate(spec.kind, currentContent, spec.content)) {
+  if (contentMatchesTemplate(spec, currentContent)) {
     return {
       path: spec.path,
       relative_path: spec.relative_path,
@@ -590,6 +680,230 @@ async function classifyManagedFile(
   };
 }
 
+async function classifyUntrackedManagedReadmeFile(
+  spec: ManagedControlSurfaceSpec,
+): Promise<ManagedUpgradePlanEntry> {
+  const desiredHash = getManagedSpecHash(spec, spec.content);
+  const managementClass = getManagedFileClass(spec.relative_path);
+
+  try {
+    const stats = await fs.lstat(spec.path);
+    if (!stats.isFile()) {
+      return {
+        path: spec.path,
+        relative_path: spec.relative_path,
+        template_id: spec.template_id,
+        management_class: managementClass,
+        upgrade_blocking: false,
+        status: "manual_conflict",
+        reason: "README.md is not a regular file, so the managed section cannot be adopted automatically.",
+        installed_hash: null,
+        current_hash: null,
+        desired_hash: desiredHash,
+        last_reconciled_product_version: null,
+        action: "manual",
+      };
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      management_class: managementClass,
+      upgrade_blocking: false,
+      status: "safe_replace",
+      reason: "README.md is missing and the managed section can be created safely.",
+      installed_hash: null,
+      current_hash: null,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: null,
+      action: "replace",
+    };
+  }
+
+  const currentContent = await fs.readFile(spec.path, "utf8");
+  const classified = classifyManagedReadme(currentContent);
+  if (!classified.ok) {
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      management_class: managementClass,
+      upgrade_blocking: false,
+      status: "manual_conflict",
+      reason: classified.reasonMessage ?? "README.md is outside the managed section policy.",
+      installed_hash: null,
+      current_hash: null,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: null,
+      action: "manual",
+    };
+  }
+
+  const currentSection = extractManagedReadmeSection(currentContent);
+  const currentHash = currentSection === null ? hashContent(currentContent) : hashContent(currentSection);
+  if (currentSection !== null && getManagedSpecHash(spec, currentSection) === desiredHash) {
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      management_class: managementClass,
+      upgrade_blocking: false,
+      status: "managed_match",
+      reason: "README.md already contains the expected managed section.",
+      installed_hash: null,
+      current_hash: currentHash,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: null,
+      action: "skip",
+    };
+  }
+
+  return {
+    path: spec.path,
+    relative_path: spec.relative_path,
+    template_id: spec.template_id,
+    management_class: managementClass,
+    upgrade_blocking: false,
+    status: "safe_replace",
+    reason: currentSection === null
+      ? "README.md is manageable and can adopt the codex-autonomy section without replacing the whole file."
+      : "README.md has a managed section that can be refreshed safely.",
+    installed_hash: null,
+    current_hash: currentHash,
+    desired_hash: desiredHash,
+    last_reconciled_product_version: null,
+    action: "replace",
+  };
+}
+
+async function classifyManagedReadmeFile(
+  spec: ManagedControlSurfaceSpec,
+  record: ManagedInstallFileRecord,
+): Promise<ManagedUpgradePlanEntry> {
+  const desiredHash = getManagedSpecHash(spec, spec.content);
+  const baselineOrigin = record.baseline_origin === "repo_specific" ? "repo_specific" : "template";
+
+  try {
+    const stats = await fs.lstat(spec.path);
+    if (!stats.isFile()) {
+      return {
+        path: spec.path,
+        relative_path: spec.relative_path,
+        template_id: spec.template_id,
+        management_class: record.management_class,
+        upgrade_blocking: false,
+        status: "foreign_occupied",
+        reason: "README.md is occupied by a non-file entry.",
+        installed_hash: record.installed_hash,
+        current_hash: null,
+        desired_hash: desiredHash,
+        last_reconciled_product_version: record.last_reconciled_product_version,
+        action: "manual",
+      };
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      management_class: record.management_class,
+      upgrade_blocking: false,
+      status: "safe_replace",
+      reason: "README.md is missing and the managed section can be recreated safely.",
+      installed_hash: record.installed_hash,
+      current_hash: null,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: record.last_reconciled_product_version,
+      action: "replace",
+    };
+  }
+
+  const currentContent = await fs.readFile(spec.path, "utf8");
+  const classified = classifyManagedReadme(currentContent);
+  if (!classified.ok) {
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      management_class: record.management_class,
+      upgrade_blocking: false,
+      status: "manual_conflict",
+      reason: classified.reasonMessage ?? "README.md is outside the managed section policy.",
+      installed_hash: record.installed_hash,
+      current_hash: null,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: record.last_reconciled_product_version,
+      action: "manual",
+    };
+  }
+
+  const currentSection = extractManagedReadmeSection(currentContent);
+  const currentHash = currentSection === null ? hashContent(currentContent) : hashContent(currentSection);
+
+  if (currentSection !== null && getManagedSpecHash(spec, currentSection) === desiredHash) {
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      management_class: record.management_class,
+      upgrade_blocking: false,
+      status: "managed_match",
+      reason: "README.md already matches the current managed section template.",
+      installed_hash: record.installed_hash,
+      current_hash: currentHash,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: record.last_reconciled_product_version,
+      action: "skip",
+    };
+  }
+
+  if (currentHash === record.installed_hash
+    && baselineOrigin === "repo_specific"
+    && record.last_reconciled_product_version === PRODUCT_VERSION
+    && currentSection !== null) {
+    return {
+      path: spec.path,
+      relative_path: spec.relative_path,
+      template_id: spec.template_id,
+      management_class: record.management_class,
+      upgrade_blocking: false,
+      status: "managed_match",
+      reason: "README.md matches the accepted repo-specific managed section baseline.",
+      installed_hash: record.installed_hash,
+      current_hash: currentHash,
+      desired_hash: desiredHash,
+      last_reconciled_product_version: record.last_reconciled_product_version,
+      action: "skip",
+    };
+  }
+
+  return {
+    path: spec.path,
+    relative_path: spec.relative_path,
+    template_id: spec.template_id,
+    management_class: record.management_class,
+    upgrade_blocking: false,
+    status: "safe_replace",
+    reason: currentSection === null
+      ? "README.md can adopt the managed section without taking ownership of the whole file."
+      : "README.md has a manageable codex-autonomy section that can be refreshed safely.",
+    installed_hash: record.installed_hash,
+    current_hash: currentHash,
+    desired_hash: desiredHash,
+    last_reconciled_product_version: record.last_reconciled_product_version,
+    action: "replace",
+  };
+}
+
 async function applyManagedUpgradePlan(
   metadataPath: string,
   metadata: InstallMetadataDocument,
@@ -611,7 +925,28 @@ async function applyManagedUpgradePlan(
 
     await ensureParentDirectory(spec.path);
     if (entry.status === "safe_replace") {
-      await writeManagedFile(spec.path, spec.content, spec.kind);
+      if (isMarkdownSectionManagedSpec(spec)) {
+        let existingContent: string | null = null;
+        try {
+          existingContent = await fs.readFile(spec.path, "utf8");
+        } catch (error) {
+          if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+        }
+
+        const updated = upsertManagedReadmeSection(existingContent, spec.content);
+        if (!updated.ok || typeof updated.content !== "string") {
+          throw new CliError(
+            updated.reasonMessage ?? "README.md could not be updated with the managed section.",
+            CLI_EXIT_CODES.validation,
+          );
+        }
+
+        await writeTextFileAtomic(spec.path, updated.content);
+      } else {
+        await writeManagedFile(spec.path, spec.content, spec.kind);
+      }
       appliedPaths.push(entry.relative_path);
       continue;
     }
@@ -626,30 +961,30 @@ async function applyManagedUpgradePlan(
     appliedPaths.push(entry.relative_path);
   }
 
-  const refreshedRecords = await Promise.all(metadata.managed_files.map(async (record) => {
-    const spec = specMap.get(normalizeRepoRelativePath(record.path));
-    if (!spec) {
-      return record;
+  const refreshedRecordsMap = new Map(
+    metadata.managed_files.map((record) => [normalizeRepoRelativePath(record.path), normalizeManagedInstallFileRecord(record)]),
+  );
+  const pathsToRefresh = new Set([
+    ...appliedPaths,
+    ...plan.filter((entry) => entry.status === "managed_match").map((entry) => entry.relative_path),
+  ]);
+
+  for (const relativePath of pathsToRefresh) {
+    const spec = specMap.get(relativePath);
+    if (!spec || !(await pathExists(spec.path))) {
+      continue;
     }
 
-    const shouldRefresh = appliedPaths.includes(spec.relative_path)
-      || plan.some((entry) => entry.relative_path === spec.relative_path && entry.status === "managed_match");
-    if (!shouldRefresh) {
-      return record;
-    }
+    const currentContent = await fs.readFile(spec.path, "utf8");
+    refreshedRecordsMap.set(relativePath, buildManagedInstallFileRecordFromContent(spec, currentContent));
+  }
 
-    return {
-      path: spec.relative_path,
-      template_id: spec.template_id,
-      installed_hash: hashContent(await fs.readFile(spec.path, "utf8")),
-      last_reconciled_product_version: PRODUCT_VERSION,
-      management_class: spec.management_class,
-    };
-  }));
+  const refreshedRecords = [...refreshedRecordsMap.values()];
 
   await writeJsonAtomic(metadataPath, {
     ...metadata,
     product_version: PRODUCT_VERSION,
+    managed_paths: buildManagedInstallMetadataPaths(refreshedRecords),
     managed_files: refreshedRecords.sort((left, right) => left.path.localeCompare(right.path)),
   });
 
@@ -689,6 +1024,7 @@ async function rebaselineManagedMetadata(
       ...record,
       installed_hash: entry.current_hash,
       last_reconciled_product_version: PRODUCT_VERSION,
+      baseline_origin: "repo_specific" as const,
     };
   });
 
@@ -703,6 +1039,7 @@ async function rebaselineManagedMetadata(
   await writeJsonAtomic(metadataPath, {
     ...metadata,
     product_version: PRODUCT_VERSION,
+    managed_paths: buildManagedInstallMetadataPaths(refreshedRecords),
     managed_files: refreshedRecords.sort((left, right) => left.path.localeCompare(right.path)),
   });
 
@@ -720,6 +1057,16 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "agents_markdown",
       kind: "text",
       content: `${getAgentsMarkdown()}\n`,
+    },
+    {
+      path: paths.readmeFile,
+      relative_path: "README.md",
+      template_id: "readme_markdown_section",
+      kind: "text",
+      content: getReadmeManagedSectionMarkdown(),
+      content_mode: "markdown_section",
+      section_start_marker: MANAGED_README_SECTION_START,
+      section_end_marker: MANAGED_README_SECTION_END,
     },
     {
       path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-plan", "SKILL.md"),
@@ -1008,6 +1355,12 @@ function summarizeManagedUpgradePlan(
     pending_paths: plan
       .filter((entry) => entry.status === "manual_conflict" || entry.status === "foreign_occupied")
       .map((entry) => entry.relative_path),
+    current_thread_id: null,
+    current_thread_source: null,
+    thread_binding_state: "unbound_current_unavailable",
+    thread_binding_hint: null,
+    next_operator_action: "bind_explicit_thread",
+    next_operator_command: null,
   };
 }
 
@@ -1025,6 +1378,12 @@ function summarizeManagedRebaselinePlan(
     blocking_paths: plan
       .filter((entry) => entry.upgrade_blocking && entry.status !== "managed_match")
       .map((entry) => entry.relative_path),
+    current_thread_id: null,
+    current_thread_source: null,
+    thread_binding_state: "unbound_current_unavailable",
+    thread_binding_hint: null,
+    next_operator_action: "bind_explicit_thread",
+    next_operator_command: null,
   };
 }
 
@@ -1033,7 +1392,8 @@ function buildPlanMessage(summary: UpgradeManagedSummary): string {
     `Generated upgrade plan for ${summary.target_path}.`,
     `managed_match=${summary.managed_match}, safe_replace=${summary.safe_replace}, auto_merge=${summary.auto_merge}, manual_conflict=${summary.manual_conflict}, foreign_occupied=${summary.foreign_occupied}, blocking_drift=${summary.blocking_drift}, advisory_drift=${summary.advisory_drift}.`,
     summary.pending_paths.length > 0 ? `Pending manual review: ${summary.pending_paths.join(", ")}.` : "No manual review is required.",
-  ].join(" ");
+    buildOperatorThreadNote(summary),
+  ].filter(Boolean).join(" ");
 }
 
 function buildApplyMessage(summary: UpgradeManagedSummary): string {
@@ -1041,7 +1401,8 @@ function buildApplyMessage(summary: UpgradeManagedSummary): string {
     `Applied guided managed upgrade for ${summary.target_path}.`,
     `applied=${summary.applied_paths.length}, manual_conflict=${summary.manual_conflict}, foreign_occupied=${summary.foreign_occupied}.`,
     summary.pending_paths.length > 0 ? `Skipped: ${summary.pending_paths.join(", ")}.` : "All managed paths were reconciled.",
-  ].join(" ");
+    buildOperatorThreadNote(summary),
+  ].filter(Boolean).join(" ");
 }
 
 function buildRebaselineMessage(summary: RebaselineManagedSummary): string {
@@ -1056,7 +1417,23 @@ function buildRebaselineMessage(summary: RebaselineManagedSummary): string {
     parts.push(`Skipped ${summary.skipped_paths.length} path(s): ${summary.skipped_paths.join(", ")}.`);
   }
 
+  const operatorNote = buildOperatorThreadNote(summary);
+  if (operatorNote) {
+    parts.push(operatorNote);
+  }
+
   return parts.join(" ");
+}
+
+function buildOperatorThreadNote(summary: Pick<
+  UpgradeManagedSummary | RebaselineManagedSummary,
+  "thread_binding_hint" | "next_operator_command"
+>): string {
+  if (!summary.thread_binding_hint) {
+    return "";
+  }
+
+  return `${summary.thread_binding_hint}${summary.next_operator_command ? ` Next operator command: ${summary.next_operator_command}.` : ""}`;
 }
 
 function countManagedUpgradePlan(plan: ManagedUpgradePlanEntry[]): Record<UpgradeDecision, number> {
@@ -1088,16 +1465,21 @@ async function writeManagedFile(filePath: string, content: string, kind: Managed
   await writeTextFileAtomic(filePath, content);
 }
 
-function contentMatchesTemplate(kind: ManagedControlSurfaceSpec["kind"], currentContent: string, desiredContent: string): boolean {
-  if (kind === "json") {
+function contentMatchesTemplate(spec: ManagedControlSurfaceSpec, currentContent: string): boolean {
+  if (spec.kind === "json") {
     try {
-      return deepEqualJson(JSON.parse(currentContent), JSON.parse(desiredContent));
+      return deepEqualJson(JSON.parse(currentContent), JSON.parse(spec.content));
     } catch {
       return false;
     }
   }
 
-  return normalizeText(currentContent) === normalizeText(desiredContent);
+  if (isMarkdownSectionManagedSpec(spec)) {
+    const section = extractManagedReadmeSection(currentContent);
+    return section !== null && normalizeText(section) === normalizeText(spec.content);
+  }
+
+  return normalizeText(currentContent) === normalizeText(spec.content);
 }
 
 function tryMergeManagedJson(currentContent: string, desiredContent: string): { content: string } | null {
@@ -1188,6 +1570,46 @@ function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
+function isMarkdownSectionManagedSpec(spec: ManagedControlSurfaceSpec): boolean {
+  return spec.kind === "text" && spec.content_mode === "markdown_section";
+}
+
+function getManagedSpecHash(spec: ManagedControlSurfaceSpec, content: string): string {
+  if (!isMarkdownSectionManagedSpec(spec)) {
+    return hashContent(content);
+  }
+
+  return hashContent(normalizeText(content));
+}
+
+function buildManagedInstallMetadataPaths(records: ManagedInstallFileRecord[]): string[] {
+  return Array.from(new Set([
+    "autonomy/install.json",
+    ...records.map((record) => normalizeRepoRelativePath(record.path)),
+  ])).sort();
+}
+
+function buildManagedInstallFileRecordFromContent(
+  spec: ManagedControlSurfaceSpec,
+  currentContent: string,
+): ManagedInstallFileRecord {
+  const installedContent = isMarkdownSectionManagedSpec(spec)
+    ? extractManagedReadmeSection(currentContent) ?? spec.content
+    : currentContent;
+
+  return {
+    path: spec.relative_path,
+    template_id: spec.template_id,
+    installed_hash: getManagedSpecHash(spec, installedContent),
+    last_reconciled_product_version: PRODUCT_VERSION,
+    management_class: spec.management_class,
+    baseline_origin: contentMatchesTemplate(spec, currentContent) ? "template" : "repo_specific",
+    content_mode: spec.content_mode,
+    section_start_marker: spec.section_start_marker,
+    section_end_marker: spec.section_end_marker,
+  };
+}
+
 function normalizeText(value: string): string {
   return value.replace(/\r\n/g, "\n").trimEnd();
 }
@@ -1203,6 +1625,10 @@ function normalizeManagedInstallFileRecord(value: ManagedInstallFileRecord): Man
     installed_hash: value.installed_hash,
     last_reconciled_product_version: value.last_reconciled_product_version,
     management_class: value.management_class ?? getManagedFileClass(value.path),
+    baseline_origin: value.baseline_origin === "repo_specific" ? "repo_specific" : "template",
+    content_mode: value.content_mode === "markdown_section" ? "markdown_section" : "full_file",
+    section_start_marker: typeof value.section_start_marker === "string" ? value.section_start_marker : undefined,
+    section_end_marker: typeof value.section_end_marker === "string" ? value.section_end_marker : undefined,
   };
 }
 

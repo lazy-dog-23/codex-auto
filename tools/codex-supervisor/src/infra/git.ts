@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { runProcess, commandSucceeded } from './process.js';
 import { assertDirectPathBoundary, listDirectoryEntries, pathExists } from './json.js';
@@ -67,8 +68,15 @@ export function getBackgroundWorktreePath(repoRoot: string): string {
   return join(parentDir, `${repoName}.__codex_bg`);
 }
 
-export async function detectGitRepository(startPath: string): Promise<GitRepositoryInfo | null> {
-  const probe = await probeWorktreeState(startPath);
+export async function detectGitRepository(
+  startPath: string,
+  options?: {
+    allowFilesystemFallback?: boolean;
+  },
+): Promise<GitRepositoryInfo | null> {
+  const probe = await probeWorktreeState(startPath, {
+    allowFilesystemFallback: options?.allowFilesystemFallback,
+  });
   if (!probe) {
     return null;
   }
@@ -80,6 +88,7 @@ export async function detectGitRepository(startPath: string): Promise<GitReposit
     head: probe.head,
     dirty: probe.dirty,
     statusLines: probe.statusLines,
+    probeMode: probe.probeMode,
     stable: probe.stable,
     transient: probe.transient,
     reason: probe.reason,
@@ -436,9 +445,16 @@ export function ensureGitSafeDirectory(targetPath: string, cwd = process.cwd()):
   }
 }
 
-export async function getWorktreeSummary(worktreePath: string): Promise<WorktreeSummary | null> {
+export async function getWorktreeSummary(
+  worktreePath: string,
+  options?: {
+    allowFilesystemFallback?: boolean;
+  },
+): Promise<WorktreeSummary | null> {
   await assertDirectPathBoundary(worktreePath);
-  const probe = await probeWorktreeState(worktreePath);
+  const probe = await probeWorktreeState(worktreePath, {
+    allowFilesystemFallback: options?.allowFilesystemFallback,
+  });
   if (!probe) {
     return null;
   }
@@ -451,6 +467,7 @@ export async function getWorktreeSummary(worktreePath: string): Promise<Worktree
     head: probe.head,
     dirty: probe.dirty,
     statusLines: probe.statusLines,
+    probeMode: probe.probeMode,
     stable: probe.stable,
     transient: probe.transient,
     reason: probe.reason,
@@ -545,14 +562,37 @@ export async function prepareBackgroundWorktree(
     };
   }
 
-  if (backgroundSummary.dirty) {
-    throw new Error(`Background worktree at ${backgroundPath} is dirty; refusing to align it.`);
-  }
-
   if (backgroundSummary.commonGitDir !== repoCommonGitDir) {
     throw new Error(
       `Background worktree at ${backgroundPath} belongs to ${backgroundSummary.commonGitDir}, not ${repoCommonGitDir}. Refusing to reuse it.`,
     );
+  }
+
+  if (backgroundSummary.dirty) {
+    const backgroundState = await probeWorktreeState(backgroundPath);
+    if (backgroundState?.transient) {
+      throw new Error('transient_git_state: background worktree status was unstable across consecutive snapshots.');
+    }
+
+    const blockedDirtyPaths = backgroundState?.unmanagedDirtyPaths ?? [];
+    if (blockedDirtyPaths.length > 0) {
+      throw new Error(
+        `Background worktree at ${backgroundPath} is dirty outside the allowlisted autonomy runtime files: ${blockedDirtyPaths.join(', ')}.`,
+      );
+    }
+
+    if (backgroundSummary.branch !== branch || backgroundSummary.head !== repoHead) {
+      await discardManagedRuntimeChanges(backgroundPath, backgroundState?.managedDirtyPaths ?? backgroundSummary.managedDirtyPaths ?? []);
+    } else {
+      return {
+        action: 'validated',
+        repoRoot,
+        backgroundPath,
+        branch,
+        head: repoHead,
+        worktree: backgroundState ?? backgroundSummary,
+      };
+    }
   }
 
   const currentBranch = backgroundSummary.branch;
@@ -608,6 +648,58 @@ async function createBackgroundWorktree(
   if (!commandSucceeded(forceResult)) {
     throw new Error(
       `Failed to create background worktree at ${backgroundPath}: ${forceResult.stderr || forceResult.stdout || forceResult.error || 'unknown error'}`,
+    );
+  }
+}
+
+function normalizeManagedRuntimePaths(relativePaths: readonly string[]): string[] {
+  return [...new Set(
+    relativePaths
+      .map((pathValue) => normalizeGitStatusPath(pathValue))
+      .filter((pathValue) => pathValue.length > 0 && isAutonomyRuntimeAllowlistedPath(pathValue)),
+  )].sort();
+}
+
+async function listTrackedPaths(repoRoot: string, relativePaths: readonly string[]): Promise<string[]> {
+  if (relativePaths.length === 0) {
+    return [];
+  }
+
+  const result = runProcess('git', ['ls-files', '-z', '--', ...relativePaths], { cwd: repoRoot });
+  if (!commandSucceeded(result)) {
+    throw new Error(
+      `Failed to list tracked managed paths in ${repoRoot}: ${result.stderr || result.stdout || result.error || 'unknown error'}`,
+    );
+  }
+
+  return result.stdout
+    .split('\0')
+    .map((pathValue) => normalizeGitStatusPath(pathValue))
+    .filter(Boolean);
+}
+
+export async function discardManagedRuntimeChanges(worktreePath: string, relativePaths: readonly string[]): Promise<void> {
+  const managedPaths = normalizeManagedRuntimePaths(relativePaths);
+  if (managedPaths.length === 0) {
+    return;
+  }
+
+  const trackedPaths = await listTrackedPaths(worktreePath, managedPaths);
+
+  for (const relativePath of managedPaths) {
+    await rm(resolve(worktreePath, relativePath), { recursive: true, force: true });
+  }
+
+  if (trackedPaths.length === 0) {
+    return;
+  }
+
+  const restoreResult = runProcess('git', ['restore', '--source=HEAD', '--staged', '--worktree', '--', ...trackedPaths], {
+    cwd: worktreePath,
+  });
+  if (!commandSucceeded(restoreResult)) {
+    throw new Error(
+      `Failed to restore managed runtime files in ${worktreePath}: ${restoreResult.stderr || restoreResult.stdout || restoreResult.error || 'unknown error'}`,
     );
   }
 }
