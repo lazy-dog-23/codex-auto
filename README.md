@@ -15,7 +15,32 @@
 - Managed `README.md` section support for installed target repos
 - Windows-first verification and worktree preparation flows
 
-## Quick Start
+## Prerequisites
+
+- Windows
+- Node.js 22
+- npm
+- Git
+- PowerShell 7
+- A working Windows Codex App installation
+
+## Installation
+
+### Install for local development
+
+```powershell
+npm --prefix tools/codex-supervisor install
+npm --prefix tools/codex-supervisor run build
+```
+
+### Install the machine-level CLI
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1
+codex-autonomy --version
+```
+
+### Install into a target repository
 
 1. Install prerequisites: Node.js 22, npm, Git, and PowerShell 7.
 2. Run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`.
@@ -24,6 +49,18 @@
 5. Run `codex-autonomy doctor`.
 6. If the target is a Git repo, run `codex-autonomy prepare-worktree`.
 7. Bind the current operator thread with `codex-autonomy bind-thread`. If the current environment does not expose a thread identity, fall back to `codex-autonomy bind-thread --report-thread-id <thread-id>`.
+
+## Upgrade
+
+- Refresh the machine-level CLI and global skills by rerunning `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`.
+- Update an installed target repo with `codex-autonomy upgrade-managed --target <repo> [--apply]`.
+- Accept advisory target-repo drift as the new baseline with `codex-autonomy rebaseline-managed --target <repo>` when that drift is intentional.
+
+## Troubleshooting
+
+- If `codex-autonomy bind-thread` cannot resolve the current thread, use `codex-autonomy bind-thread --report-thread-id <thread-id>`.
+- If `prepare-worktree` refuses to run, confirm the target repo is a valid Git repository and the working tree is not dirty outside the managed allowlist.
+- If the target repo README exceeds the managed section limits, installation continues in advisory mode and the README is not overwritten.
 
 ## Natural-Language Entry
 

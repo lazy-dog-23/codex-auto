@@ -15,7 +15,32 @@
 - 已安装目标仓 `README.md` section 托管能力
 - Windows-first 验证与 worktree 准备流程
 
-## 快速开始
+## 前置条件
+
+- Windows
+- Node.js 22
+- npm
+- Git
+- PowerShell 7
+- 可正常运行的 Windows Codex App
+
+## 安装
+
+### 本地开发安装
+
+```powershell
+npm --prefix tools/codex-supervisor install
+npm --prefix tools/codex-supervisor run build
+```
+
+### 安装机器级 CLI
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1
+codex-autonomy --version
+```
+
+### 安装到目标仓库
 
 1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。
 2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀，同时在当前机器的 `CODEX_HOME/skills/personal` 下同步分发全局 `codex-autonomy-router` 和 `codex-relay-manual-audit` skills。
@@ -24,6 +49,18 @@
 5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
 6. 在目标仓库运行 `codex-autonomy doctor` 查看环境与控制面健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree` 创建专用 background worktree。
 7. 初次本地闭环优先在当前 Codex 线程里直接运行 `codex-autonomy bind-thread`，它会在当前环境暴露 `CODEX_THREAD_ID` 时自动把当前线程绑定为 `report_thread_id`；如果当前环境拿不到线程身份，再回退到 `codex-autonomy bind-thread --report-thread-id <thread-id>`。绑定完成后再走目标流：`codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。
+
+## 升级
+
+- 重新运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，刷新机器级 CLI 和全局 skills。
+- 对已安装目标仓执行 `codex-autonomy upgrade-managed --target <repo> [--apply]`。
+- 如果目标仓的 advisory drift 就是你想保留的新基线，执行 `codex-autonomy rebaseline-managed --target <repo>`。
+
+## 常见问题
+
+- 如果 `codex-autonomy bind-thread` 拿不到当前线程身份，就显式使用 `codex-autonomy bind-thread --report-thread-id <thread-id>`。
+- 如果 `prepare-worktree` 拒绝继续，先确认目标仓是有效 Git 仓库，并且工作树没有超出受管 allowlist 的脏改动。
+- 如果目标仓 README 超过托管 section 限制，安装会继续，但 README 只会进入 advisory 模式，不会被自动覆盖。
 
 ## 日常命令
 
