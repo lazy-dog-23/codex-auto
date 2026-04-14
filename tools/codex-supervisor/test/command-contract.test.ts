@@ -54,14 +54,14 @@ describe("command integration contracts", () => {
   it("keeps README command examples aligned with the CLI contract", async () => {
     const readme = await readFile(join(repoRoot, "README.md"), "utf8");
 
-    expect(readme).toContain("codex-autonomy install --target <repoB>");
+    expect(readme).toContain("codex-autonomy install --target <repo>");
     expect(readme).toContain("codex-autonomy bind-thread --report-thread-id <thread-id>");
     expect(readme).toContain("codex-autonomy approve-proposal --goal-id <goalId>");
     expect(readme).toContain("codex-autonomy rebaseline-managed --target <repo>");
     expect(readme).toContain("pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1");
-    expect(readme).toContain("## 开发者回退");
+    expect(readme).toContain("## Developer Fallback");
     expect(readme).toContain("node tools/codex-supervisor/dist/cli.js <command>");
-    expect(readme.split("## 开发者回退")[0]).not.toContain("node tools/codex-supervisor/dist/cli.js");
+    expect(readme.split("## Developer Fallback")[0]).not.toContain("node tools/codex-supervisor/dist/cli.js");
     expect(readme).not.toContain("codex-autonomy approve-proposal <goal-id>");
   });
 

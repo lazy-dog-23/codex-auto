@@ -1,82 +1,115 @@
 # codex-auto
 
-这是 `codex-autonomy` 的产品源码仓库，不是某个活跃自治目标仓库。这里维护的是通用控制面、模板、CLI、测试和示例约定；真正被安装和被自治推进的，是你指定的目标仓库。
+[中文说明](README.zh-CN.md)
 
-`codex-supervisor` 负责安装、体检、状态汇总、提案/任务流转、prompt 输出和必要的阻断处理，不直接碰 Codex 内部数据库、automation TOML、SQLite 或其他未公开接口。
+`codex-auto` is the product repository for `codex-autonomy`. It is not meant to be the active target repo being autonomously worked on. This repo contains the reusable control surface, CLI, templates, skills, tests, and install/upgrade logic that get applied to another repository.
 
-## 快速开始
+`codex-supervisor` manages installation, doctor checks, status and report flows, proposal and task materialization, prompt generation, and blocking behavior. It does not read or mutate private Codex databases, automation TOML, SQLite state, or other unsupported internal surfaces.
 
-1. 确认本机有 Node.js 22、npm、Git、PowerShell 7。
-2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`，把 `codex-autonomy` 构建并安装到全局 npm 前缀，同时在当前机器的 `CODEX_HOME/skills/personal` 下同步分发全局 `codex-autonomy-router` 和 `codex-relay-manual-audit` skills。
-3. 在目标仓库优先使用 `codex-autonomy ...`。例如：`codex-autonomy install --target <repoB>`。
-4. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`。
-5. 在目标仓库运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，这是 worker 的唯一正式验收门。
-6. 在目标仓库运行 `codex-autonomy doctor` 查看环境与控制面健康状况；目标仓库成为 Git 仓库后，再运行 `codex-autonomy prepare-worktree` 创建专用 background worktree。
-7. 初次本地闭环优先在当前 Codex 线程里直接运行 `codex-autonomy bind-thread`，它会在当前环境暴露 `CODEX_THREAD_ID` 时自动把当前线程绑定为 `report_thread_id`；如果当前环境拿不到线程身份，再回退到 `codex-autonomy bind-thread --report-thread-id <thread-id>`。绑定完成后再走目标流：`codex-autonomy intake-goal ...` -> `codex-autonomy generate-proposal` -> `codex-autonomy approve-proposal --goal-id <goalId>`。
+## What This Repo Provides
 
-## 日常命令
+- Repo-local autonomy control surface installation and upgrade
+- Thread-bound operator/reporting workflow
+- Goal / proposal / task state management
+- Global router skill and relay manual-audit skill distribution
+- Managed `README.md` section support for installed target repos
+- Windows-first verification and worktree preparation flows
 
-- 标准路径：`codex-autonomy <command>`。
-- 可先用 `codex-autonomy --version` 确认当前机器级 CLI 版本；全局 router skill 也会把它作为“是否需要先刷新本机产品版本”的判断信号之一。
-- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
-- relay completion event 现在带固定 envelope：`[Codex Relay Callback]`、`Event-Type: codex.relay.dispatch.completed.v1`，以及 `BEGIN_CODEX_RELAY_CALLBACK_JSON` / `END_CODEX_RELAY_CALLBACK_JSON` 之间的机读 JSON。router / operator 要把它当成状态回传，而不是新的 goal intake。
-- `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
-- `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
-- `codex-autonomy rebaseline-managed --target <repo>`：把 advisory managed drift 重新登记为当前仓库的 repo-specific 基线，不改文件内容，只更新 `autonomy/install.json` 元数据。
-- 目标仓 `README.md` 现在只按 section 托管：只更新 `<!-- codex-autonomy:managed:start -->` 到 `<!-- codex-autonomy:managed:end -->` 之间的内容；默认要求整文件 `<= 24 KiB`、托管 section `<= 8 KiB`。README 超限、含 NUL、marker 损坏或不是常规文本文件时，只给 advisory warning，不自动覆盖，也不会被 `rebaseline-managed` 当成新基线。
-- `codex-autonomy bind-thread [--report-thread-id <threadId>]`：优先把当前 Codex 线程绑定为唯一汇报线程；如果当前环境没有公开当前线程身份，再显式提供 `--report-thread-id`。
-- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`：构建并安装 `codex-autonomy` 到全局 npm 前缀。
-- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-router-skill.ps1`：只同步/刷新这台机器上的全局 `codex-autonomy-router` 和 `codex-relay-manual-audit` skills，不重装 CLI。
-- `codex-autonomy bootstrap`：补齐当前仓库缺失控制面文件；非 Git 目录允许执行，但不会进入可运行 automation 态。
-- `codex-autonomy doctor`：检查 Node、Git、PowerShell、Codex 进程、关键文件、schema、锁、worktree 健康。
-- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
-- `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。
-- `codex-autonomy approve-proposal --goal-id <goalId>`：把提案物化为任务并激活该 goal。
-- `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。
-- `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。
-- `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
-- `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
-- `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
-- `codex-autonomy emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner 五类 prompt 与建议 cadence。
-- `codex-autonomy pause` / `resume`：暂停或恢复自治循环。
-- `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。
-- `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。
+## Quick Start
 
-## 开发者回退
+1. Install prerequisites: Node.js 22, npm, Git, and PowerShell 7.
+2. Run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1`.
+3. In a target repository, install the control surface with `codex-autonomy install --target <repo>`.
+4. In that target repository, run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`.
+5. Run `codex-autonomy doctor`.
+6. If the target is a Git repo, run `codex-autonomy prepare-worktree`.
+7. Bind the current operator thread with `codex-autonomy bind-thread`. If the current environment does not expose a thread identity, fall back to `codex-autonomy bind-thread --report-thread-id <thread-id>`.
 
-- 如果还没做全局安装，或者只是在源码仓库里临时验证，可以先构建再用源码入口：`npm --prefix tools/codex-supervisor run build` 后执行 `node tools/codex-supervisor/dist/cli.js <command>`。
-- 这是回退路径，不是日常标准路径；标准安装后应优先使用 `codex-autonomy <command>`。
+## Natural-Language Entry
 
-## Repo 控制面
+After `scripts/install-global.ps1` finishes, a new Codex thread can drive installed repos through the global router skill. Common phrases include:
 
-- `AGENTS.md`：硬规则与运行约定。
-- `.agents/skills/$autonomy-plan`、`$autonomy-work`、`$autonomy-intake`、`$autonomy-review`、`$autonomy-report`、`$autonomy-sprint`：repo skills。
-- `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。
-- `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `approval_policy = "never"`、`sandbox_mode = "workspace-write"`、`model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
-- `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
-- `autonomy/verification.json`：goal 级 closeout gate；体检、安全、健壮性类 goal 只有在 required verification axis 清零后才能真正完成。
-- `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
-- `autonomy/journal.md`：每次 run 只追加一条记录。
-- `scripts/verify.ps1`：唯一验收门。
-- `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
+- `把 auto 装进当前项目`
+- `升级当前项目里的 auto`
+- `目标是……`
+- `确认提案`
+- `用冲刺模式推进这个目标`
+- `继续当前目标`
+- `汇报当前情况`
 
-## 运行模型
+When the current thread identity is available, the router auto-binds that thread on first use. If the current thread does not match the already-bound `report_thread_id`, the router blocks and requires an explicit rebind instead of silently continuing on the old binding.
 
-仓库当前支持 `goal / proposal / task` 三层数据，以及 `sprint / cruise` 两种运行模式，再配合 `review / report` 两个收口动作。
+Relay completion events are treated as status callbacks, not as new goal intake. They use the fixed envelope:
 
-- `goal`：目标本体，先进入 `awaiting_confirmation`，确认后进入 `approved` / `active`。
-- `proposal`：Planner 对当前 goal 生成的首版任务提案。
-- `task`：真正被 worker 执行的最小工作单元。
-- `cruise cadence`：稳态巡航频率，指 Planner / Worker / Reviewer 在后台按固定周期醒来检查是否有可推进项。
-- `sprint heartbeat`：冲刺 runner 的唤醒间隔，不是任务时长。它只决定多久再醒一次，不代表一轮必须跑满这么久。
-- `kickoff`：goal 刚确认或需要立即推进时的立刻启动动作。kickoff 会先跑一轮，不等下一次 cadence / heartbeat。
-- `safe follow-up`：仍然属于已批准 goal 边界内的后续优化项。它会自动并入下一轮，不需要把线程当成审批门。
+- `[Codex Relay Callback]`
+- `Event-Type: codex.relay.dispatch.completed.v1`
+- `BEGIN_CODEX_RELAY_CALLBACK_JSON`
+- `END_CODEX_RELAY_CALLBACK_JSON`
 
-冲刺模式的关键边界：
+## Core Commands
 
-- 当前 goal 完成后，如果还有下一个 `approved` goal，同轮可以直接接续，不等下一次 heartbeat。
-- `sprint_active=false` 或 `paused=true` 时，不继续推进新的 plan / work / review，只做状态检查和汇报。
-- 遇到 blocker、`review_pending`、仓库 dirty 或没有可做任务时，当前轮停止。
+- `codex-autonomy install --target <repo>`
+- `codex-autonomy upgrade-managed --target <repo> [--apply]`
+- `codex-autonomy rebaseline-managed --target <repo>`
+- `codex-autonomy bind-thread [--report-thread-id <threadId>]`
+- `codex-autonomy doctor`
+- `codex-autonomy prepare-worktree`
+- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`
+- `codex-autonomy generate-proposal`
+- `codex-autonomy approve-proposal --goal-id <goalId>`
+- `codex-autonomy review`
+- `codex-autonomy report`
+- `codex-autonomy status`
+- `codex-autonomy pause` / `resume`
+- `codex-autonomy merge-autonomy-branch`
+
+## Developer Fallback
+
+If you are validating from source without a global install, build first and use the CLI entry directly:
+
+```powershell
+npm --prefix tools/codex-supervisor run build
+node tools/codex-supervisor/dist/cli.js <command>
+```
+
+## Target README Management
+
+Installed target repos do not hand over the entire `README.md`. Only the section between these markers is managed:
+
+- `<!-- codex-autonomy:managed:start -->`
+- `<!-- codex-autonomy:managed:end -->`
+
+Default limits:
+
+- total README size `<= 24 KiB`
+- managed section size `<= 8 KiB`
+
+Oversized files, files with NUL bytes, broken markers, or non-text files stay in advisory mode and are not overwritten automatically.
+
+## Repo Layout
+
+- `AGENTS.md`: stable operating rules
+- `.agents/skills/$autonomy-*`: repo-local autonomy skills
+- `.codex/environments/environment.toml`: shared Windows setup plus `verify`, `smoke`, and `review` actions
+- `.codex/config.toml`: repo fallback config with `approval_policy = "never"` and `sandbox_mode = "workspace-write"`
+- `autonomy/*.json`: canonical repo-local autonomy state
+- `scripts/verify.ps1`: worker acceptance gate
+- `scripts/review.ps1`: baseline effect-review gate
+- `tools/codex-supervisor`: TypeScript CLI implementation
+
+## Verification
+
+Use the narrowest checks that match the work:
+
+```powershell
+npm --prefix tools/codex-supervisor run build
+npm --prefix tools/codex-supervisor run test
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
+```
+
+## License
+
+This repository is released under the MIT License. See [LICENSE](LICENSE).
 
 ## Reporter 与汇报
 
