@@ -2,9 +2,11 @@
 
 [中文说明](README.zh-CN.md)
 
-`codex-auto` is the product repository for `codex-autonomy`. It is not meant to be the active target repo being autonomously worked on. This repo contains the reusable control surface, CLI, templates, skills, tests, and install/upgrade logic that get applied to another repository.
+`codex-auto` lets you set a goal for a repository and have Codex keep pushing that goal forward automatically within approved boundaries.
 
-`codex-supervisor` manages installation, doctor checks, status and report flows, proposal and task materialization, prompt generation, and blocking behavior. It does not read or mutate private Codex databases, automation TOML, SQLite state, or other unsupported internal surfaces.
+This repository contains the product code for that workflow: the CLI, repo-local control surface, router skills, templates, tests, and install/upgrade logic. The repo being auto-advanced is the target repo where you install `codex-autonomy`, not this source repo itself.
+
+`codex-supervisor` handles install, doctor, thread binding, status/report, proposal and task materialization, prompt generation, and blocking behavior. It does not read or mutate private Codex databases, automation TOML, SQLite state, or other unsupported internal surfaces.
 
 ## What This Repo Provides
 

@@ -2,9 +2,11 @@
 
 [English](README.md)
 
-这是 `codex-autonomy` 的产品源码仓库，不是某个活跃自治目标仓库。这里维护的是通用控制面、模板、CLI、测试和示例约定；真正被安装和被自治推进的，是你指定的目标仓库。
+`codex-auto` 的作用很直接：你给一个仓库设定目标，它负责让 Codex 在已批准边界内持续自动推进这个目标。
 
-`codex-supervisor` 负责安装、体检、状态汇总、提案/任务流转、prompt 输出和必要的阻断处理，不直接碰 Codex 内部数据库、automation TOML、SQLite 或其他未公开接口。
+这个仓库保存的是这套能力本身的产品源码：CLI、repo-local 控制面、router skills、模板、测试和安装/升级逻辑。真正被自动推进的，是你安装了 `codex-autonomy` 的目标仓库，不是这个源码仓本身。
+
+`codex-supervisor` 负责安装、体检、线程绑定、状态/汇报、提案与任务物化、prompt 输出和必要的阻断处理，不直接碰 Codex 内部数据库、automation TOML、SQLite 或其他未公开接口。
 
 ## 本仓库提供什么
 
