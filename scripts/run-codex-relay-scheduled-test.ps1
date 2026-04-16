@@ -89,7 +89,7 @@ function New-RelayPrompt {
 这是一次外部调度唤醒，来自 Windows Task Scheduler，经由 `thread-relay-mcp` 投递到当前绑定线程。
 不要把它当成新 goal、自由执行模式或人工临时加 scope。
 
-请先运行 `codex-autonomy prepare-worktree`，再运行 `codex-autonomy status`，然后停止。
+请先运行 `codex-autonomy status`，然后停止。
 
 只返回这些字段：
 - SCHEDULED_RELAY_MARKER=STATUS_ONLY_OK
@@ -115,9 +115,7 @@ function New-RelayPrompt {
 这是一次外部调度唤醒，来自 Windows Task Scheduler，经由 `thread-relay-mcp` 投递到当前绑定线程。
 不要把它当成新 goal、自由执行模式或人工临时加 scope。
 
-先运行 `codex-autonomy prepare-worktree`，再运行 `codex-autonomy status`。
-
-如果 `prepare-worktree` 失败，原样汇报失败原因并停止。
+先运行 `codex-autonomy status`。
 
 如果 `ready_for_automation=false`，先判断是不是“可恢复的 closeout 脏改动”：
 - 如果 `next_automation_reason` 或 warning 明确要求运行 `codex-autonomy review` 来收口当前 repo diff，
@@ -128,6 +126,10 @@ function New-RelayPrompt {
 - 如果一开始就不是这种可恢复 closeout diff，原样汇报 `next_automation_reason` 并停止。
 
 如果 `thread_binding_state` 不是 `bound_to_current`，明确报告 mismatch 并停止。
+
+如果允许继续，再运行 `codex-autonomy prepare-worktree`。
+
+如果 `prepare-worktree` 失败，原样汇报失败原因并停止。
 
 如果允许继续，只推进当前已批准目标的一次有界 sprint 闭环：
 - 最多处理一个 task
