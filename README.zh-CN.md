@@ -164,6 +164,7 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - 这条 relay runner 现在会把每次调用明确标记成“外部调度唤醒”，要求目标线程先检查 `codex-autonomy status`，且只有 `thread_binding_state=bound_to_current` 时才允许推进一次 bounded loop；否则按 mismatch/不可运行状态收口并停止。
 - 如果下一次唤醒发现主仓库留下了可恢复的 closeout diff，`status` 会明确提示先运行 `codex-autonomy review`；外部调度 runner 也会先补跑一次 `scripts/verify.ps1 + codex-autonomy review` 做自愈，再重新检查是否可继续。
 - 这组 relay scheduled runner 的默认组合现在是 `TimeoutSec=300`、`StatusPollAttempts=22`、`StatusPollIntervalSec=15`，并默认开启 `RecoverOnTimeout`；目标是优先等到同轮收口，超时时也直接走 recover，而不是过早把单轮 bounded loop 放掉。
+- 对 `timed_out + active turn` 这类长回合，scheduled runner 不会在任务进程里同步阻塞等待 `relay_dispatch_recover` 收尾；它会先记录可恢复状态并退出，下一轮启动前先检查上一条 dispatch 是否仍在运行，避免重复向同一绑定线程投递新消息。
 - 这组 scheduled runner 现在默认把日志写到 `%CODEX_HOME%`；如果没有该环境变量，则回退到 `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` 或 `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`，避免外部调度产物把目标仓库弄脏。
 
 近期验证结论（2026-04-16）：
