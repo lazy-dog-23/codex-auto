@@ -215,7 +215,7 @@ describe("git/worktree integration", () => {
     expect(backgroundJournal).toContain("allowlisted sync marker");
   });
 
-  it("treats repo guidance files as allowlisted runtime drift and syncs them without making them commit-eligible", async () => {
+  it("treats repo guidance files as allowlisted runtime drift, syncs them, and makes them closeout-commit eligible", async () => {
     const workspace = await makeTempWorkspace();
     const externalHome = await makeTempWorkspace();
     const gitHome = join(externalHome, "git-home");
@@ -252,15 +252,21 @@ describe("git/worktree integration", () => {
 
     const gateWithoutCodeDiff = await inspectAutonomyCommitGate(workspace);
     expect(gateWithoutCodeDiff.blockedPaths).toEqual([]);
-    expect(gateWithoutCodeDiff.ignoredPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
-    expect(gateWithoutCodeDiff.hasDiff).toBe(false);
-    expect(gateWithoutCodeDiff.reason).toBe("no_diff");
+    expect(gateWithoutCodeDiff.allowedPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
+    expect(gateWithoutCodeDiff.ignoredPaths).toEqual([]);
+    expect(gateWithoutCodeDiff.hasDiff).toBe(true);
+    expect(gateWithoutCodeDiff.commitReady).toBe(true);
+    expect(gateWithoutCodeDiff.reason).toBe("dirty_worktree");
 
     await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- commit with ambient runtime drift -->\n", "utf8");
     const gateWithCodeDiff = await inspectAutonomyCommitGate(workspace);
     expect(gateWithCodeDiff.commitReady).toBe(true);
-    expect(gateWithCodeDiff.allowedPaths).toContain("autonomy/journal.md");
-    expect(gateWithCodeDiff.ignoredPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
+    expect(gateWithCodeDiff.allowedPaths).toEqual(expect.arrayContaining([
+      "AGENTS.override.md",
+      "TEAM_GUIDE.md",
+      "autonomy/journal.md",
+    ]));
+    expect(gateWithCodeDiff.ignoredPaths).toEqual([]);
     expect(gateWithCodeDiff.blockedPaths).toEqual([]);
   });
 
@@ -603,6 +609,20 @@ describe("git/worktree integration", () => {
     expect(cleanReview.review_script.exitCode).toBe(0);
     expect(cleanReview.closeout_commit.committed).toBe(false);
     expect(cleanReview.background_prepare.attempted).toBe(false);
+
+    await appendFile(join(workspace, "TEAM_GUIDE.md"), "\n<!-- review repo guidance gate -->\n", "utf8");
+    const guidanceReview = await runReviewCommand(workspace);
+    expect(guidanceReview.ok).toBe(true);
+    expect(guidanceReview.dirty).toBe(true);
+    expect(guidanceReview.hasDiff).toBe(true);
+    expect(guidanceReview.commit_ready).toBe(true);
+    expect(guidanceReview.commit_skipped_reason).toBeNull();
+    expect(guidanceReview.issues).toHaveLength(0);
+    expect(guidanceReview.closeout_commit.attempted).toBe(true);
+    expect(guidanceReview.closeout_commit.committed).toBe(true);
+    expect(guidanceReview.background_prepare.attempted).toBe(true);
+    expect(guidanceReview.background_prepare.ok).toBe(true);
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
 
     await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- review allowlisted gate -->\n", "utf8");
     const dirtyReview = await runReviewCommand(workspace);

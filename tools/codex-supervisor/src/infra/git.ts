@@ -149,11 +149,13 @@ export function isAmbientAutonomyCommitPath(pathValue: string): boolean {
 }
 
 function isCommitEligibleAutonomyPath(pathValue: string): boolean {
-  return isAllowlistedAutonomyCommitPath(pathValue) || !isAutonomyRuntimeAllowlistedPath(pathValue);
+  return isAllowlistedAutonomyCommitPath(pathValue)
+    || isAmbientAutonomyCommitPath(pathValue)
+    || !isAutonomyRuntimeAllowlistedPath(pathValue);
 }
 
 function isIgnoredAutonomyCommitPath(pathValue: string): boolean {
-  return !isCommitEligibleAutonomyPath(pathValue) && (isAmbientAutonomyCommitPath(pathValue) || isAutonomyRuntimeAllowlistedPath(pathValue));
+  return !isCommitEligibleAutonomyPath(pathValue) && isAutonomyRuntimeAllowlistedPath(pathValue);
 }
 
 function analyzeAutonomyCommitScope(statusLines: string[]): {
