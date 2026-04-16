@@ -147,7 +147,7 @@ export async function runReviewCommand(
   if (gate.blockedPaths.length > 0) {
     issues.push({
       code: "non_allowlisted_changes",
-      message: `Commit scope includes non-allowlisted paths: ${gate.blockedPaths.join(", ")}.`,
+      message: `Commit scope includes paths that are not eligible for an autonomy closeout commit: ${gate.blockedPaths.join(", ")}.`,
     });
   }
 

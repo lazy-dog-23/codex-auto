@@ -531,7 +531,7 @@ describe("git/worktree integration", () => {
     expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
   });
 
-  it("refuses to create autonomy commits when non-allowlisted changes are present", async () => {
+  it("creates autonomy commits when repo files change alongside autonomy state", async () => {
     const workspace = await makeTempWorkspace();
     const gitHome = join(workspace, ".git-home");
     const gitConfigGlobal = join(gitHome, "gitconfig");
@@ -553,31 +553,24 @@ describe("git/worktree integration", () => {
     runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
 
     await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- allowlisted change -->\n", "utf8");
-    await appendFile(join(workspace, "README.md"), "\n<!-- blocked change -->\n", "utf8");
+    await appendFile(join(workspace, "README.md"), "\n<!-- repo scope change -->\n", "utf8");
 
-    const headBefore = runGit(workspace, ["rev-parse", "HEAD"]);
     const gate = await inspectAutonomyCommitGate(workspace);
     expect(gate.reason).toBe("dirty_worktree");
-    expect(gate.ok).toBe(false);
-    expect(gate.commitReady).toBe(false);
-    expect(gate.allowedPaths).toContain("autonomy/journal.md");
-    expect(gate.blockedPaths).toContain("README.md");
-    expect(gate.blockedStatusLines.some((line) => line.includes("README.md"))).toBe(true);
+    expect(gate.ok).toBe(true);
+    expect(gate.commitReady).toBe(true);
+    expect(gate.allowedPaths).toEqual(expect.arrayContaining(["autonomy/journal.md", "README.md"]));
+    expect(gate.blockedPaths).toEqual([]);
 
-    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-2/task-1): blocked");
-    expect(commitResult.ok).toBe(false);
-    expect(commitResult.committed).toBe(false);
-    expect(commitResult.stageResult).toBeNull();
-    expect(commitResult.commitResult).toBeNull();
-    expect(commitResult.message).toContain("non-allowlisted changes");
-    expect(commitResult.message).toContain("README.md");
-    expect(commitResult.message).toContain("autonomy/");
-
-    const headAfter = runGit(workspace, ["rev-parse", "HEAD"]);
-    expect(headAfter).toBe(headBefore);
+    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-2/task-1): commit repo change");
+    expect(commitResult.ok).toBe(true);
+    expect(commitResult.committed).toBe(true);
+    expect(commitResult.commitHash).toBeTruthy();
+    expect(commitResult.message).toContain("Committed");
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
   });
 
-  it("runs review gating and blocks dirty or branch-drift states before review.ps1", async () => {
+  it("runs review gating for repo-scope diffs and still blocks branch drift", async () => {
     const workspace = await makeTempWorkspace();
     const gitHome = join(workspace, ".git-home");
     const gitConfigGlobal = join(gitHome, "gitconfig");
@@ -617,14 +610,14 @@ describe("git/worktree integration", () => {
     expect(dirtyReview.issues).toHaveLength(0);
 
     runGit(workspace, ["add", "-A"]);
-    runGit(workspace, ["commit", "-m", "stabilize before blocked-scope test"]);
+    runGit(workspace, ["commit", "-m", "stabilize before repo-scope test"]);
 
-    await appendFile(join(workspace, "README.md"), "\n<!-- review blocked gate -->\n", "utf8");
-    const blockedReview = await runReviewCommand(workspace);
-    expect(blockedReview.ok).toBe(false);
-    expect(blockedReview.commit_ready).toBe(false);
-    expect(blockedReview.commit_skipped_reason).toBe("non_allowlisted_changes");
-    expect(blockedReview.issues.some((issue) => issue.code === "non_allowlisted_changes")).toBe(true);
+    await appendFile(join(workspace, "README.md"), "\n<!-- review repo scope gate -->\n", "utf8");
+    const repoScopeReview = await runReviewCommand(workspace);
+    expect(repoScopeReview.ok).toBe(true);
+    expect(repoScopeReview.commit_ready).toBe(true);
+    expect(repoScopeReview.commit_skipped_reason).toBeNull();
+    expect(repoScopeReview.issues).toHaveLength(0);
 
     runGit(workspace, ["add", "-A"]);
     runGit(workspace, ["commit", "-m", "stabilize before drift test"]);

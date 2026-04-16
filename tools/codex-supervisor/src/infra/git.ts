@@ -148,6 +148,14 @@ export function isAmbientAutonomyCommitPath(pathValue: string): boolean {
   ));
 }
 
+function isCommitEligibleAutonomyPath(pathValue: string): boolean {
+  return isAllowlistedAutonomyCommitPath(pathValue) || !isAutonomyRuntimeAllowlistedPath(pathValue);
+}
+
+function isIgnoredAutonomyCommitPath(pathValue: string): boolean {
+  return !isCommitEligibleAutonomyPath(pathValue) && (isAmbientAutonomyCommitPath(pathValue) || isAutonomyRuntimeAllowlistedPath(pathValue));
+}
+
 function analyzeAutonomyCommitScope(statusLines: string[]): {
   allowedPaths: string[];
   ignoredPaths: string[];
@@ -170,28 +178,26 @@ function analyzeAutonomyCommitScope(statusLines: string[]): {
       continue;
     }
 
-    const hasBlockedPath = paths.some((pathValue) =>
-      !isAllowlistedAutonomyCommitPath(pathValue) && !isAmbientAutonomyCommitPath(pathValue) && !isAutonomyRuntimeAllowlistedPath(pathValue),
-    );
-    const hasAllowedPath = paths.some((pathValue) => isAllowlistedAutonomyCommitPath(pathValue));
-    const hasAmbientPath = paths.some((pathValue) => !isAllowlistedAutonomyCommitPath(pathValue) && isAutonomyRuntimeAllowlistedPath(pathValue));
+    const hasBlockedPath = paths.some((pathValue) => !isCommitEligibleAutonomyPath(pathValue) && !isIgnoredAutonomyCommitPath(pathValue));
+    const hasAllowedPath = paths.some((pathValue) => isCommitEligibleAutonomyPath(pathValue));
+    const hasIgnoredPath = paths.some((pathValue) => isIgnoredAutonomyCommitPath(pathValue));
 
     if (!hasBlockedPath && hasAllowedPath) {
       allowedStatusLines.push(statusLine);
       for (const pathValue of paths) {
-        if (isAllowlistedAutonomyCommitPath(pathValue)) {
+        if (isCommitEligibleAutonomyPath(pathValue)) {
           allowedPaths.add(normalizeGitStatusPath(pathValue));
-        } else if (isAutonomyRuntimeAllowlistedPath(pathValue)) {
+        } else if (isIgnoredAutonomyCommitPath(pathValue)) {
           ignoredPaths.add(normalizeGitStatusPath(pathValue));
         }
       }
       continue;
     }
 
-    if (!hasBlockedPath && hasAmbientPath) {
+    if (!hasBlockedPath && hasIgnoredPath) {
       ignoredStatusLines.push(statusLine);
       for (const pathValue of paths) {
-        if (isAutonomyRuntimeAllowlistedPath(pathValue)) {
+        if (isIgnoredAutonomyCommitPath(pathValue)) {
           ignoredPaths.add(normalizeGitStatusPath(pathValue));
         }
       }
@@ -200,7 +206,7 @@ function analyzeAutonomyCommitScope(statusLines: string[]): {
 
     blockedStatusLines.push(statusLine);
     for (const pathValue of paths) {
-      if (!isAllowlistedAutonomyCommitPath(pathValue) && !isAutonomyRuntimeAllowlistedPath(pathValue)) {
+      if (!isCommitEligibleAutonomyPath(pathValue) && !isIgnoredAutonomyCommitPath(pathValue)) {
         blockedPaths.add(normalizeGitStatusPath(pathValue));
       }
     }
@@ -372,7 +378,7 @@ export async function createAutonomyCommit(
       skippedReason: null,
       stageResult: null,
       commitResult: null,
-      message: `Refusing to create an autonomy commit because the workspace contains non-allowlisted changes: ${gate.blockedPaths.join(', ')}. Allowlisted paths are ${gate.allowlist.join(', ')}.`,
+      message: `Refusing to create an autonomy commit because the workspace contains paths that are not eligible for an autonomy closeout commit: ${gate.blockedPaths.join(', ')}.`,
     };
   }
 
