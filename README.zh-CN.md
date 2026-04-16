@@ -155,6 +155,21 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - 所以 repo 里的 `.codex/config.toml` 是兜底配置，负责给当前项目和新 turn 提供稳定默认值。
 - 也就是说，automation 侧能配置时用 automation 配置，不能持久化时靠 repo `.codex/config.toml` 托底。
 
+已知限制（基于当前 Windows Codex App 实测）：
+
+- `heartbeat + MINUTELY` 当前属于已知不可靠路径：调度器可能只推进下一次触发时间，但不实际向线程投递执行。
+- 这类行为发生时，常见表现是“时间在滚动，但没有真正跑起来”；因此不要把它当成唯一可靠的持续推进机制。
+- 需要稳定后台调度时，优先使用 `cron + HOURLY`，或改用外部调度器触发有界执行。
+- 这个源码仓现在附带了一组外部调度测试脚本：`scripts/run-codex-relay-scheduled-test.ps1` 和 `scripts/register-codex-relay-scheduled-test.ps1`，用于通过公开 relay CLI 走 `Task Scheduler -> relay -> 绑定线程`，不依赖私有 Codex 存储。
+- 这条 relay runner 现在会把每次调用明确标记成“外部调度唤醒”，要求目标线程先检查 `codex-autonomy status`，且只有 `thread_binding_state=bound_to_current` 时才允许推进一次 bounded loop；否则按 mismatch/不可运行状态收口并停止。
+- 这组 scheduled runner 现在默认把日志写到 `%CODEX_HOME%`；如果没有该环境变量，则回退到 `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` 或 `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`，避免外部调度产物把目标仓库弄脏。
+
+近期验证结论（2026-04-16）：
+
+- 已在真实 Windows Codex App 绑定线程上跑通 `长回合 -> relay_send_wait 超时 -> relay_dispatch_status 收口成功 -> 后续短消息继续成功` 这条恢复链。
+- 同一轮里，绑定线程完成了一次 verify closeout，并把当前 active goal 标记为 completed。
+- 因当前受限环境无法注册 Windows `Task Scheduler` 任务，且 runner 里额外拉起 app-server 会触发 `spawn EPERM`，这次会话没有在系统调度层完成最终验收；已验证的是 relay 入口、绑定线程执行和超时恢复语义。
+
 ## 新项目线程怎么接
 
 做完一次机器级安装后，新项目里的 Codex 线程可以直接用自然语言触发：

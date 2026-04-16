@@ -64,6 +64,21 @@ codex-autonomy --version
 - If `prepare-worktree` refuses to run, confirm the target repo is a valid Git repository and the working tree is not dirty outside the managed allowlist.
 - If the target repo README exceeds the managed section limits, installation continues in advisory mode and the README is not overwritten.
 
+## Known Limitations
+
+- Based on current Windows Codex App validation, `heartbeat + MINUTELY` is a known unreliable path. The scheduler can advance the next trigger time without dispatching an actual thread run.
+- When that happens, the automation can look alive from its schedule while no real work is being delivered to the target thread.
+- For reliable unattended scheduling, prefer `cron + HOURLY` or an external scheduler that triggers bounded runs.
+- This repo now includes test scaffolding for the external-scheduler path: `scripts/run-codex-relay-scheduled-test.ps1` and `scripts/register-codex-relay-scheduled-test.ps1` drive `Task Scheduler -> relay -> bound thread` through the public relay CLI instead of private Codex storage.
+- The relay runner now labels each invocation as an external scheduled wake-up, requires the target thread to check `codex-autonomy status`, and only allows one bounded loop when `thread_binding_state=bound_to_current`; otherwise it must stop with a mismatch or readiness report.
+- The scheduled runners now write logs under `%CODEX_HOME%` when available, otherwise `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` or `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`, so external scheduler artifacts do not dirty the target repository.
+
+Recent validation (2026-04-16):
+
+- The real bound-thread recovery path has been exercised on a live Windows Codex App repository: `long turn -> relay_send_wait timeout -> relay_dispatch_status succeeds -> short follow-up send succeeds`.
+- In the same validation round, the bound thread completed a verify closeout and marked the active goal completed.
+- The remaining unverified layer in that session was only the system scheduler wake-up itself; the delegated environment could not register Windows `Task Scheduler` tasks and blocked the runner's extra app-server spawn with `spawn EPERM`.
+
 ## Natural-Language Entry
 
 After `scripts/install-global.ps1` finishes, a new Codex thread can drive installed repos through the global router skill. Common phrases include:

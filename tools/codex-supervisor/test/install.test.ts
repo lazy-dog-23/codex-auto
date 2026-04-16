@@ -179,6 +179,8 @@ describe("install scaffold", () => {
     expect(readme).toContain("<!-- codex-autonomy:managed:end -->");
     expect(readme).toContain("codex-autonomy install --target <repo>");
     expect(readme).toContain("relay completion event");
+    expect(readme).toContain("heartbeat + MINUTELY");
+    expect(readme).toContain("cron + HOURLY");
 
     const installMetadata = JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8")) as {
       managed_paths: string[];

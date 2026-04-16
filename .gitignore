@@ -4,3 +4,4 @@ tools/codex-supervisor/dist/
 tools/codex-supervisor/.vite/
 autonomy/locks/cycle.lock
 Thumbs.db
+scripts/scheduler-launchers/
