@@ -1083,6 +1083,11 @@ export function getReadmeManagedSectionMarkdown(): string {
     "- 当前线程身份可用时优先运行 `codex-autonomy bind-thread`；如果拿不到公开线程身份，只允许显式 `codex-autonomy bind-thread --report-thread-id <thread-id>`。",
     "- 线程身份不可用或不可信时不要猜测当前线程，也不要静默复用旧绑定。",
     "- relay completion event 要当成状态回传处理，不要误当成新的 goal intake；优先读取 `BEGIN_CODEX_RELAY_CALLBACK_JSON` 到 `END_CODEX_RELAY_CALLBACK_JSON` 之间的机读 payload。",
+    "",
+    "### 已知限制",
+    "",
+    "- 基于当前 Windows Codex App 的实测，`heartbeat + MINUTELY` 属于已知不可靠路径：可能只滚动下一次触发时间，但不实际向线程投递执行。",
+    "- 需要稳定调度时，优先使用 `cron + HOURLY`，或改用外部调度器触发有界执行。",
   ].join("\n");
 }
 
