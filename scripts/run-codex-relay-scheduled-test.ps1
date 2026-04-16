@@ -7,12 +7,12 @@ param(
     [ValidateSet('status-only', 'bounded-loop')]
     [string]$Mode = 'bounded-loop',
     [ValidateRange(1, 3600)]
-    [int]$TimeoutSec = 45,
+    [int]$TimeoutSec = 300,
     [ValidateRange(1, 60)]
-    [int]$StatusPollAttempts = 6,
+    [int]$StatusPollAttempts = 22,
     [ValidateRange(1, 300)]
-    [int]$StatusPollIntervalSec = 10,
-    [switch]$RecoverOnTimeout,
+    [int]$StatusPollIntervalSec = 15,
+    [switch]$RecoverOnTimeout = $true,
     [switch]$PreviewOnly
 )
 
