@@ -71,6 +71,7 @@ codex-autonomy --version
 - For reliable unattended scheduling, prefer `cron + HOURLY` or an external scheduler that triggers bounded runs.
 - This repo now includes test scaffolding for the external-scheduler path: `scripts/run-codex-relay-scheduled-test.ps1` and `scripts/register-codex-relay-scheduled-test.ps1` drive `Task Scheduler -> relay -> bound thread` through the public relay CLI instead of private Codex storage.
 - The relay runner now labels each invocation as an external scheduled wake-up, requires the target thread to check `codex-autonomy status`, and only allows one bounded loop when `thread_binding_state=bound_to_current`; otherwise it must stop with a mismatch or readiness report.
+- When a later wake-up finds a recoverable closeout diff in the repo, `status` now tells the operator to run `codex-autonomy review`, and the external scheduler runners self-heal once with `scripts/verify.ps1 + codex-autonomy review` before deciding whether automation can continue.
 - The scheduled runners now write logs under `%CODEX_HOME%` when available, otherwise `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` or `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`, so external scheduler artifacts do not dirty the target repository.
 
 Recent validation (2026-04-16):
@@ -111,7 +112,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`
 - `codex-autonomy generate-proposal`
 - `codex-autonomy approve-proposal --goal-id <goalId>`
-- `codex-autonomy review`
+- `codex-autonomy review` (runs the review gate, attempts the controlled autonomy closeout commit when eligible, and immediately realigns the background worktree)
 - `codex-autonomy report`
 - `codex-autonomy status`
 - `codex-autonomy pause` / `resume`
@@ -148,7 +149,7 @@ Oversized files, files with NUL bytes, broken markers, or non-text files stay in
 - `.codex/config.toml`: repo fallback config with `approval_policy = "never"` and `sandbox_mode = "workspace-write"`
 - `autonomy/*.json`: canonical repo-local autonomy state
 - `scripts/verify.ps1`: worker acceptance gate
-- `scripts/review.ps1`: baseline effect-review gate
+- `scripts/review.ps1`: baseline effect-review gate consumed by `codex-autonomy review`
 - `tools/codex-supervisor`: TypeScript CLI implementation
 
 ## Verification

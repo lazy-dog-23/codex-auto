@@ -570,9 +570,10 @@ describe("git/worktree integration", () => {
     expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
   });
 
-  it("runs review gating for repo-scope diffs and still blocks branch drift", async () => {
+  it("uses review as the controlled closeout gate for repo-scope diffs and still blocks branch drift", async () => {
     const workspace = await makeTempWorkspace();
-    const gitHome = join(workspace, ".git-home");
+    const externalHome = await makeTempWorkspace();
+    const gitHome = join(externalHome, "git-home");
     const gitConfigGlobal = join(gitHome, "gitconfig");
     await mkdir(gitHome, { recursive: true });
     await writeFile(gitConfigGlobal, "", "utf8");
@@ -600,6 +601,8 @@ describe("git/worktree integration", () => {
     expect(cleanReview.commit_skipped_reason).toBe("no_diff");
     expect(cleanReview.issues).toHaveLength(0);
     expect(cleanReview.review_script.exitCode).toBe(0);
+    expect(cleanReview.closeout_commit.committed).toBe(false);
+    expect(cleanReview.background_prepare.attempted).toBe(false);
 
     await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- review allowlisted gate -->\n", "utf8");
     const dirtyReview = await runReviewCommand(workspace);
@@ -608,9 +611,13 @@ describe("git/worktree integration", () => {
     expect(dirtyReview.commit_ready).toBe(true);
     expect(dirtyReview.commit_skipped_reason).toBeNull();
     expect(dirtyReview.issues).toHaveLength(0);
-
-    runGit(workspace, ["add", "-A"]);
-    runGit(workspace, ["commit", "-m", "stabilize before repo-scope test"]);
+    expect(dirtyReview.closeout_commit.attempted).toBe(true);
+    expect(dirtyReview.closeout_commit.committed).toBe(true);
+    expect(dirtyReview.closeout_commit.hash).toBeTruthy();
+    expect(dirtyReview.closeout_commit.message).toContain("autonomy(");
+    expect(dirtyReview.background_prepare.attempted).toBe(true);
+    expect(dirtyReview.background_prepare.ok).toBe(true);
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
 
     await appendFile(join(workspace, "README.md"), "\n<!-- review repo scope gate -->\n", "utf8");
     const repoScopeReview = await runReviewCommand(workspace);
@@ -618,9 +625,9 @@ describe("git/worktree integration", () => {
     expect(repoScopeReview.commit_ready).toBe(true);
     expect(repoScopeReview.commit_skipped_reason).toBeNull();
     expect(repoScopeReview.issues).toHaveLength(0);
-
-    runGit(workspace, ["add", "-A"]);
-    runGit(workspace, ["commit", "-m", "stabilize before drift test"]);
+    expect(repoScopeReview.closeout_commit.committed).toBe(true);
+    expect(repoScopeReview.background_prepare.ok).toBe(true);
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
     runGit(workspace, ["switch", "-c", "feature/manual"]);
 
     const driftReview = await runReviewCommand(workspace);
@@ -628,7 +635,7 @@ describe("git/worktree integration", () => {
     expect(driftReview.commit_ready).toBe(false);
     expect(driftReview.commit_skipped_reason).toBe("branch_drift");
     expect(driftReview.issues.some((issue) => issue.code === "branch_drift")).toBe(true);
-  }, 10000);
+  }, 20000);
 
   it("fails review when the control plane points to a missing current goal", async () => {
     const workspace = await makeTempWorkspace();

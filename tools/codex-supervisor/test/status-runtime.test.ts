@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const detectGitRepositoryMock = vi.fn();
 const getBackgroundWorktreePathMock = vi.fn();
 const getWorktreeSummaryMock = vi.fn();
+const inspectAutonomyCommitGateMock = vi.fn();
 const inspectCycleLockMock = vi.fn();
 const discoverPowerShellExecutableMock = vi.fn();
 const detectCodexProcessMock = vi.fn();
@@ -21,6 +22,7 @@ vi.mock("../src/infra/git.js", () => ({
   detectGitRepository: detectGitRepositoryMock,
   getBackgroundWorktreePath: getBackgroundWorktreePathMock,
   getWorktreeSummary: getWorktreeSummaryMock,
+  inspectAutonomyCommitGate: inspectAutonomyCommitGateMock,
 }));
 
 vi.mock("../src/infra/lock.js", () => ({
@@ -56,6 +58,7 @@ describe("status runtime gates", () => {
     detectGitRepositoryMock.mockReset();
     getBackgroundWorktreePathMock.mockReset();
     getWorktreeSummaryMock.mockReset();
+    inspectAutonomyCommitGateMock.mockReset();
     inspectCycleLockMock.mockReset();
     discoverPowerShellExecutableMock.mockReset();
     detectCodexProcessMock.mockReset();
@@ -80,6 +83,26 @@ describe("status runtime gates", () => {
     inspectManagedUpgradeStateMock.mockResolvedValue({
       state: "not_installed",
       summary: null,
+    });
+    inspectAutonomyCommitGateMock.mockResolvedValue({
+      ok: false,
+      repoRoot: "C:/repo",
+      expectedBranch: "codex/autonomy",
+      currentBranch: "codex/autonomy",
+      head: "abc123",
+      dirty: false,
+      hasDiff: false,
+      commitReady: false,
+      branchDrift: false,
+      allowlist: [],
+      allowedPaths: [],
+      ignoredPaths: [],
+      blockedPaths: [],
+      allowedStatusLines: [],
+      ignoredStatusLines: [],
+      blockedStatusLines: [],
+      statusLines: [],
+      reason: "no_diff",
     });
   });
 
@@ -597,6 +620,161 @@ describe("status runtime gates", () => {
     expect(summary.upgrade_hint).toContain("rebaseline-managed");
     expect(summary.warnings?.some((warning) => warning.code === "managed_advisory_drift")).toBe(true);
     expect(summary.next_automation_reason).toContain("Ready for");
+  });
+
+  it("surfaces a recoverable closeout diff instead of a generic dirty-repo blocker", async () => {
+    detectGitRepositoryMock.mockResolvedValue({
+      path: "C:/repo",
+      gitDir: ".git",
+      commonGitDir: "C:/repo/.git",
+      head: "abc123",
+      dirty: true,
+      statusLines: [" M docs/optimization/program-roadmap.md"],
+      unmanagedDirtyPaths: ["docs/optimization/program-roadmap.md"],
+      managedControlSurfaceOnly: false,
+    });
+    getBackgroundWorktreePathMock.mockReturnValue("C:\\repo.__codex_bg");
+    getWorktreeSummaryMock.mockResolvedValue({
+      path: "C:\\repo.__codex_bg",
+      repoRoot: "C:/repo",
+      commonGitDir: "C:/repo/.git",
+      branch: "codex/background",
+      head: "abc123",
+      dirty: false,
+      statusLines: [],
+    });
+    inspectAutonomyCommitGateMock.mockResolvedValue({
+      ok: true,
+      repoRoot: "C:/repo",
+      expectedBranch: "codex/autonomy",
+      currentBranch: "codex/autonomy",
+      head: "abc123",
+      dirty: true,
+      hasDiff: true,
+      commitReady: true,
+      branchDrift: false,
+      allowlist: ["AGENTS.md"],
+      allowedPaths: ["docs/optimization/program-roadmap.md"],
+      ignoredPaths: [],
+      blockedPaths: [],
+      allowedStatusLines: [" M docs/optimization/program-roadmap.md"],
+      ignoredStatusLines: [],
+      blockedStatusLines: [],
+      statusLines: [" M docs/optimization/program-roadmap.md"],
+      reason: "dirty_worktree",
+    });
+    loadTasksDocumentMock.mockResolvedValue({
+      version: 1,
+      tasks: [
+        {
+          id: "task-ready",
+          goal_id: "goal-1",
+          title: "Ready task",
+          status: "ready",
+          priority: "P1",
+          depends_on: [],
+          acceptance: [],
+          file_hints: [],
+          retry_count: 0,
+          last_error: null,
+          updated_at: "2026-04-12T00:00:00Z",
+          commit_hash: null,
+          review_status: "not_reviewed",
+          source: "proposal",
+          source_task_id: null,
+        },
+      ],
+    });
+    loadGoalsDocumentMock.mockResolvedValue({
+      version: 1,
+      goals: [
+        {
+          id: "goal-1",
+          title: "Goal 1",
+          objective: "Ship it",
+          success_criteria: ["done"],
+          constraints: [],
+          out_of_scope: [],
+          status: "active",
+          run_mode: "sprint",
+          created_at: "2026-04-12T00:00:00Z",
+          approved_at: "2026-04-12T00:10:00Z",
+          completed_at: null,
+        },
+      ],
+    });
+    loadStateDocumentMock.mockResolvedValue({
+      version: 1,
+      current_goal_id: "goal-1",
+      current_task_id: null,
+      cycle_status: "idle",
+      run_mode: "sprint",
+      last_planner_run_at: null,
+      last_worker_run_at: null,
+      last_result: "passed",
+      consecutive_worker_failures: 0,
+      needs_human_review: false,
+      open_blocker_count: 0,
+      report_thread_id: "thread-123",
+      autonomy_branch: "codex/autonomy",
+      sprint_active: true,
+      paused: false,
+      pause_reason: null,
+    });
+    loadBlockersDocumentMock.mockResolvedValue({
+      version: 1,
+      blockers: [],
+    });
+    loadResultsDocumentMock.mockResolvedValue({
+      version: 1,
+      planner: { status: "planned", goal_id: "goal-1", task_id: null, summary: "planned", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      worker: { status: "passed", goal_id: "goal-1", task_id: "task-ready", summary: "completed task-ready", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+      review: { status: "passed", goal_id: "goal-1", task_id: "task-ready", summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+      commit: { status: "passed", goal_id: "goal-1", task_id: "task-ready", summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-1/task-ready): Ready task", review_status: null },
+      reporter: { status: "sent", goal_id: "goal-1", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+    });
+    loadSettingsDocumentMock.mockResolvedValue({
+      version: 1,
+      install_source: "local_package",
+      initial_confirmation_required: true,
+      report_surface: "thread_and_inbox",
+      auto_commit: "autonomy_branch",
+      autonomy_branch: "codex/autonomy",
+      auto_continue_within_goal: true,
+      block_on_major_decision: true,
+      default_cruise_cadence: {
+        planner_hours: 6,
+        worker_hours: 2,
+        reviewer_hours: 6,
+      },
+      default_sprint_heartbeat_minutes: 15,
+    });
+    loadVerificationDocumentMock.mockResolvedValue({
+      version: 1,
+      goal_id: "goal-1",
+      policy: "lightweight",
+      axes: [],
+    });
+    inspectCycleLockMock.mockResolvedValue({
+      exists: false,
+      stale: false,
+    });
+    discoverPowerShellExecutableMock.mockReturnValue("pwsh");
+    detectCodexProcessMock.mockReturnValue({
+      running: true,
+      matches: ["Codex"],
+      executable: "pwsh",
+      probeOk: true,
+    });
+
+    const { runStatusCommand } = await import("../src/commands/status.js");
+    const summary = await runStatusCommand("C:/repo");
+
+    expect(summary.ready_for_automation).toBe(false);
+    expect(summary.automation_state).toBe("blocked");
+    expect(summary.warnings?.some((warning) => warning.code === "repo_dirty_review_recoverable")).toBe(true);
+    expect(summary.warnings?.some((warning) => warning.code === "repo_dirty_unmanaged")).toBe(false);
+    expect(summary.next_automation_reason).toContain("Run codex-autonomy review");
   });
 
   it("blocks automation when static-template managed drift is present", async () => {

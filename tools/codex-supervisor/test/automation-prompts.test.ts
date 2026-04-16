@@ -43,15 +43,16 @@ describe("automation prompts", () => {
     expect(prompt).toContain("Select one `ready` task only.");
     expect(prompt).toContain("leave execution to the sprint runner");
     expect(prompt).toContain("Run `scripts/verify.ps1` before you stop.");
-    expect(prompt).toContain("Run `scripts/review.ps1` after verify passes");
+    expect(prompt).toContain("run `codex-autonomy review` as the closeout gate");
     expect(prompt).toContain("autonomy/verification.json");
-    expect(prompt).toContain("commit only to `codex/autonomy`");
+    expect(prompt).toContain("attempts the controlled autonomy closeout commit on `codex/autonomy`");
     expect(prompt).toContain("mark the task `verify_failed`");
   });
 
   it("includes reviewer, reporter, and sprint prompts", () => {
     expect(buildReviewerAutomationPrompt()).toContain("mark it `followup_required`");
     expect(buildReviewerAutomationPrompt()).toContain("Read `autonomy/verification.json`");
+    expect(buildReviewerAutomationPrompt()).toContain("Run `codex-autonomy review` after the worker's verify gate has passed.");
     expect(buildReviewerAutomationPrompt()).toContain("pending verification axis ids");
     expect(buildReviewerAutomationPrompt()).toContain("next-step suggestion that the planner or sprint runner can auto-continue without thread confirmation");
     expect(buildReviewerAutomationPrompt()).toContain("leave review to the sprint runner");

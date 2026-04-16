@@ -53,9 +53,10 @@ Rules:
 - Do not take a second task in the same run.
 - Make the smallest change that satisfies the acceptance criteria.
 - Run `scripts/verify.ps1` before you stop.
-- Run `scripts/review.ps1` after verify passes and before you stop.
+- After verify passes, run `codex-autonomy review` as the closeout gate instead of calling `scripts/review.ps1` directly.
 - If the goal uses `autonomy/verification.json`, keep the current task bounded and leave missing verification axes to the reviewer or sprint runner unless the task explicitly owns them.
-- If verify and review pass and the diff is non-empty, commit only to `codex/autonomy` using the autonomy commit format.
+- `codex-autonomy review` already runs `scripts/review.ps1`, attempts the controlled autonomy closeout commit on `codex/autonomy` when the diff is eligible, and re-aligns the background worktree after a successful commit.
+- If `codex-autonomy review` reports a commit or background-worktree failure, stop and surface it immediately instead of improvising a manual commit.
 - If verify fails once, mark the task `verify_failed` and increment `retry_count`.
 - If verify fails again, or the task is genuinely ambiguous, create a blocker and mark the task `blocked`.
 - If the task produces a safe follow-up that stays inside the approved goal, record it as continuation input for the next loop instead of asking the thread to decide.
@@ -80,8 +81,9 @@ Your job is to validate the effect of the last worker change before the run is r
 Rules:
 - If `sprint_active=true`, do nothing for this run and leave review to the sprint runner.
 - Review exactly one task or change set at a time.
-- Run `scripts/review.ps1` after the worker's verify gate has passed.
+- Run `codex-autonomy review` after the worker's verify gate has passed.
 - Read `autonomy/verification.json` and treat it as the closeout gate for the current goal when it is present.
+- Treat `codex-autonomy review` as the controlled closeout path: it executes `scripts/review.ps1`, attempts the autonomy closeout commit when the diff is eligible, and re-aligns the background worktree after a successful commit.
 - If the change passes review, record the review outcome and keep the task boundary unchanged.
 - If the change needs follow-up but stays inside the approved goal, mark it `followup_required` and leave a concise next-step suggestion that the planner or sprint runner can auto-continue without thread confirmation.
 - If required verification axes are still pending and they stay inside the approved goal, convert them into concrete follow-up tasks or task suggestions; do not declare the goal complete yet.
@@ -145,6 +147,7 @@ Rules:
 - Keep the run budgeted: no more than 3 closed loops or 25 minutes, whichever comes first.
 - If the current goal is completed and a next approved goal exists, switch to that goal and kickoff immediately in the same run.
 - Even after a goal switch, continue only while the run budget remains and the next work still belongs to an approved goal.
+- If `codex-autonomy status` says the repo has a recoverable closeout diff and explicitly tells you to run `codex-autonomy review`, first rerun the narrowest verification needed for that dirty diff; at minimum run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether the loop can continue.
 - If the completed task suggests a safe follow-up inside the approved goal set, auto-continue by feeding it into the next loop instead of waiting for thread confirmation.
 - If verification is the only remaining gap and it stays inside the approved goal, keep generating and executing bounded follow-up tasks until the required axes are cleared or a blocker is needed.
 - Stop when the current goal is completed, blocked, `review_pending`, or there is no work left to progress.

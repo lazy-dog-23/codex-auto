@@ -119,7 +119,14 @@ function New-RelayPrompt {
 
 如果 `prepare-worktree` 失败，原样汇报失败原因并停止。
 
-如果 `ready_for_automation=false`，原样汇报 `next_automation_reason` 并停止。
+如果 `ready_for_automation=false`，先判断是不是“可恢复的 closeout 脏改动”：
+- 如果 `next_automation_reason` 或 warning 明确要求运行 `codex-autonomy review` 来收口当前 repo diff，
+  先根据当前 dirty diff、最近 journal/result 和当前 task，补跑这次 closeout 真正需要的最小验证门；至少要运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，
+  再运行 `codex-autonomy review`，
+  然后重新运行 `codex-autonomy status`。
+- 如果重新检查后仍然 `ready_for_automation=false`，原样汇报新的 `next_automation_reason` 并停止。
+- 如果一开始就不是这种可恢复 closeout diff，原样汇报 `next_automation_reason` 并停止。
+
 如果 `thread_binding_state` 不是 `bound_to_current`，明确报告 mismatch 并停止。
 
 如果允许继续，只推进当前已批准目标的一次有界 sprint 闭环：

@@ -83,7 +83,7 @@ codex-autonomy --version
 - `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。
 - `codex-autonomy approve-proposal --goal-id <goalId>`：把提案物化为任务并激活该 goal。
 - `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。
-- `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。
+- `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。当 diff 可提交时，它还会自动执行受控 closeout commit，并立刻对齐 background worktree。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
 - `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
@@ -108,7 +108,7 @@ codex-autonomy --version
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
 - `autonomy/journal.md`：每次 run 只追加一条记录。
 - `scripts/verify.ps1`：唯一验收门。
-- `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
+- `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；通常通过 `codex-autonomy review` 调用。项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
 
 ## 运行模型
 
@@ -162,6 +162,7 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - 需要稳定后台调度时，优先使用 `cron + HOURLY`，或改用外部调度器触发有界执行。
 - 这个源码仓现在附带了一组外部调度测试脚本：`scripts/run-codex-relay-scheduled-test.ps1` 和 `scripts/register-codex-relay-scheduled-test.ps1`，用于通过公开 relay CLI 走 `Task Scheduler -> relay -> 绑定线程`，不依赖私有 Codex 存储。
 - 这条 relay runner 现在会把每次调用明确标记成“外部调度唤醒”，要求目标线程先检查 `codex-autonomy status`，且只有 `thread_binding_state=bound_to_current` 时才允许推进一次 bounded loop；否则按 mismatch/不可运行状态收口并停止。
+- 如果下一次唤醒发现主仓库留下了可恢复的 closeout diff，`status` 会明确提示先运行 `codex-autonomy review`；外部调度 runner 也会先补跑一次 `scripts/verify.ps1 + codex-autonomy review` 做自愈，再重新检查是否可继续。
 - 这组 scheduled runner 现在默认把日志写到 `%CODEX_HOME%`；如果没有该环境变量，则回退到 `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` 或 `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`，避免外部调度产物把目标仓库弄脏。
 
 近期验证结论（2026-04-16）：

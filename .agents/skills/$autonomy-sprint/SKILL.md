@@ -12,6 +12,7 @@ Use this skill when the goal should start immediately and keep moving in short c
 - Start every `继续当前目标`, `处理下一个目标`, or sprint continuation pass by running `codex-autonomy status` from the repo root.
 - Read the current goal, task queue, most recent result, and the latest `ready_for_automation` / `next_automation_reason` fields.
 - If the status output warns `git_runtime_probe_deferred` or `background_runtime_probe_deferred`, run `git status --short` from the repo root before continuing; if that direct Git check shows unmanaged diffs, report them and stop.
+- If `codex-autonomy status` says the repo has a recoverable closeout diff and explicitly tells you to run `codex-autonomy review`, first rerun the narrowest verification needed for that dirty diff; at minimum run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether the loop can continue.
 - Start with one immediate kickoff loop when the goal is first approved.
 - Treat the sprint heartbeat as a wake-up interval, not a task duration.
 - When sprint_active is false or paused is true, keep the loop to a status check and report, then stop.

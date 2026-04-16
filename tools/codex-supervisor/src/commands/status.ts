@@ -19,7 +19,13 @@ import { countOpenBlockers, countReadyTasksForGoal, findNextReadyTask } from "..
 import { resolveSummarySnapshot, scopeResultsSummary } from "../domain/results.js";
 import { isGoalCompletionBlockedByVerification, summarizeVerification } from "../domain/verification.js";
 import { detectGlobalCliInstall } from "../infra/cli-install.js";
-import { DEFAULT_BACKGROUND_WORKTREE_BRANCH, detectGitRepository, getBackgroundWorktreePath, getWorktreeSummary } from "../infra/git.js";
+import {
+  DEFAULT_BACKGROUND_WORKTREE_BRANCH,
+  detectGitRepository,
+  getBackgroundWorktreePath,
+  getWorktreeSummary,
+  inspectAutonomyCommitGate,
+} from "../infra/git.js";
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess, isChildProcessSpawnBlocked } from "../infra/process.js";
 import { isAutonomyRuntimeAllowlistedPath, resolveRepoPaths } from "../shared/paths.js";
@@ -837,13 +843,22 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
         );
       } else {
         readyForAutomation = false;
-        pushUniqueWarning(
-          warnings,
-          "repo_dirty_unmanaged",
-          repositoryDirty.unmanagedDirtyPaths.length > 0
-            ? `Current repository is dirty outside the managed control surface: ${repositoryDirty.unmanagedDirtyPaths.join(", ")}.`
-            : "Current repository is dirty, and Git did not report which unmanaged paths changed.",
-        );
+        const commitGate = await inspectAutonomyCommitGate(gitRepo.path, state.autonomy_branch);
+        if (commitGate.commitReady && commitGate.blockedPaths.length === 0 && commitGate.allowedPaths.length > 0) {
+          pushUniqueWarning(
+            warnings,
+            "repo_dirty_review_recoverable",
+            `Current repository has a recoverable autonomy closeout diff: ${commitGate.allowedPaths.join(", ")}. Run codex-autonomy review to verify and create the controlled closeout commit before the next automation loop.`,
+          );
+        } else {
+          pushUniqueWarning(
+            warnings,
+            "repo_dirty_unmanaged",
+            repositoryDirty.unmanagedDirtyPaths.length > 0
+              ? `Current repository is dirty outside the managed control surface: ${repositoryDirty.unmanagedDirtyPaths.join(", ")}.`
+              : "Current repository is dirty, and Git did not report which unmanaged paths changed.",
+          );
+        }
       }
     }
 

@@ -10,7 +10,8 @@ Use this skill when a task has reached a reviewable state and needs an effect-le
 ## Responsibilities
 
 - Read the current goal, task, and latest verification context.
-- Run `scripts/review.ps1` and interpret the result in plain language.
+- Run `codex-autonomy review` and interpret the result in plain language.
+- Treat `codex-autonomy review` as the closeout gate: it executes `scripts/review.ps1`, attempts the controlled autonomy closeout commit when the diff is eligible, and immediately re-aligns the background worktree after a successful commit.
 - Record whether the change is acceptable or needs follow-up, and leave a concise next-step suggestion when the follow-up stays inside the approved goal.
 - Keep the review bounded to the current task.
 

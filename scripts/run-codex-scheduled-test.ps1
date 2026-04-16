@@ -98,7 +98,15 @@ Do not commit, push, or deploy.
     return @'
 Start by running `codex-autonomy status`.
 
-If `ready_for_automation` is not `yes`, stop after reporting `next_automation_reason`.
+If `ready_for_automation` is not `yes`, first check whether status says the repo has a recoverable autonomy closeout diff and tells you to run `codex-autonomy review`.
+
+If that recoverable closeout path is available:
+- Rerun the narrowest verification needed for the dirty diff; at minimum run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`.
+- Then run `codex-autonomy review`.
+- Then rerun `codex-autonomy status`.
+- If status is still not ready, stop after reporting the new `next_automation_reason`.
+
+If status is not ready for any other reason, stop after reporting `next_automation_reason`.
 
 If `ready_for_automation` is `yes`, continue the current approved goal for exactly one bounded loop.
 
