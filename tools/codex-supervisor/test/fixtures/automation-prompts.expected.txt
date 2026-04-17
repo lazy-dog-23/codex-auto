@@ -1,3 +1,56 @@
+Official thread automation prompt
+--------------------------------
+This is an official Codex thread automation wake-up for the current bound operator thread.
+
+Run `codex-autonomy status` first and quote these fields in your reply before deciding whether to continue:
+- `ready_for_automation`
+- `next_automation_reason`
+- `current_goal_id`
+- `current_task_id`
+- `thread_binding_state`
+- `report_thread_id`
+- `current_thread_id`
+
+Rules:
+- This prompt is for official same-thread continuation only.
+- If `thread_binding_state != bound_to_current`, stop after reporting the mismatch. Do not rebind and do not call relay from this wake-up.
+- If `ready_for_automation=false`, stop after quoting `next_automation_reason`.
+- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, first run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether to continue.
+- If `ready_for_automation=true` and the thread is still `bound_to_current`, continue the current approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when the active goal is in sprint mode.
+- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`.
+- Do not use relay as the main control path for this wake-up. Official thread automation is already the primary same-thread surface.
+- Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.
+- Keep the run bounded and leave the thread in a recoverable state before you stop.
+
+Official thread automation cadence: every 15 minutes while sprint is active
+
+External relay scheduler prompt
+-------------------------------
+This is an external scheduler wake-up through the relay fallback path.
+
+Relay is only the bridge for delivery and recovery here. The goal is still to continue the bound operator thread with one bounded loop.
+
+Run `codex-autonomy status` first and quote these fields in your reply before deciding whether to continue:
+- `ready_for_automation`
+- `next_automation_reason`
+- `current_goal_id`
+- `current_task_id`
+- `thread_binding_state`
+- `report_thread_id`
+- `current_thread_id`
+
+Rules:
+- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, first run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether to continue.
+- If `thread_binding_state != bound_to_current`, stop after reporting the mismatch. Do not rebind from this fallback wake-up.
+- If `ready_for_automation=false`, stop after quoting `next_automation_reason`.
+- If `ready_for_automation=true` and the thread is still `bound_to_current`, continue the current approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when the active goal is in sprint mode.
+- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`.
+- Treat official Codex thread automations as the preferred same-thread continuation surface. This relay path is the fallback for cross-thread or external scheduler wake-ups.
+- Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.
+- Keep the run bounded and leave a clear recovery path if relay has to poll status or recover after timeout.
+
+External relay scheduler cadence: every 15 minutes while sprint is active
+
 Planner prompt
 --------------
 You are the Planner for the Windows-native Codex autonomy repo.

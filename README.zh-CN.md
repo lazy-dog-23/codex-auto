@@ -87,7 +87,7 @@ codex-autonomy --version
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
 - `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
-- `codex-autonomy emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner 五类 prompt 与建议 cadence。
+- `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路、外部 relay scheduler fallback，以及 Planner / Worker / Reviewer / Reporter / Sprint runner 的机读 prompt bundle。
 - `codex-autonomy pause` / `resume`：暂停或恢复自治循环。
 - `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。
 - `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。
@@ -139,15 +139,21 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 ## Automation 说明
 
-`emit-automation-prompts` 会输出五类 prompt：
+`emit-automation-prompts --json` 会优先输出 automation surface，再输出角色 prompt：
 
+- `official_thread_automation`
+- `external_relay_scheduler`
 - Planner
 - Worker
 - Reviewer
 - Reporter
 - Sprint runner
 
-Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
+其中：
+
+- `official_thread_automation` 是官方同线程 heartbeat 主路，直接给 app 的 `automation_update(kind="heartbeat", destination="thread")` 使用。
+- `external_relay_scheduler` 是跨线程 / 外部调度 fallback，给 `Task Scheduler -> relay -> 绑定线程` 这条链路使用。
+- Sprint runner 的默认工作方式仍然是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
 
 关于模型字段要注意一件事：
 
@@ -155,23 +161,32 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - 所以 repo 里的 `.codex/config.toml` 是兜底配置，负责给当前项目和新 turn 提供稳定默认值。
 - 也就是说，automation 侧能配置时用 automation 配置，不能持久化时靠 repo `.codex/config.toml` 托底。
 
-已知限制（基于当前 Windows Codex App 实测）：
+已知边界（基于当前 Windows Codex App 实测）：
 
-- `heartbeat + MINUTELY` 当前属于已知不可靠路径：调度器可能只推进下一次触发时间，但不实际向线程投递执行。
-- 这类行为发生时，常见表现是“时间在滚动，但没有真正跑起来”；因此不要把它当成唯一可靠的持续推进机制。
-- 需要稳定后台调度时，优先使用 `cron + HOURLY`，或改用外部调度器触发有界执行。
+- 从 26.415 开始，官方 thread automation 才是同线程持续推进的首选路径；它保留线程上下文，适合 repo-local autonomy 的 bounded loop。
+- 更早的 Windows 实测里，旧的 `heartbeat + MINUTELY` 路径曾出现“时间在滚动，但没有真正投递执行”的现象。这个结论只覆盖旧路径，不应笼统套用到 26.415 的官方 thread automation。
+- 但在 2026-04-17 的同线程 live 验收里，直接附着到已绑定线程的官方 heartbeat 仍然复现了“`last_run_at` 前进、`automation_runs=0`、目标线程没有新 turn”的现象。也就是说，官方 thread automation 仍然是架构上的主路，但这台机器上的 runtime 还不能据此判定为稳定可用；当前实际可运行 fallback 仍是 external relay scheduler。
+- 当前线程不是绑定线程，或者必须从 app 外部唤醒时，再使用 relay / 外部调度器作为 fallback bridge。
 - 这个源码仓现在附带了一组外部调度测试脚本：`scripts/run-codex-relay-scheduled-test.ps1` 和 `scripts/register-codex-relay-scheduled-test.ps1`，用于通过公开 relay CLI 走 `Task Scheduler -> relay -> 绑定线程`，不依赖私有 Codex 存储。
 - 这条 relay runner 现在会把每次调用明确标记成“外部调度唤醒”，要求目标线程先检查 `codex-autonomy status`，且只有 `thread_binding_state=bound_to_current` 时才允许推进一次 bounded loop；否则按 mismatch/不可运行状态收口并停止。
 - 如果下一次唤醒发现主仓库留下了可恢复的 closeout diff，`status` 会明确提示先运行 `codex-autonomy review`；外部调度 runner 也会先补跑一次 `scripts/verify.ps1 + codex-autonomy review` 做自愈，再重新检查是否可继续。
 - 这组 relay scheduled runner 的默认组合现在是 `TimeoutSec=300`、`StatusPollAttempts=22`、`StatusPollIntervalSec=15`，并默认开启 `RecoverOnTimeout`；目标是优先等到同轮收口，超时时也直接走 recover，而不是过早把单轮 bounded loop 放掉。
 - 对 `timed_out + active turn` 这类长回合，scheduled runner 不会在任务进程里同步阻塞等待 `relay_dispatch_recover` 收尾；它会先记录可恢复状态并退出，下一轮启动前先检查上一条 dispatch 是否仍在运行，避免重复向同一绑定线程投递新消息。
 - 这组 scheduled runner 现在默认把日志写到 `%CODEX_HOME%`；如果没有该环境变量，则回退到 `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` 或 `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`，避免外部调度产物把目标仓库弄脏。
+- 默认用 in-app browser 验收未登录的本地/公开页面；只有登录态页面才切到当前浏览器桥或其他 live browser 路径。
 
 近期验证结论（2026-04-16）：
 
 - 已在真实 Windows Codex App 绑定线程上跑通 `长回合 -> relay_send_wait 超时 -> relay_dispatch_status 收口成功 -> 后续短消息继续成功` 这条恢复链。
 - 同一轮里，绑定线程完成了一次 verify closeout，并把当前 active goal 标记为 completed。
 - 因当前受限环境无法注册 Windows `Task Scheduler` 任务，且 runner 里额外拉起 app-server 会触发 `spawn EPERM`，这次会话没有在系统调度层完成最终验收；已验证的是 relay 入口、绑定线程执行和超时恢复语义。
+
+近期验证结论（2026-04-17）：
+
+- 针对真实绑定线程 `019d8c93-bb6f-7710-a49b-43298c1bcd2e` 做了一次官方 heartbeat live acceptance。
+- 临时 heartbeat `bilimusic2-official-hb-live-test-20260417-1430` 能被 app 创建为 `ACTIVE`，其 automation TOML 和 SQLite 行都存在，`last_run_at` 与 `next_run_at` 也会推进。
+- 但同一时间内，目标线程没有出现任何新 turn，`automation_runs` 仍然是 `0`，也没有出现测试 marker 回复。
+- 结论是：这台机器上的官方 heartbeat runtime 仍然存在“时间在滚动，但没有真正投递执行”的 live 问题；因此文档和 router 继续把官方 thread automation 保留为架构优先面，同时把 external relay scheduler 保留为当前机器上的实际 fallback。
 
 ## 新项目线程怎么接
 
@@ -182,6 +197,8 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - `直接做这个目标`
 - `继续当前目标`
 - `汇报当前情况`
+
+没有项目根目录的 Chats 更适合 research / planning / 讨论，不适合安装 repo-local autonomy 控制面。真正的安装和持续推进应放在项目线程里完成。
 
 全局 router skill 的工作方式是：
 

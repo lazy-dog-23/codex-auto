@@ -174,6 +174,9 @@ function buildMessage(summary: StatusSummary): string {
     `upgrade_hint=${formatNullableText(summary.upgrade_hint)}`,
     `cli_install_state=${formatNullableText(summary.cli_install_state)}`,
     `next_automation_reason=${formatNullableText(summary.next_automation_reason)}`,
+    `recommended_automation_surface=${summary.recommended_automation_surface}`,
+    `recommended_automation_prompt=${formatNullableText(summary.recommended_automation_prompt)}`,
+    `recommended_automation_reason=${formatNullableText(summary.recommended_automation_reason)}`,
     `ready_for_automation=${summary.ready_for_automation ? "yes" : "no"}`,
   ].join(" ");
 }
@@ -298,6 +301,52 @@ function buildRuntimeAutomationReason(warnings: readonly { code: string; message
   }
 
   return blockingWarnings.map((warning) => warning.message).join("; ");
+}
+
+function resolveRecommendedAutomation(options: {
+  readyForAutomation: boolean;
+  nextAutomationReason: string | null;
+  hasReportThread: boolean;
+  currentThreadId: string | null;
+  threadBindingState: StatusSummary["thread_binding_state"];
+  threadBindingHint: string | null;
+}): Pick<
+  StatusSummary,
+  "recommended_automation_surface" | "recommended_automation_reason" | "recommended_automation_prompt"
+> {
+  if (options.threadBindingState === "bound_to_current" && options.readyForAutomation) {
+    return {
+      recommended_automation_surface: "thread_automation",
+      recommended_automation_reason: "Current thread is already bound as report_thread_id and runtime checks passed; prefer official Codex thread automations for same-thread continuation.",
+      recommended_automation_prompt: "official_thread_automation",
+    };
+  }
+
+  if (options.threadBindingState !== "bound_to_current" && options.hasReportThread) {
+    let reason = "A safe report_thread_id is already bound, so same-goal continuation should wake the bound thread through the external relay scheduler fallback.";
+    if (options.threadBindingState === "bound_to_other") {
+      reason = options.threadBindingHint
+        ?? "The current thread is not the bound operator thread. Use the external relay scheduler fallback or move back to the bound thread instead of creating a same-thread heartbeat here.";
+    } else if (options.threadBindingState === "bound_without_current_thread") {
+      reason = "report_thread_id is bound, but the current thread identity is unavailable in this environment. Use the external relay scheduler fallback against the bound thread instead of guessing the operator surface.";
+    }
+
+    return {
+      recommended_automation_surface: "external_relay_scheduler",
+      recommended_automation_reason: reason,
+      recommended_automation_prompt: "external_relay_scheduler",
+    };
+  }
+
+  return {
+    recommended_automation_surface: "manual_only",
+    recommended_automation_reason: options.nextAutomationReason
+      ?? (options.currentThreadId
+        ? "No safe bound report_thread_id is available yet. Bind the current operator thread before enabling automation."
+        : options.threadBindingHint
+          ?? "No safe bound report_thread_id is available yet, and the current thread identity is unavailable in this environment."),
+    recommended_automation_prompt: null,
+  };
 }
 
 const NON_BLOCKING_RUNTIME_WARNING_CODES = new Set([
@@ -632,6 +681,14 @@ export function buildStatusSummary(
     continuationDecision: scopedResults.continuationDecision,
     nextAutomationReason,
   });
+  const recommendedAutomation = resolveRecommendedAutomation({
+    readyForAutomation,
+    nextAutomationReason,
+    hasReportThread,
+    currentThreadId: threadBindingContext.currentThreadId,
+    threadBindingState: threadBindingContext.bindingState,
+    threadBindingHint: threadBindingContext.bindingHint,
+  });
 
   const summary: StatusSummary = {
     ok: true,
@@ -682,6 +739,9 @@ export function buildStatusSummary(
     upgrade_blocking: isUpgradeBlocking(options.upgradeState ?? null),
     upgrade_hint: buildUpgradeHint(options.upgradeState ?? null),
     cli_install_state: options.cliInstallState ?? null,
+    recommended_automation_surface: recommendedAutomation.recommended_automation_surface,
+    recommended_automation_reason: recommendedAutomation.recommended_automation_reason,
+    recommended_automation_prompt: recommendedAutomation.recommended_automation_prompt,
     results_summary: {
       planner_summary: scopedResults.plannerSummary,
       worker_result: scopedResults.workerResult,
@@ -1025,6 +1085,14 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     autoContinueWithinGoal: settingsDoc.auto_continue_within_goal,
     nextAutomationReason,
   });
+  const recommendedAutomation = resolveRecommendedAutomation({
+    readyForAutomation,
+    nextAutomationReason,
+    hasReportThread,
+    currentThreadId: summary.current_thread_id,
+    threadBindingState: summary.thread_binding_state,
+    threadBindingHint: summary.thread_binding_hint,
+  });
 
   const result: StatusSummary = {
     ...summary,
@@ -1036,6 +1104,9 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     continuation_reason: continuationReason,
     upgrade_blocking: isUpgradeBlocking(summary.upgrade_state),
     upgrade_hint: buildUpgradeHint(summary.upgrade_state),
+    recommended_automation_surface: recommendedAutomation.recommended_automation_surface,
+    recommended_automation_reason: recommendedAutomation.recommended_automation_reason,
+    recommended_automation_prompt: recommendedAutomation.recommended_automation_prompt,
     warnings: warnings.length > 0 ? warnings : undefined,
   };
 

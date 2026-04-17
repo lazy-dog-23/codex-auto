@@ -111,6 +111,17 @@ export const THREAD_BINDING_STATES = [
   "unbound_current_unavailable",
 ] as const;
 
+export const RECOMMENDED_AUTOMATION_SURFACES = [
+  "thread_automation",
+  "external_relay_scheduler",
+  "manual_only",
+] as const;
+
+export const RECOMMENDED_AUTOMATION_PROMPTS = [
+  "official_thread_automation",
+  "external_relay_scheduler",
+] as const;
+
 export const MANAGED_FILE_CLASSES = [
   "static_template",
   "repo_customized",
@@ -140,6 +151,8 @@ export type AutoContinueState = (typeof AUTO_CONTINUE_STATES)[number];
 export type AutomationState = (typeof AUTOMATION_STATES)[number];
 export type ManagedFileClass = (typeof MANAGED_FILE_CLASSES)[number];
 export type ThreadBindingState = (typeof THREAD_BINDING_STATES)[number];
+export type RecommendedAutomationSurface = (typeof RECOMMENDED_AUTOMATION_SURFACES)[number];
+export type RecommendedAutomationPrompt = (typeof RECOMMENDED_AUTOMATION_PROMPTS)[number];
 
 export interface GoalTransitionSnapshot {
   from_goal_id: string;
@@ -424,6 +437,9 @@ export interface StatusSummary extends CommandResult {
   has_recorded_run: boolean;
   results_scope_note: string | null;
   next_automation_reason: string | null;
+  recommended_automation_surface: RecommendedAutomationSurface;
+  recommended_automation_reason: string | null;
+  recommended_automation_prompt: RecommendedAutomationPrompt | null;
   automation_state: AutomationState;
   auto_continue_state: AutoContinueState;
   continuation_reason: string | null;
@@ -457,6 +473,8 @@ export interface AutomationPromptSpec {
 }
 
 export interface AutomationPromptsResult extends CommandResult {
+  official_thread_automation: AutomationPromptSpec;
+  external_relay_scheduler: AutomationPromptSpec;
   planner: AutomationPromptSpec;
   worker: AutomationPromptSpec;
   reviewer: AutomationPromptSpec;

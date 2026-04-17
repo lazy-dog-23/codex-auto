@@ -83,11 +83,15 @@ describe("status command", () => {
     expect(summary.remaining_ready).toBe(1);
     expect(summary.last_followup_summary).toBe("Add a regression check for unblock flow.");
     expect(summary.next_automation_reason).toContain("open blocker");
+    expect(summary.recommended_automation_surface).toBe("external_relay_scheduler");
+    expect(summary.recommended_automation_prompt).toBe("external_relay_scheduler");
+    expect(summary.recommended_automation_reason).toContain("external relay scheduler fallback");
     expect(summary.message).toContain("ready_for_automation=no");
     expect(summary.message).toContain("auto_continue_state=stopped");
     expect(summary.message).toContain("verification_pending=0");
     expect(summary.message).toContain("summary_kind=thread_summary");
     expect(summary.message).toContain("next_automation_reason=There is 1 open blocker(s).");
+    expect(summary.message).toContain("recommended_automation_surface=external_relay_scheduler");
   });
 
   it("surfaces verification closeout gaps even when task execution is otherwise done", () => {
@@ -265,6 +269,16 @@ describe("status command", () => {
         commit: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-42/task-ready): Ready task", review_status: null },
         reporter: { status: "sent", goal_id: "goal-42", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
       },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+      },
     );
 
     expect(summary.ready_for_automation).toBe(true);
@@ -279,6 +293,9 @@ describe("status command", () => {
     expect(summary.next_task_id).toBe("task-ready");
     expect(summary.remaining_ready).toBe(1);
     expect(summary.next_automation_reason).toBe("Ready for automation: active or planning work is available.");
+    expect(summary.recommended_automation_surface).toBe("thread_automation");
+    expect(summary.recommended_automation_prompt).toBe("official_thread_automation");
+    expect(summary.recommended_automation_reason).toContain("official Codex thread automations");
   });
 
   it("requires report_thread_id before automation can run", () => {
@@ -361,6 +378,8 @@ describe("status command", () => {
     expect(summary.next_automation_reason).toBe(
       "Current thread identity is unavailable in this environment. Run codex-autonomy bind-thread --report-thread-id <id> before automation can run.",
     );
+    expect(summary.recommended_automation_surface).toBe("manual_only");
+    expect(summary.recommended_automation_prompt).toBeNull();
   });
 
   it("marks completed goal queues as idle_completed instead of generic blocked", () => {
@@ -520,6 +539,7 @@ describe("status command", () => {
     expect(summary.results_summary?.planner_summary).toBe("Planned the next ready window.");
     expect(summary.results_summary?.commit_result).toBe("autonomy(goal-alpha/task-b): Wire status report");
     expect(summary.next_automation_reason).toContain("Current workspace is not a Git repository");
+    expect(summary.recommended_automation_surface).toBe("external_relay_scheduler");
     expect(summary.message).toContain("commit=abc123");
     expect(summary.message).toContain("next_automation_reason=Current workspace is not a Git repository");
   });

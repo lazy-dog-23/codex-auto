@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAutomationPromptsResult,
+  buildExternalRelaySchedulerPrompt,
+  buildOfficialThreadAutomationPrompt,
   buildPlannerAutomationPrompt,
   buildReporterAutomationPrompt,
   buildReviewerAutomationPrompt,
@@ -77,6 +79,25 @@ describe("automation prompts", () => {
     expect(buildSprintAutomationPrompt()).toContain("commit failures must be reported immediately");
   });
 
+  it("includes official thread automation and relay fallback prompts", () => {
+    const officialPrompt = buildOfficialThreadAutomationPrompt();
+    const relayPrompt = buildExternalRelaySchedulerPrompt();
+
+    expect(officialPrompt).toContain("official Codex thread automation wake-up");
+    expect(officialPrompt).toContain("thread_binding_state");
+    expect(officialPrompt).toContain("bound_to_current");
+    expect(officialPrompt).toContain("codex-autonomy status");
+    expect(officialPrompt).toContain("Do not use relay as the main control path");
+    expect(officialPrompt).toContain("in-app browser");
+
+    expect(relayPrompt).toContain("external scheduler wake-up through the relay fallback path");
+    expect(relayPrompt).toContain("scripts/verify.ps1");
+    expect(relayPrompt).toContain("codex-autonomy review");
+    expect(relayPrompt).toContain("thread_binding_state");
+    expect(relayPrompt).toContain("bound_to_current");
+    expect(relayPrompt).toContain("Treat official Codex thread automations as the preferred same-thread continuation surface.");
+  });
+
   it("renders the golden output", () => {
     const expected = readFixture("automation-prompts.expected.txt");
     const actual = formatAutomationPromptsResult(buildAutomationPromptsResult()).trimEnd();
@@ -88,6 +109,9 @@ describe("automation prompts", () => {
     const result = await runEmitAutomationPromptsCommand();
 
     expect(result.ok).toBe(true);
+    expect(result.official_thread_automation.name).toBe("official-thread-automation");
+    expect(result.external_relay_scheduler.name).toBe("external-relay-scheduler");
+    expect(result.official_thread_automation.cadence).toBe("every 15 minutes while sprint is active");
     expect(result.planner.name).toBe("planner-cruise");
     expect(result.planner.cadence).toBe("every 6 hours");
     expect(result.worker.cadence).toBe("every 2 hours");

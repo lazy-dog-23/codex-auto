@@ -76,6 +76,8 @@ describe("install scaffold", () => {
     expect(result.summary.thread_binding_state).toBe("unbound_current_unavailable");
     expect(result.summary.next_operator_action).toBe("bind_explicit_thread");
     expect(result.summary.next_operator_command).toBe("codex-autonomy bind-thread --report-thread-id <id>");
+    expect(result.summary.next_automations.map((item) => item.name)).toContain("official-thread-automation");
+    expect(result.summary.next_automations.map((item) => item.name)).toContain("external-relay-scheduler");
     expect(result.summary.next_automations.map((item) => item.name)).toContain("planner-cruise");
     expect(result.summary.next_automations.map((item) => item.name)).toContain("worker-cruise");
     expect(result.summary.next_automations.map((item) => item.name)).toContain("reviewer-cruise");
@@ -180,7 +182,8 @@ describe("install scaffold", () => {
     expect(readme).toContain("codex-autonomy install --target <repo>");
     expect(readme).toContain("relay completion event");
     expect(readme).toContain("heartbeat + MINUTELY");
-    expect(readme).toContain("cron + HOURLY");
+    expect(readme).toContain("官方 thread automation 是同线程持续推进的首选路径");
+    expect(readme).toContain("fallback bridge");
 
     const installMetadata = JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8")) as {
       managed_paths: string[];

@@ -1068,9 +1068,12 @@ export function getReadmeManagedSectionMarkdown(): string {
     "",
     "- 标准路径：`codex-autonomy <command>`。",
     "- 机器级自然语言入口支持“把 auto 装进当前项目”“目标是……”“确认提案”“用冲刺模式推进这个目标”“继续当前目标”“汇报当前情况”等表达；router 会先做 install/upgrade/bind，再继续目标流。",
+    "- 官方同线程持续推进主路：在已绑定的项目线程内，用 `codex-autonomy emit-automation-prompts --json` 取 `official_thread_automation.prompt`，再交给 Codex thread automation heartbeat。",
+    "- 外部 `Task Scheduler -> relay -> 绑定线程` 属于 fallback bridge，不是默认主路。",
     "- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标转成待确认 goal。",
     "- `codex-autonomy approve-proposal --goal-id <goalId>`：确认提案并物化任务。",
     "- `codex-autonomy status` / `report` / `review`：查看状态、结果与 review gate；`review` 会在可提交时自动完成受控 closeout commit 并立刻对齐 background worktree。",
+    "- `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路与 relay fallback 所需的机读 prompt bundle。",
     "",
     "### 控制面文件入口",
     "",
@@ -1089,8 +1092,10 @@ export function getReadmeManagedSectionMarkdown(): string {
     "",
     "### 已知限制",
     "",
-    "- 基于当前 Windows Codex App 的实测，`heartbeat + MINUTELY` 属于已知不可靠路径：可能只滚动下一次触发时间，但不实际向线程投递执行。",
-    "- 需要稳定调度时，优先使用 `cron + HOURLY`，或改用外部调度器触发有界执行。",
+    "- 自 26.415 起，官方 thread automation 是同线程持续推进的首选路径；它保留线程上下文，适合 repo-local autonomy 的 bounded loop。",
+    "- 早期 Windows 实测里，旧的 `heartbeat + MINUTELY` 路径曾出现“时间滚动但不实际投递”的现象。这个结论只覆盖旧路径验证，不应笼统套用到 26.415 的官方 thread automation。",
+    "- 当当前线程不是绑定线程，或需要跨线程 / 外部唤醒时，再使用 relay 或外部调度器作为 fallback bridge。",
+    "- 默认用 in-app browser 验收未登录的本地/公开页面；只有登录态页面才切到当前浏览器桥或其他 live browser 路径。",
   ].join("\n");
 }
 

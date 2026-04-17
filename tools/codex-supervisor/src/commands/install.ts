@@ -1895,6 +1895,16 @@ function buildInstallMessage(
 function buildNextAutomationSuggestions(isGitRepo: boolean): Array<{ name: string; purpose: string }> {
   const suggestions = [
     {
+      name: "official-thread-automation",
+      purpose: isGitRepo
+        ? "Primary same-thread bounded-loop continuation through official Codex thread automations on the bound operator thread."
+        : "Primary same-thread continuation once the repo becomes automation-ready and the bound operator thread can host a Codex thread automation.",
+    },
+    {
+      name: "external-relay-scheduler",
+      purpose: "Fallback bridge for cross-thread or external scheduler wake-ups when the current thread is not the bound operator thread.",
+    },
+    {
       name: "planner-cruise",
       purpose: "Maintain the ready window and proposal state for the active goal.",
     },

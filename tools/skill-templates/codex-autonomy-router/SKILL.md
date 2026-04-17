@@ -9,6 +9,7 @@ Use this skill inside any local project thread when the user wants the current r
 
 ## Preconditions
 
+- This skill is for project threads with a real repository root. If the current conversation is a Chat, a project-less thread, or a research/discussion workspace without a repo root, do not try to install the control surface. Explain that Chats are for research/planning/discussion, while repo-local autonomy needs a project thread.
 - Work in the current repository only. Do not install into another path unless the user explicitly names it.
 - Prefer PowerShell-native commands.
 - Assume the product source repository lives at `{{SOURCE_REPO}}` on this machine.
@@ -124,16 +125,28 @@ Map the user request to the narrowest `codex-autonomy` flow:
 - continue current goal:
   - use this path for `继续当前目标` or `处理下一个目标`
   - inspect `codex-autonomy status` first
+  - when the intent is recurring or automatic continuation, also run `codex-autonomy emit-automation-prompts --json`
   - if the status output warns `git_runtime_probe_deferred` or `background_runtime_probe_deferred`, run `git status --short` from the repo root before trusting readiness; if unmanaged diffs are present, report them and stop
   - if `ready_for_automation=false`, quote `next_automation_reason` from the status output and stop
   - if the active goal is paused, run `codex-autonomy resume`
-  - if the active goal run mode is `sprint`, use the repo-local `$autonomy-sprint` skill for one bounded loop
-  - if the active goal run mode is `cruise`, keep the response bounded to the current ready state unless the user explicitly asks for an immediate bounded work pass
+  - if `recommended_automation_surface=thread_automation` and the user is in the bound project thread, treat official Codex thread automation as the primary path:
+    - take `official_thread_automation.prompt` from `emit-automation-prompts --json`
+    - create or update a thread heartbeat with `automation_update(kind=\"heartbeat\", destination=\"thread\", ...)`
+    - keep the automation prompt short and durable; do not inline scheduler details into the prompt body
+    - if the user also asked to continue now, after the heartbeat is active, use the repo-local `$autonomy-sprint` skill for one bounded loop only
+  - if `recommended_automation_surface=external_relay_scheduler`, do not create a heartbeat in the current thread:
+    - quote `report_thread_id`, `thread_binding_state`, and `recommended_automation_reason`
+    - take `external_relay_scheduler.prompt` from `emit-automation-prompts --json`
+    - route the work to the supported relay / external scheduler fallback instead of pretending the current thread owns the control loop
+  - if `recommended_automation_surface=manual_only`, stop after quoting the blocking reason; do not improvise a fake automation path
+  - for immediate non-recurring continuation, if the active goal run mode is `sprint`, use the repo-local `$autonomy-sprint` skill for one bounded loop
+  - for immediate non-recurring continuation in `cruise`, keep the response bounded to the current ready state unless the user explicitly asks for an immediate bounded work pass
 - cruise mode change:
   - use this path for `用巡航模式推进这个目标`
   - inspect `codex-autonomy status` first; if there is no active or confirmable goal, report that and stop
   - run `codex-autonomy set-run-mode <goalId> cruise`
   - if the goal is paused, run `codex-autonomy resume`
+  - if the user also wants ongoing continuation and `recommended_automation_surface=thread_automation`, create or update the official thread heartbeat from `official_thread_automation.prompt`
   - summarize the updated run mode and next ready state; do not silently replace cruise with a sprint-style freeform loop
 - status / report:
   - for `汇报当前情况`, prefer `codex-autonomy status`

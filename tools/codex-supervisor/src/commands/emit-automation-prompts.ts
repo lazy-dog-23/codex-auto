@@ -10,9 +10,15 @@ export async function runEmitAutomationPromptsCommand(): Promise<ExtendedAutomat
 export function registerEmitAutomationPromptsCommand(program: Command): void {
   program
     .command("emit-automation-prompts")
-    .description("Emit planner, worker, reviewer, reporter, and sprint automation prompt templates")
-    .action(async () => {
+    .description("Emit official thread automation, relay fallback, and role prompt templates")
+    .option("--json", "Emit machine-readable JSON")
+    .action(async (options: { json?: boolean }) => {
       const result = await runEmitAutomationPromptsCommand();
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
       console.log(formatAutomationPromptsResult(result));
     });
 }

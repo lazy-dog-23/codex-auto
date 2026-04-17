@@ -66,19 +66,28 @@ codex-autonomy --version
 
 ## Known Limitations
 
-- Based on current Windows Codex App validation, `heartbeat + MINUTELY` is a known unreliable path. The scheduler can advance the next trigger time without dispatching an actual thread run.
-- When that happens, the automation can look alive from its schedule while no real work is being delivered to the target thread.
-- For reliable unattended scheduling, prefer `cron + HOURLY` or an external scheduler that triggers bounded runs.
+- Starting with Codex App 26.415, official thread automations are the preferred same-thread continuation surface for repo-local autonomy. They preserve thread context and should be the primary path when the bound project thread can keep working in place.
+- Earlier Windows validation on the older `heartbeat + MINUTELY` path showed cases where the scheduler advanced the next trigger time without dispatching a real thread run. Treat that as a historical caveat about the older path, not as a blanket statement about 26.415 official thread automations.
+- However, a same-thread live acceptance run on 2026-04-17 still reproduced the older symptom on this machine: an official heartbeat attached directly to the bound thread advanced `last_run_at`, left `automation_runs=0`, and produced no new target-thread turn. So official thread automations remain the architecture-aligned primary path, but the runtime on this Windows machine cannot yet be treated as stable; the external relay scheduler remains the operational fallback here.
+- When the current thread is not the bound thread, or the wake-up must come from outside the app, use relay or an external scheduler as the fallback bridge.
 - This repo now includes test scaffolding for the external-scheduler path: `scripts/run-codex-relay-scheduled-test.ps1` and `scripts/register-codex-relay-scheduled-test.ps1` drive `Task Scheduler -> relay -> bound thread` through the public relay CLI instead of private Codex storage.
 - The relay runner now labels each invocation as an external scheduled wake-up, requires the target thread to check `codex-autonomy status`, and only allows one bounded loop when `thread_binding_state=bound_to_current`; otherwise it must stop with a mismatch or readiness report.
 - When a later wake-up finds a recoverable closeout diff in the repo, `status` now tells the operator to run `codex-autonomy review`, and the external scheduler runners self-heal once with `scripts/verify.ps1 + codex-autonomy review` before deciding whether automation can continue.
 - The scheduled runners now write logs under `%CODEX_HOME%` when available, otherwise `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` or `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`, so external scheduler artifacts do not dirty the target repository.
+- Use the in-app browser by default for unauthenticated local/public page verification. Switch to the current browser bridge or another live browser surface only when the flow genuinely depends on login state.
 
 Recent validation (2026-04-16):
 
 - The real bound-thread recovery path has been exercised on a live Windows Codex App repository: `long turn -> relay_send_wait timeout -> relay_dispatch_status succeeds -> short follow-up send succeeds`.
 - In the same validation round, the bound thread completed a verify closeout and marked the active goal completed.
 - The remaining unverified layer in that session was only the system scheduler wake-up itself; the delegated environment could not register Windows `Task Scheduler` tasks and blocked the runner's extra app-server spawn with `spawn EPERM`.
+
+Recent validation (2026-04-17):
+
+- A same-thread official heartbeat live acceptance run targeted the real bound thread `019d8c93-bb6f-7710-a49b-43298c1bcd2e`.
+- The temporary heartbeat `bilimusic2-official-hb-live-test-20260417-1430` was created successfully as `ACTIVE`; both the automation TOML and SQLite row existed, and `last_run_at` / `next_run_at` advanced as expected.
+- But the target thread produced no new turn, `automation_runs` stayed at `0`, and the test marker never appeared in the thread.
+- The practical conclusion is that the official heartbeat runtime on this machine still exhibits the “time advances without a real dispatch” failure mode. The docs and router therefore keep official thread automation as the architecture-first surface, while leaving the external relay scheduler as the working runtime fallback on this machine.
 
 ## Natural-Language Entry
 
@@ -91,6 +100,8 @@ After `scripts/install-global.ps1` finishes, a new Codex thread can drive instal
 - `用冲刺模式推进这个目标`
 - `继续当前目标`
 - `汇报当前情况`
+
+Chats without a project are for research, planning, or discussion. Repo-local autonomy install and continuation should happen inside a project thread with a real repository root.
 
 When the current thread identity is available, the router auto-binds that thread on first use. If the current thread does not match the already-bound `report_thread_id`, the router blocks and requires an explicit rebind instead of silently continuing on the old binding.
 
@@ -109,6 +120,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy bind-thread [--report-thread-id <threadId>]`
 - `codex-autonomy doctor`
 - `codex-autonomy prepare-worktree`
+- `codex-autonomy emit-automation-prompts --json` (machine-readable prompt bundle for official thread automation and relay fallback surfaces)
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`
 - `codex-autonomy generate-proposal`
 - `codex-autonomy approve-proposal --goal-id <goalId>`
