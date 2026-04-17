@@ -94,7 +94,10 @@ function New-RelayPrompt {
 只返回这些字段：
 - SCHEDULED_RELAY_MARKER=STATUS_ONLY_OK
 - ready_for_automation
+- ready_for_execution
 - automation_state
+- goal_supply_state
+- next_automation_step
 - next_automation_reason
 - current_goal
 - current_task
@@ -127,11 +130,15 @@ function New-RelayPrompt {
 
 如果 `thread_binding_state` 不是 `bound_to_current`，明确报告 mismatch 并停止。
 
+如果 `next_automation_step=await_confirmation`，不要执行实现、不要 approve proposal，原样汇报 `goal_supply_state` 和 `next_automation_reason` 后停止。
+
+如果 `next_automation_step=plan_or_rebalance`，只在 repo-local 控制面内做一次有界 planning/rebalance，随后重新运行一次 `codex-autonomy status`；只有在新的状态里 `ready_for_execution=true` 时，才允许继续后面的 bounded loop。
+
 如果允许继续，再运行 `codex-autonomy prepare-worktree`。
 
 如果 `prepare-worktree` 失败，原样汇报失败原因并停止。
 
-如果允许继续，只推进当前已批准目标的一次有界 sprint 闭环：
+如果 `next_automation_step=execute_bounded_loop`，只推进当前 active goal 或下一条 approved goal 的一次有界 sprint 闭环：
 - 最多处理一个 task
 - 遵守仓库 `AGENTS.md` 和 repo-local autonomy skills
 - 必要时命中 verify / review gate
@@ -141,7 +148,10 @@ function New-RelayPrompt {
 结束时请返回：
 - SCHEDULED_RELAY_MARKER=BOUNDED_LOOP_OK
 - ready_for_automation
+- ready_for_execution
 - automation_state
+- goal_supply_state
+- next_automation_step
 - report_thread_id
 - current_thread_id
 - thread_binding_state

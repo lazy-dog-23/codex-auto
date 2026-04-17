@@ -84,7 +84,10 @@ Run `codex-autonomy status` from the repository root and stop.
 
 Return a compact report that includes:
 - ready_for_automation
+- ready_for_execution
 - automation_state
+- goal_supply_state
+- next_automation_step
 - next_automation_reason
 - current_goal
 - current_task
@@ -108,7 +111,13 @@ If that recoverable closeout path is available:
 
 If status is not ready for any other reason, stop after reporting `next_automation_reason`.
 
-If `ready_for_automation` is `yes`, continue the current approved goal for exactly one bounded loop.
+If `ready_for_automation` is `yes`, inspect `ready_for_execution`, `goal_supply_state`, and `next_automation_step` before deciding what to do.
+
+If `next_automation_step` is `await_confirmation`, do not execute implementation and stop after reporting that the next goal is still awaiting confirmation.
+
+If `next_automation_step` is `plan_or_rebalance`, stay inside the repo-local control plane, do one bounded planning/rebalance pass only, rerun `codex-autonomy status` once, and continue into execution only if `ready_for_execution` becomes `yes`.
+
+If `next_automation_step` is `execute_bounded_loop`, continue the current active goal or next approved goal for exactly one bounded loop.
 
 Rules:
 - Follow the repository `AGENTS.md` instructions and repo-local autonomy skills.

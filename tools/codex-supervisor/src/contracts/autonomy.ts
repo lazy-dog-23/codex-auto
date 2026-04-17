@@ -122,6 +122,23 @@ export const RECOMMENDED_AUTOMATION_PROMPTS = [
   "external_relay_scheduler",
 ] as const;
 
+export const GOAL_SUPPLY_STATES = [
+  "active_goal",
+  "approved_goal_available",
+  "awaiting_confirmation",
+  "completed_only",
+  "empty",
+  "manual_triage",
+] as const;
+
+export const AUTOMATION_NEXT_STEPS = [
+  "execute_bounded_loop",
+  "plan_or_rebalance",
+  "await_confirmation",
+  "idle",
+  "manual_triage",
+] as const;
+
 export const MANAGED_FILE_CLASSES = [
   "static_template",
   "repo_customized",
@@ -153,6 +170,8 @@ export type ManagedFileClass = (typeof MANAGED_FILE_CLASSES)[number];
 export type ThreadBindingState = (typeof THREAD_BINDING_STATES)[number];
 export type RecommendedAutomationSurface = (typeof RECOMMENDED_AUTOMATION_SURFACES)[number];
 export type RecommendedAutomationPrompt = (typeof RECOMMENDED_AUTOMATION_PROMPTS)[number];
+export type GoalSupplyState = (typeof GOAL_SUPPLY_STATES)[number];
+export type AutomationNextStep = (typeof AUTOMATION_NEXT_STEPS)[number];
 
 export interface GoalTransitionSnapshot {
   from_goal_id: string;
@@ -456,6 +475,9 @@ export interface StatusSummary extends CommandResult {
   upgrade_blocking: boolean;
   upgrade_hint: string | null;
   cli_install_state: string | null;
+  goal_supply_state: GoalSupplyState;
+  next_automation_step: AutomationNextStep;
+  ready_for_execution: boolean;
   results_summary: {
     planner_summary: string | null;
     worker_result: string | null;
@@ -470,6 +492,9 @@ export interface AutomationPromptSpec {
   name: string;
   cadence: string;
   prompt: string;
+  whenToUse?: string;
+  whenNotToUse?: string;
+  selectionRule?: string;
 }
 
 export interface AutomationPromptsResult extends CommandResult {

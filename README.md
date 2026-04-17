@@ -68,7 +68,7 @@ codex-autonomy --version
 
 - Starting with Codex App 26.415, official thread automations are the preferred same-thread continuation surface for repo-local autonomy. They preserve thread context and should be the primary path when the bound project thread can keep working in place.
 - Earlier Windows validation on the older `heartbeat + MINUTELY` path showed cases where the scheduler advanced the next trigger time without dispatching a real thread run. Treat that as a historical caveat about the older path, not as a blanket statement about 26.415 official thread automations.
-- However, a same-thread live acceptance run on 2026-04-17 still reproduced the older symptom on this machine: an official heartbeat attached directly to the bound thread advanced `last_run_at`, left `automation_runs=0`, and produced no new target-thread turn. So official thread automations remain the architecture-aligned primary path, but the runtime on this Windows machine cannot yet be treated as stable; the external relay scheduler remains the operational fallback here.
+- A later same-thread live revalidation on April 17, 2026, after restarting Codex App, succeeded on this machine: a heartbeat attached to the bound thread produced new in-thread turns again. Treat the earlier miss as a stale-runtime caveat, not as the default assumption for 26.415.
 - When the current thread is not the bound thread, or the wake-up must come from outside the app, use relay or an external scheduler as the fallback bridge.
 - This repo now includes test scaffolding for the external-scheduler path: `scripts/run-codex-relay-scheduled-test.ps1` and `scripts/register-codex-relay-scheduled-test.ps1` drive `Task Scheduler -> relay -> bound thread` through the public relay CLI instead of private Codex storage.
 - The relay runner now labels each invocation as an external scheduled wake-up, requires the target thread to check `codex-autonomy status`, and only allows one bounded loop when `thread_binding_state=bound_to_current`; otherwise it must stop with a mismatch or readiness report.
@@ -84,10 +84,9 @@ Recent validation (2026-04-16):
 
 Recent validation (2026-04-17):
 
-- A same-thread official heartbeat live acceptance run targeted the real bound thread `019d8c93-bb6f-7710-a49b-43298c1bcd2e`.
-- The temporary heartbeat `bilimusic2-official-hb-live-test-20260417-1430` was created successfully as `ACTIVE`; both the automation TOML and SQLite row existed, and `last_run_at` / `next_run_at` advanced as expected.
-- But the target thread produced no new turn, `automation_runs` stayed at `0`, and the test marker never appeared in the thread.
-- The practical conclusion is that the official heartbeat runtime on this machine still exhibits the “time advances without a real dispatch” failure mode. The docs and router therefore keep official thread automation as the architecture-first surface, while leaving the external relay scheduler as the working runtime fallback on this machine.
+- After restarting Codex App, a same-thread official heartbeat live acceptance run targeted a real bound project thread.
+- The recreated heartbeat produced new turns on the bound project thread and kept continuation inside that same thread, which is the intended 26.415 operating model.
+- The practical conclusion is that official thread automation is now the preferred operational surface on this machine when work stays inside the bound project thread. Relay or an external scheduler remains the fallback for cross-thread, cross-project, or out-of-app wake-ups.
 
 ## Natural-Language Entry
 
@@ -121,6 +120,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy doctor`
 - `codex-autonomy prepare-worktree`
 - `codex-autonomy emit-automation-prompts --json` (machine-readable prompt bundle for official thread automation and relay fallback surfaces)
+- The surface-first prompt bundle now includes `whenToUse`, `whenNotToUse`, and `selectionRule` metadata so an agent can choose the right automation surface or role without extra operator coaching.
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`
 - `codex-autonomy generate-proposal`
 - `codex-autonomy approve-proposal --goal-id <goalId>`
@@ -129,6 +129,15 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy status`
 - `codex-autonomy pause` / `resume`
 - `codex-autonomy merge-autonomy-branch`
+
+## Automation Readiness
+
+`codex-autonomy status` now separates scheduler wake-up readiness from execution readiness:
+
+- `ready_for_automation=true` means the control plane can safely wake up and do one bounded next step. That next step may still be planning-only or confirmation-only work.
+- `ready_for_execution=true` means the next wake-up can actually enter a bounded implementation loop.
+- `goal_supply_state` distinguishes whether the next step is continuing an active goal, picking up another approved goal, waiting for proposal confirmation, idling after completion, staying empty, or stopping for manual triage.
+- `next_automation_step` tells the runner whether it should `execute_bounded_loop`, `plan_or_rebalance`, `await_confirmation`, `idle`, or `manual_triage`.
 
 ## Developer Fallback
 

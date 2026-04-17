@@ -13,6 +13,18 @@ function joinLines(lines: readonly string[]): string {
   return lines.join("\n");
 }
 
+function buildPromptSpec(spec: AutomationPromptSpec): AutomationPromptSpec {
+  return spec;
+}
+
+function formatPromptSpecGuidance(spec: AutomationPromptSpec): string[] {
+  return [
+    spec.whenToUse ? `When to use: ${spec.whenToUse}` : null,
+    spec.whenNotToUse ? `When not to use: ${spec.whenNotToUse}` : null,
+    spec.selectionRule ? `Selection rule: ${spec.selectionRule}` : null,
+  ].filter((line): line is string => Boolean(line));
+}
+
 export function buildPlannerAutomationPrompt(): string {
   return joinLines([
     "You are the Planner for the Windows-native Codex autonomy repo.",
@@ -150,10 +162,15 @@ export function buildReporterAutomationPrompt(): string {
 export function buildOfficialThreadAutomationPrompt(): string {
   return joinLines([
     "This is an official Codex thread automation wake-up for the current bound operator thread.",
+    "Choose this surface when `recommended_automation_surface=thread_automation` and the current thread is already `bound_to_current`.",
+    "Do not use this surface when the wake-up must come from outside the app or the current thread is not the bound thread; use the external relay scheduler surface instead.",
     "",
     "Run `codex-autonomy status` first and quote these fields in your reply before deciding whether to continue:",
     "- `ready_for_automation`",
+    "- `ready_for_execution`",
     "- `next_automation_reason`",
+    "- `goal_supply_state`",
+    "- `next_automation_step`",
     "- `current_goal_id`",
     "- `current_task_id`",
     "- `thread_binding_state`",
@@ -164,8 +181,10 @@ export function buildOfficialThreadAutomationPrompt(): string {
     "- This prompt is for official same-thread continuation only.",
     "- If `thread_binding_state != bound_to_current`, stop after reporting the mismatch. Do not rebind and do not call relay from this wake-up.",
     "- If `ready_for_automation=false`, stop after quoting `next_automation_reason`.",
+    "- If `next_automation_step=await_confirmation`, do not execute implementation, do not approve the proposal, and stop after reporting that confirmation is still required.",
+    "- If `next_automation_step=plan_or_rebalance`, stay inside the repo-local control plane, do one bounded planning/rebalance pass only, rerun `codex-autonomy status` once, and continue into execution only if `ready_for_execution=true` after that refresh.",
     "- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, first run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether to continue.",
-    "- If `ready_for_automation=true` and the thread is still `bound_to_current`, continue the current approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when the active goal is in sprint mode.",
+    "- If `next_automation_step=execute_bounded_loop` and the thread is still `bound_to_current`, continue the current active goal or next approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when execution is ready.",
     "- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`.",
     "- Do not use relay as the main control path for this wake-up. Official thread automation is already the primary same-thread surface.",
     "- Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.",
@@ -176,12 +195,17 @@ export function buildOfficialThreadAutomationPrompt(): string {
 export function buildExternalRelaySchedulerPrompt(): string {
   return joinLines([
     "This is an external scheduler wake-up through the relay fallback path.",
+    "Choose this surface when `recommended_automation_surface=external_relay_scheduler` or the wake-up must start outside the bound operator thread.",
+    "Do not use this surface as the default for same-thread recurring work that can stay on the bound project thread.",
     "",
     "Relay is only the bridge for delivery and recovery here. The goal is still to continue the bound operator thread with one bounded loop.",
     "",
     "Run `codex-autonomy status` first and quote these fields in your reply before deciding whether to continue:",
     "- `ready_for_automation`",
+    "- `ready_for_execution`",
     "- `next_automation_reason`",
+    "- `goal_supply_state`",
+    "- `next_automation_step`",
     "- `current_goal_id`",
     "- `current_task_id`",
     "- `thread_binding_state`",
@@ -192,7 +216,9 @@ export function buildExternalRelaySchedulerPrompt(): string {
     "- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, first run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether to continue.",
     "- If `thread_binding_state != bound_to_current`, stop after reporting the mismatch. Do not rebind from this fallback wake-up.",
     "- If `ready_for_automation=false`, stop after quoting `next_automation_reason`.",
-    "- If `ready_for_automation=true` and the thread is still `bound_to_current`, continue the current approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when the active goal is in sprint mode.",
+    "- If `next_automation_step=await_confirmation`, do not execute implementation, do not approve the proposal, and stop after reporting that confirmation is still required.",
+    "- If `next_automation_step=plan_or_rebalance`, stay inside the repo-local control plane, do one bounded planning/rebalance pass only, rerun `codex-autonomy status` once, and continue into execution only if `ready_for_execution=true` after that refresh.",
+    "- If `next_automation_step=execute_bounded_loop` and the thread is still `bound_to_current`, continue the current active goal or next approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when execution is ready.",
     "- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`.",
     "- Treat official Codex thread automations as the preferred same-thread continuation surface. This relay path is the fallback for cross-thread or external scheduler wake-ups.",
     "- Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.",
@@ -234,59 +260,80 @@ export function buildSprintAutomationPrompt(): string {
 }
 
 export function buildOfficialThreadAutomationPromptSpec(): AutomationPromptSpec {
-  return {
+  return buildPromptSpec({
     name: "official-thread-automation",
     cadence: formatSprintHeartbeatCadence(DEFAULT_SPRINT_HEARTBEAT_MINUTES),
     prompt: buildOfficialThreadAutomationPrompt(),
-  };
+    whenToUse: "Use when status recommends `thread_automation` and the current thread is already the bound operator thread.",
+    whenNotToUse: "Do not use when the current thread is unbound, bound to another thread, or the wake-up must originate outside the app.",
+    selectionRule: "Choose this surface only when `recommended_automation_surface=thread_automation` and `thread_binding_state=bound_to_current`.",
+  });
 }
 
 export function buildExternalRelaySchedulerPromptSpec(): AutomationPromptSpec {
-  return {
+  return buildPromptSpec({
     name: "external-relay-scheduler",
     cadence: formatSprintHeartbeatCadence(DEFAULT_SPRINT_HEARTBEAT_MINUTES),
     prompt: buildExternalRelaySchedulerPrompt(),
-  };
+    whenToUse: "Use when the wake-up must cross threads, come from an external scheduler, or the current thread cannot safely continue the bound thread in place.",
+    whenNotToUse: "Do not use as the default for same-thread recurring work that can stay on the bound project thread.",
+    selectionRule: "Choose this surface when `recommended_automation_surface=external_relay_scheduler` or when delivery must start outside the bound operator thread.",
+  });
 }
 
 export function buildPlannerAutomationPromptSpec(): AutomationPromptSpec {
-  return {
+  return buildPromptSpec({
     name: "planner-cruise",
     cadence: formatHourlyCadence(DEFAULT_CRUISE_CADENCE.planner_hours),
     prompt: buildPlannerAutomationPrompt(),
-  };
+    whenToUse: "Use when the control plane needs to refresh proposals, rebalance ready work, or turn safe follow-up and verification gaps into tasks.",
+    whenNotToUse: "Do not use for direct business-code execution or thread-surface selection.",
+    selectionRule: "Choose planner when `next_automation_step=plan_or_rebalance` or when proposal and task-window maintenance is the only bounded next step.",
+  });
 }
 
 export function buildWorkerAutomationPromptSpec(): AutomationPromptSpec {
-  return {
+  return buildPromptSpec({
     name: "worker-cruise",
     cadence: formatHourlyCadence(DEFAULT_CRUISE_CADENCE.worker_hours),
     prompt: buildWorkerAutomationPrompt(),
-  };
+    whenToUse: "Use when there is exactly one ready task inside an approved or active goal and execution is allowed.",
+    whenNotToUse: "Do not use while the loop is waiting for proposal confirmation or when only planning and rebalance work is allowed.",
+    selectionRule: "Choose worker only when `ready_for_execution=true` and a bounded ready task is available.",
+  });
 }
 
 export function buildReviewerAutomationPromptSpec(): AutomationPromptSpec {
-  return {
+  return buildPromptSpec({
     name: "reviewer-cruise",
     cadence: formatHourlyCadence(DEFAULT_CRUISE_CADENCE.reviewer_hours),
     prompt: buildReviewerAutomationPrompt(),
-  };
+    whenToUse: "Use after worker verify passes or when status explicitly says a recoverable closeout diff must be closed through review.",
+    whenNotToUse: "Do not use before verify or as a substitute for planning or execution.",
+    selectionRule: "Choose reviewer after a bounded worker change or closeout recovery, not as the first step.",
+  });
 }
 
 export function buildReporterAutomationPromptSpec(): AutomationPromptSpec {
-  return {
+  return buildPromptSpec({
     name: "reporter",
     cadence: REPORTER_CADENCE_DESCRIPTION,
     prompt: buildReporterAutomationPrompt(),
-  };
+    whenToUse: "Use to summarize state, idle reasons, blockers, and the latest verify, review, and commit results back to the bound thread.",
+    whenNotToUse: "Do not use to plan work, execute code, or approve goal changes.",
+    selectionRule: "Choose reporter for status or report requests and for heartbeat summaries after bounded work completes.",
+  });
 }
 
 export function buildSprintAutomationPromptSpec(): AutomationPromptSpec {
-  return {
+  return buildPromptSpec({
     name: "sprint",
     cadence: formatSprintHeartbeatCadence(DEFAULT_SPRINT_HEARTBEAT_MINUTES),
     prompt: buildSprintAutomationPrompt(),
-  };
+    whenToUse: "Use when an approved goal should move immediately through short bounded plan, work, review, and report loops.",
+    whenNotToUse: "Do not use when sprint is paused, blocked, or still waiting for human confirmation.",
+    selectionRule: "Choose sprint when run mode is sprint and `next_automation_step=execute_bounded_loop`.",
+  });
 }
 
 export function buildAutomationPromptsResult(): ExtendedAutomationPromptsResult {
@@ -307,42 +354,56 @@ export function formatAutomationPromptsResult(result: ExtendedAutomationPromptsR
   return joinLines([
     "Official thread automation prompt",
     "--------------------------------",
+    ...formatPromptSpecGuidance(result.official_thread_automation),
+    "",
     result.official_thread_automation.prompt,
     "",
     `Official thread automation cadence: ${result.official_thread_automation.cadence}`,
     "",
     "External relay scheduler prompt",
     "-------------------------------",
+    ...formatPromptSpecGuidance(result.external_relay_scheduler),
+    "",
     result.external_relay_scheduler.prompt,
     "",
     `External relay scheduler cadence: ${result.external_relay_scheduler.cadence}`,
     "",
     "Planner prompt",
     "--------------",
+    ...formatPromptSpecGuidance(result.planner),
+    "",
     result.planner.prompt,
     "",
     `Planner cadence: ${result.planner.cadence}`,
     "",
     "Worker prompt",
     "-------------",
+    ...formatPromptSpecGuidance(result.worker),
+    "",
     result.worker.prompt,
     "",
     `Worker cadence: ${result.worker.cadence}`,
     "",
     "Reviewer prompt",
     "---------------",
+    ...formatPromptSpecGuidance(result.reviewer),
+    "",
     result.reviewer.prompt,
     "",
     `Reviewer cadence: ${result.reviewer.cadence}`,
     "",
     "Reporter prompt",
     "---------------",
+    ...formatPromptSpecGuidance(result.reporter),
+    "",
     result.reporter.prompt,
     "",
     `Reporter cadence: ${result.reporter.cadence}`,
     "",
     "Sprint prompt",
     "-------------",
+    ...formatPromptSpecGuidance(result.sprint),
+    "",
     result.sprint.prompt,
     "",
     `Sprint cadence: ${result.sprint.cadence}`,

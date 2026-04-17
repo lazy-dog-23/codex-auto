@@ -127,19 +127,25 @@ Map the user request to the narrowest `codex-autonomy` flow:
   - inspect `codex-autonomy status` first
   - when the intent is recurring or automatic continuation, also run `codex-autonomy emit-automation-prompts --json`
   - if the status output warns `git_runtime_probe_deferred` or `background_runtime_probe_deferred`, run `git status --short` from the repo root before trusting readiness; if unmanaged diffs are present, report them and stop
+  - always quote `ready_for_automation`, `ready_for_execution`, `goal_supply_state`, `next_automation_step`, and `next_automation_reason` from the status output instead of inferring them
+  - treat `recommended_automation_surface` and `recommended_automation_reason` from status as the default surface choice; do not ask the user to pick a surface when the control plane already made that choice
+  - if you need the actual automation prompt, read `emit-automation-prompts --json` and obey each surface's `whenToUse`, `whenNotToUse`, and `selectionRule` metadata instead of improvising your own routing rule
   - if `ready_for_automation=false`, quote `next_automation_reason` from the status output and stop
   - if the active goal is paused, run `codex-autonomy resume`
   - if `recommended_automation_surface=thread_automation` and the user is in the bound project thread, treat official Codex thread automation as the primary path:
     - take `official_thread_automation.prompt` from `emit-automation-prompts --json`
     - create or update a thread heartbeat with `automation_update(kind=\"heartbeat\", destination=\"thread\", ...)`
     - keep the automation prompt short and durable; do not inline scheduler details into the prompt body
-    - if the user also asked to continue now, after the heartbeat is active, use the repo-local `$autonomy-sprint` skill for one bounded loop only
+    - if the user also asked to continue now and `next_automation_step=execute_bounded_loop`, after the heartbeat is active use the repo-local `$autonomy-sprint` skill for one bounded loop only
+    - if the user also asked to continue now and `next_automation_step=plan_or_rebalance`, do one bounded repo-local `$autonomy-plan` pass, rerun `codex-autonomy status` once, and only switch to `$autonomy-sprint` if the refreshed status says `ready_for_execution=true`
+    - if `next_automation_step=await_confirmation`, report that the next goal is still awaiting confirmation and stop; do not improvise execution
   - if `recommended_automation_surface=external_relay_scheduler`, do not create a heartbeat in the current thread:
     - quote `report_thread_id`, `thread_binding_state`, and `recommended_automation_reason`
     - take `external_relay_scheduler.prompt` from `emit-automation-prompts --json`
     - route the work to the supported relay / external scheduler fallback instead of pretending the current thread owns the control loop
   - if `recommended_automation_surface=manual_only`, stop after quoting the blocking reason; do not improvise a fake automation path
-  - for immediate non-recurring continuation, if the active goal run mode is `sprint`, use the repo-local `$autonomy-sprint` skill for one bounded loop
+  - for immediate non-recurring continuation, if `next_automation_step=execute_bounded_loop` and the active goal run mode is `sprint`, use the repo-local `$autonomy-sprint` skill for one bounded loop
+  - for immediate non-recurring continuation, if `next_automation_step=plan_or_rebalance`, use the repo-local `$autonomy-plan` skill for one bounded planning pass, rerun status once, and stop unless execution becomes ready
   - for immediate non-recurring continuation in `cruise`, keep the response bounded to the current ready state unless the user explicitly asks for an immediate bounded work pass
 - cruise mode change:
   - use this path for `用巡航模式推进这个目标`
@@ -153,7 +159,7 @@ Map the user request to the narrowest `codex-autonomy` flow:
   - use `codex-autonomy report` only when the user explicitly wants the detailed result summary
   - run the CLI from the repo root and treat its final output as authoritative
   - if the status output warns `git_runtime_probe_deferred` or `background_runtime_probe_deferred`, run `git status --short` from the repo root before trusting readiness, and surface unmanaged diffs as the effective blocker
-  - when summarizing readiness, quote `automation_state`, `ready_for_automation`, `next_automation_reason`, `report_thread_id`, `current_thread_id`, `thread_binding_state`, and `thread_binding_hint` from the command output instead of inferring from earlier `doctor` observations
+  - when summarizing readiness, quote `automation_state`, `ready_for_automation`, `ready_for_execution`, `goal_supply_state`, `next_automation_step`, `next_automation_reason`, `report_thread_id`, `current_thread_id`, `thread_binding_state`, and `thread_binding_hint` from the command output instead of inferring from earlier `doctor` observations
 - pause / resume:
   - use `codex-autonomy pause` or `codex-autonomy resume`
 - review / merge:

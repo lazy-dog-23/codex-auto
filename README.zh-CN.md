@@ -88,6 +88,7 @@ codex-autonomy --version
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
 - `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
 - `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路、外部 relay scheduler fallback，以及 Planner / Worker / Reviewer / Reporter / Sprint runner 的机读 prompt bundle。
+- 这份 surface-first prompt bundle 现在还会带上 `whenToUse`、`whenNotToUse`、`selectionRule`，让 agent 能直接判断该用哪条 surface / role，而不是再等用户口头分派。
 - `codex-autonomy pause` / `resume`：暂停或恢复自治循环。
 - `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。
 - `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。
@@ -154,6 +155,8 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 - `official_thread_automation` 是官方同线程 heartbeat 主路，直接给 app 的 `automation_update(kind="heartbeat", destination="thread")` 使用。
 - `external_relay_scheduler` 是跨线程 / 外部调度 fallback，给 `Task Scheduler -> relay -> 绑定线程` 这条链路使用。
 - Sprint runner 的默认工作方式仍然是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
+- `codex-autonomy status` 现在会把“可唤醒”与“可执行”拆开表达：`ready_for_automation` 代表调度层可以安全唤醒并做一轮有界下一步，`ready_for_execution` 代表这一轮可以真正进入执行闭环。
+- `goal_supply_state` / `next_automation_step` 会明确告诉 heartbeat 或 relay runner：这轮应该执行 `execute_bounded_loop`、只做 `plan_or_rebalance`、停在 `await_confirmation`，还是直接 `idle` / `manual_triage`。
 
 关于模型字段要注意一件事：
 
@@ -165,7 +168,7 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 - 从 26.415 开始，官方 thread automation 才是同线程持续推进的首选路径；它保留线程上下文，适合 repo-local autonomy 的 bounded loop。
 - 更早的 Windows 实测里，旧的 `heartbeat + MINUTELY` 路径曾出现“时间在滚动，但没有真正投递执行”的现象。这个结论只覆盖旧路径，不应笼统套用到 26.415 的官方 thread automation。
-- 但在 2026-04-17 的同线程 live 验收里，直接附着到已绑定线程的官方 heartbeat 仍然复现了“`last_run_at` 前进、`automation_runs=0`、目标线程没有新 turn”的现象。也就是说，官方 thread automation 仍然是架构上的主路，但这台机器上的 runtime 还不能据此判定为稳定可用；当前实际可运行 fallback 仍是 external relay scheduler。
+- 在 2026-04-17 重启 Codex App 后做的同线程 live 复验里，重新创建的官方 heartbeat 已经能在这台机器上再次唤醒已绑定线程并产出新 turn。更早那次“时间前进但没实际投递”的现象，应视为 stale runtime 条件下的旧样本，而不是 26.415 的默认结论。
 - 当前线程不是绑定线程，或者必须从 app 外部唤醒时，再使用 relay / 外部调度器作为 fallback bridge。
 - 这个源码仓现在附带了一组外部调度测试脚本：`scripts/run-codex-relay-scheduled-test.ps1` 和 `scripts/register-codex-relay-scheduled-test.ps1`，用于通过公开 relay CLI 走 `Task Scheduler -> relay -> 绑定线程`，不依赖私有 Codex 存储。
 - 这条 relay runner 现在会把每次调用明确标记成“外部调度唤醒”，要求目标线程先检查 `codex-autonomy status`，且只有 `thread_binding_state=bound_to_current` 时才允许推进一次 bounded loop；否则按 mismatch/不可运行状态收口并停止。
@@ -183,10 +186,9 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 近期验证结论（2026-04-17）：
 
-- 针对真实绑定线程 `019d8c93-bb6f-7710-a49b-43298c1bcd2e` 做了一次官方 heartbeat live acceptance。
-- 临时 heartbeat `bilimusic2-official-hb-live-test-20260417-1430` 能被 app 创建为 `ACTIVE`，其 automation TOML 和 SQLite 行都存在，`last_run_at` 与 `next_run_at` 也会推进。
-- 但同一时间内，目标线程没有出现任何新 turn，`automation_runs` 仍然是 `0`，也没有出现测试 marker 回复。
-- 结论是：这台机器上的官方 heartbeat runtime 仍然存在“时间在滚动，但没有真正投递执行”的 live 问题；因此文档和 router 继续把官方 thread automation 保留为架构优先面，同时把 external relay scheduler 保留为当前机器上的实际 fallback。
+- 在重启 Codex App 之后，针对一条真实的已绑定项目线程重做了一轮官方 heartbeat live acceptance。
+- 重建后的 heartbeat 能在已绑定项目线程内再次产出新 turn，并保持同线程持续推进，这符合 26.415 的官方使用模型。
+- 结论是：当工作持续留在已绑定项目线程里时，这台机器现在优先走官方 thread automation；relay / 外部调度器继续保留给跨线程、跨项目或 app 外部唤醒场景。
 
 ## 新项目线程怎么接
 
@@ -304,16 +306,20 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 ## 运行边界
 
 - 产品源码仓库和活跃目标仓库是两件事。这个仓库维护产品源码，安装后才把控制面落到目标仓库。
-- `install` 的 `automation_ready` 只表示环境前置条件基本齐全；目标仓库仍然需要 `report_thread_id` 和可推进 goal/task，`status` 才会变成 `ready_for_automation=true`。如果当前线程身份可用但还没绑定，优先在该线程里运行 `codex-autonomy bind-thread`；如果当前线程身份不可用，则显式提供 `--report-thread-id`。
+- `install` 的 `automation_ready` 只表示环境前置条件基本齐全；目标仓库仍然需要 `report_thread_id` 和可推进的下一步，`status` 才会进入可唤醒态。如果当前线程身份可用但还没绑定，优先在该线程里运行 `codex-autonomy bind-thread`；如果当前线程身份不可用，则显式提供 `--report-thread-id`。
 - `status` 现在会额外给出 `automation_state`。常见值包括：
   - `ready`：有可推进项，且运行时检查通过
   - `idle_completed`：已批准工作已经完成，当前只是空闲，不是异常
   - `idle_no_work`：当前没有 active/approved/proposal work
   - `blocked` / `review_pending` / `paused` / `needs_confirmation`：需要先处理对应原因
+- `ready_for_automation=true` 只表示调度层可以安全唤醒并做一轮有界下一步；它可能仍然只是 `plan_or_rebalance` 或 `await_confirmation`，不一定直接进入业务代码执行。
+- `ready_for_execution=true` 才表示下一轮可以真正进入 `plan/work/review` 的执行闭环。
+- `goal_supply_state` 用来区分这轮是在继续 `active_goal`、拾取 `approved_goal_available`、停在 `awaiting_confirmation`、已经 `completed_only`、当前 `empty`，还是需要 `manual_triage`。
+- `next_automation_step` 会明确告诉 runner 这轮该做 `execute_bounded_loop`、`plan_or_rebalance`、`await_confirmation`、`idle` 或 `manual_triage`。
 - 自动提交只允许进入 `codex/autonomy`，不会自动 `push`、`PR`、`merge` 或 `deploy`。
 - 当前受控 commit helper 只会 stage 自治控制面 allowlist：`autonomy/*`、`AGENTS.md`、`.agents/skills/*`、`.codex/*`、`scripts/*`；混入其他路径会直接拒绝提交。
 - 非 Git 目录允许 `bootstrap`，但 `status` 不会给出可运行 automation 的结论。
-- `ready_for_automation=false` 常见原因包括：没有 active goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用、目标仍在等待首次确认。
+- `ready_for_automation=false` 常见原因包括：没有 active/approved goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用。目标仍在等待首次确认时，更常见的是 `ready_for_automation=true` 但 `ready_for_execution=false`，同时 `goal_supply_state=awaiting_confirmation`。
 - `upgrade_state=managed_advisory_drift` 不是阻断。它表示 repo-specific 或 live state 文件和最新产品模板不同，但当前仍可继续跑；如果你确认这些差异就是新的本地基线，可以执行 `codex-autonomy rebaseline-managed --target <repo>` 把它登记为新 baseline。
 
 ## 许可证

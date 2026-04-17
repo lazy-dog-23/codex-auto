@@ -84,17 +84,33 @@ describe("automation prompts", () => {
     const relayPrompt = buildExternalRelaySchedulerPrompt();
 
     expect(officialPrompt).toContain("official Codex thread automation wake-up");
+    expect(officialPrompt).toContain("Choose this surface when `recommended_automation_surface=thread_automation`");
+    expect(officialPrompt).toContain("Do not use this surface when the wake-up must come from outside the app");
+    expect(officialPrompt).toContain("ready_for_execution");
+    expect(officialPrompt).toContain("goal_supply_state");
+    expect(officialPrompt).toContain("next_automation_step");
     expect(officialPrompt).toContain("thread_binding_state");
     expect(officialPrompt).toContain("bound_to_current");
     expect(officialPrompt).toContain("codex-autonomy status");
+    expect(officialPrompt).toContain("next_automation_step=await_confirmation");
+    expect(officialPrompt).toContain("next_automation_step=plan_or_rebalance");
+    expect(officialPrompt).toContain("next_automation_step=execute_bounded_loop");
     expect(officialPrompt).toContain("Do not use relay as the main control path");
     expect(officialPrompt).toContain("in-app browser");
 
     expect(relayPrompt).toContain("external scheduler wake-up through the relay fallback path");
+    expect(relayPrompt).toContain("Choose this surface when `recommended_automation_surface=external_relay_scheduler`");
+    expect(relayPrompt).toContain("Do not use this surface as the default for same-thread recurring work");
     expect(relayPrompt).toContain("scripts/verify.ps1");
     expect(relayPrompt).toContain("codex-autonomy review");
+    expect(relayPrompt).toContain("ready_for_execution");
+    expect(relayPrompt).toContain("goal_supply_state");
+    expect(relayPrompt).toContain("next_automation_step");
     expect(relayPrompt).toContain("thread_binding_state");
     expect(relayPrompt).toContain("bound_to_current");
+    expect(relayPrompt).toContain("next_automation_step=await_confirmation");
+    expect(relayPrompt).toContain("next_automation_step=plan_or_rebalance");
+    expect(relayPrompt).toContain("next_automation_step=execute_bounded_loop");
     expect(relayPrompt).toContain("Treat official Codex thread automations as the preferred same-thread continuation surface.");
   });
 
@@ -112,6 +128,9 @@ describe("automation prompts", () => {
     expect(result.official_thread_automation.name).toBe("official-thread-automation");
     expect(result.external_relay_scheduler.name).toBe("external-relay-scheduler");
     expect(result.official_thread_automation.cadence).toBe("every 15 minutes while sprint is active");
+    expect(result.official_thread_automation.whenToUse).toContain("thread_automation");
+    expect(result.external_relay_scheduler.whenNotToUse).toContain("same-thread recurring work");
+    expect(result.worker.selectionRule).toContain("ready_for_execution=true");
     expect(result.planner.name).toBe("planner-cruise");
     expect(result.planner.cadence).toBe("every 6 hours");
     expect(result.worker.cadence).toBe("every 2 hours");
