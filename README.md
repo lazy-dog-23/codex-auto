@@ -11,6 +11,7 @@ This repository contains the product code for that workflow: the CLI, repo-local
 ## What This Repo Provides
 
 - Repo-local autonomy control surface installation and upgrade
+- Target-repo project baseline creation with `TEAM_GUIDE.md` and a thin `AGENTS.override.md`
 - Thread-bound operator/reporting workflow
 - Goal / proposal / task state management
 - Global router skill and relay manual-audit skill distribution
@@ -93,6 +94,8 @@ Recent validation (2026-04-17):
 After `scripts/install-global.ps1` finishes, a new Codex thread can drive installed repos through the global router skill. Common phrases include:
 
 - `把 auto 装进当前项目`
+- `初始化这个项目`
+- `给当前项目做基线`
 - `升级当前项目里的 auto`
 - `目标是……`
 - `确认提案`
@@ -126,6 +129,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 ## Core Commands
 
 - `codex-autonomy install --target <repo>`
+- `codex-autonomy init-project --target <repo> --mode existing|new` (installs the control surface and creates `TEAM_GUIDE.md` plus `AGENTS.override.md`; preserves existing docs unless `--refresh-docs` is passed)
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`
 - `codex-autonomy rebaseline-managed --target <repo>`
 - `codex-autonomy bind-thread [--report-thread-id <threadId>]`
@@ -185,6 +189,8 @@ Oversized files, files with NUL bytes, broken markers, or non-text files stay in
 ## Repo Layout
 
 - `AGENTS.md`: stable operating rules
+- `AGENTS.override.md`: optional thin target-repo overlay created by `init-project`
+- `TEAM_GUIDE.md`: compact target-repo current-state snapshot created by `init-project`
 - `.agents/skills/$autonomy-*`: repo-local autonomy skills
 - `.codex/environments/environment.toml`: shared Windows setup plus `verify`, `smoke`, and `review` actions
 - `.codex/config.toml`: repo fallback config with `approval_policy = "never"` and `sandbox_mode = "workspace-write"`
