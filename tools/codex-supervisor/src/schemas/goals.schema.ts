@@ -1,4 +1,4 @@
-import { GOAL_STATUSES, RUN_MODES } from "../domain/types.js";
+import { GOAL_SOURCES, GOAL_STATUSES, RUN_MODES } from "../domain/types.js";
 
 export const goalsSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -75,6 +75,14 @@ export const goalsSchema = {
         completed_at: {
           type: ["string", "null"],
           format: "date-time",
+        },
+        source: {
+          type: "string",
+          enum: [...GOAL_SOURCES],
+        },
+        source_goal_id: {
+          type: ["string", "null"],
+          minLength: 1,
         },
       },
     },

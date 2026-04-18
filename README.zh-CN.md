@@ -68,7 +68,7 @@ codex-autonomy --version
 
 - 标准路径：`codex-autonomy <command>`。
 - 可先用 `codex-autonomy --version` 确认当前机器级 CLI 版本；全局 router skill 也会把它作为“是否需要先刷新本机产品版本”的判断信号之一。
-- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
+- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“确认提案并继续”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“快速续跑”“任务完成后 1 分钟继续”“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
 - relay completion event 现在带固定 envelope：`[Codex Relay Callback]`、`Event-Type: codex.relay.dispatch.completed.v1`，以及 `BEGIN_CODEX_RELAY_CALLBACK_JSON` / `END_CODEX_RELAY_CALLBACK_JSON` 之间的机读 JSON。router / operator 要把它当成状态回传，而不是新的 goal intake。
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
@@ -82,13 +82,17 @@ codex-autonomy --version
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
 - `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。
 - `codex-autonomy approve-proposal --goal-id <goalId>`：把提案物化为任务并激活该 goal。
+- 如果自然语言已经表达“确认后继续”“直接开始自治”“以后自己往下做”，router 在 `approve-proposal` 之后会立刻重跑 `status`，在绑定线程里创建或刷新官方 heartbeat，并在可执行时 kickoff 一轮 bounded sprint，而不是停在“已批准”这一步等你再补命令。
+- `codex-autonomy create-successor-goal --auto-approve`：只在 `autonomy/decision-policy.json` 明确启用长期 charter 且允许自动批准时使用；它会在所有已批准工作完成后创建并批准一个最小 successor goal。
 - `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。
 - `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。当 diff 可提交时，它还会自动执行受控 closeout commit，并立刻对齐 background worktree。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
+- `codex-autonomy decide --json`：把当前边界分类为可继续、可修复一次、安全退避、需要问人或拒绝重写，并输出下一步动作和 heartbeat 建议。
 - `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
 - `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路、外部 relay scheduler fallback，以及 Planner / Worker / Reviewer / Reporter / Sprint runner 的机读 prompt bundle。
 - 这份 surface-first prompt bundle 现在还会带上 `whenToUse`、`whenNotToUse`、`selectionRule`，让 agent 能直接判断该用哪条 surface / role，而不是再等用户口头分派。
+- 对 blocker 决策也是同一个原则：如果你在绑定线程里直接说“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”，router / automation prompt 应该自己把它翻译成 `unblock + bounded plan/sprint`，而不是反过来要求你手动指定 CLI 或工具名。
 - `codex-autonomy pause` / `resume`：暂停或恢复自治循环。
 - `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。
 - `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。
@@ -102,11 +106,13 @@ codex-autonomy --version
 
 - `AGENTS.md`：硬规则与运行约定。
 - `.agents/skills/$autonomy-plan`、`$autonomy-work`、`$autonomy-intake`、`$autonomy-review`、`$autonomy-report`、`$autonomy-sprint`：repo skills。
+- `.agents/skills/$autonomy-decision`：通用边界决策 skill；遇到 blocker、verification failure、dirty worktree、closeout、scope / env / thread boundary 时，先跑 `codex-autonomy decide --json`，只有它判定需要人工时才问你。
 - `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。
 - `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `approval_policy = "never"`、`sandbox_mode = "workspace-write"`、`model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
 - `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
 - `autonomy/verification.json`：goal 级 closeout gate；体检、安全、健壮性类 goal 只有在 required verification axis 清零后才能真正完成。
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
+- `autonomy/decision-policy.json`：repo 级边界策略，定义哪些路径和场景可以自动继续、哪些验证失败可重试一次、哪些必须问人，以及 1 分钟 burst / 15 分钟正常 / 30 分钟安全退避的默认语义。
 - `autonomy/journal.md`：每次 run 只追加一条记录。
 - `scripts/verify.ps1`：唯一验收门。
 - `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；通常通过 `codex-autonomy review` 调用。项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
@@ -120,6 +126,7 @@ codex-autonomy --version
 - `task`：真正被 worker 执行的最小工作单元。
 - `cruise cadence`：稳态巡航频率，指 Planner / Worker / Reviewer 在后台按固定周期醒来检查是否有可推进项。
 - `sprint heartbeat`：冲刺 runner 的唤醒间隔，不是任务时长。它只决定多久再醒一次，不代表一轮必须跑满这么久。
+- `self-rescheduling burst heartbeat`：官方同线程 heartbeat 的快速续跑模式。每轮先查 `status` / 锁状态，不在开头只改 cadence；如果这一轮干净完成、工作树干净、没有 blocker / review_pending / needs_confirmation，且 `status` 仍显示有明确 next task，就把同一个 heartbeat 设为 1 分钟后继续。它不是常驻 1 分钟轮询，也不会创建第二条 heartbeat。
 - `kickoff`：goal 刚确认或需要立即推进时的立刻启动动作。kickoff 会先跑一轮，不等下一次 cadence / heartbeat。
 - `safe follow-up`：仍然属于已批准 goal 边界内的后续优化项。它会自动并入下一轮，不需要把线程当成审批门。
 
@@ -154,9 +161,13 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 - `official_thread_automation` 是官方同线程 heartbeat 主路，直接给 app 的 `automation_update(kind="heartbeat", destination="thread")` 使用。
 - `external_relay_scheduler` 是跨线程 / 外部调度 fallback，给 `Task Scheduler -> relay -> 绑定线程` 这条链路使用。
+- `official_thread_automation` 默认包含 self-rescheduling burst 策略：干净成功且仍有 ready next task 时，下一轮用 1 分钟快速续跑；不满足条件时退回正常 sprint cadence、安全退避或暂停。
 - Sprint runner 的默认工作方式仍然是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
 - `codex-autonomy status` 现在会把“可唤醒”与“可执行”拆开表达：`ready_for_automation` 代表调度层可以安全唤醒并做一轮有界下一步，`ready_for_execution` 代表这一轮可以真正进入执行闭环。
-- `goal_supply_state` / `next_automation_step` 会明确告诉 heartbeat 或 relay runner：这轮应该执行 `execute_bounded_loop`、只做 `plan_or_rebalance`、停在 `await_confirmation`，还是直接 `idle` / `manual_triage`。
+- `goal_supply_state` / `next_automation_step` 会明确告诉 heartbeat 或 relay runner：这轮应该执行 `execute_bounded_loop`、只做 `plan_or_rebalance`、创建 `create_successor_goal`，停在 `await_confirmation`，还是直接 `idle` / `manual_triage`。
+- `decision_event` / `decision_outcome` / `decision_next_action` / `decision_heartbeat` 是通用边界判定结果。绑定线程或 heartbeat 在把问题抛给你之前，应该先运行 `codex-autonomy decide --json`；只有结果是 `ask_human` 或 `reject_or_rewrite` 时才停止并问你，其余安全场景按建议继续、修复一次或退避。
+- `create_successor_goal` 默认关闭。只有 repo 在 `autonomy/decision-policy.json` 写入明确长期 charter，并开启 `auto_successor_goal.enabled` / `auto_approve_minimal_successor` 后，绑定线程才可以在 `completed_only` 后自动创建并批准一个最小 successor goal；CLI 写入口也会强制复核绑定线程和 `status` / `decide` gate。
+- 如果多文件控制面写入被中断，`autonomy/operations/pending.json` 会阻止下一轮 heartbeat 继续推进，直到 `codex-autonomy status` / `doctor` 明确暴露，或重新运行原命令完成恢复。
 
 关于模型字段要注意一件事：
 
@@ -215,8 +226,10 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 - `汇报当前情况` 优先以 `codex-autonomy status` 为准，不把先前 `doctor` 的观察混成当前阻塞原因。
 - `确认提案` 必须走 `codex-autonomy approve-proposal --goal-id <goalId>`，不能只口头确认。
+- 当自然语言已经明确表达“确认提案并继续”“确认后自己往下做”“直接开始自治”时，router 应该自动把它翻译成 `approve-proposal -> status -> official heartbeat -> bounded kickoff` 这条主路。
 - `用冲刺模式推进这个目标` 和 `继续当前目标` 在 sprint 目标上必须收口到 repo-local `$autonomy-sprint` 的单轮闭环，而不是直接跳过控制面去改业务代码。
 - `用巡航模式推进这个目标` 先切到 `cruise`，再按当前 ready 状态给出下一步；不要把 cruise 偷偷改成自由发挥式 sprint。
+- 对 `manual_triage` / blocker 场景，如果用户只是从已有 blocker 选项里做选择，或明确要求收窄到 checklist/manual/doc lane，应优先走 `codex-autonomy unblock <task-id>` 加一轮 bounded plan/sprint，而不是让用户重新描述工具链。
 
 这意味着：
 
@@ -314,7 +327,7 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
   - `blocked` / `review_pending` / `paused` / `needs_confirmation`：需要先处理对应原因
 - `ready_for_automation=true` 只表示调度层可以安全唤醒并做一轮有界下一步；它可能仍然只是 `plan_or_rebalance` 或 `await_confirmation`，不一定直接进入业务代码执行。
 - `ready_for_execution=true` 才表示下一轮可以真正进入 `plan/work/review` 的执行闭环。
-- `goal_supply_state` 用来区分这轮是在继续 `active_goal`、拾取 `approved_goal_available`、停在 `awaiting_confirmation`、已经 `completed_only`、当前 `empty`，还是需要 `manual_triage`。
+- `goal_supply_state` 用来区分这轮是在继续 `active_goal`、拾取 `approved_goal_available`、停在 `awaiting_confirmation`、进入 `successor_goal_available`、已经 `completed_only`、当前 `empty`，还是需要 `manual_triage`。
 - `next_automation_step` 会明确告诉 runner 这轮该做 `execute_bounded_loop`、`plan_or_rebalance`、`await_confirmation`、`idle` 或 `manual_triage`。
 - 自动提交只允许进入 `codex/autonomy`，不会自动 `push`、`PR`、`merge` 或 `deploy`。
 - 当前受控 commit helper 只会 stage 自治控制面 allowlist：`autonomy/*`、`AGENTS.md`、`.agents/skills/*`、`.codex/*`、`scripts/*`；混入其他路径会直接拒绝提交。

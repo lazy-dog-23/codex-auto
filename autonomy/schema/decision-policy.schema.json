@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-auto.local/schema/decision-policy.schema.json",
+  "title": "AutonomyDecisionPolicyFile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "auto_continue",
+    "ask_human",
+    "heartbeat"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "auto_continue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "docs_only_changes",
+        "approved_goal_followups",
+        "recoverable_closeout_paths",
+        "verification_retry"
+      ],
+      "properties": {
+        "docs_only_changes": {
+          "type": "boolean"
+        },
+        "approved_goal_followups": {
+          "type": "boolean"
+        },
+        "recoverable_closeout_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "verification_retry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_retry_per_task",
+            "allowed_failure_kinds"
+          ],
+          "properties": {
+            "max_retry_per_task": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "allowed_failure_kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "ask_human": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "none",
+          "proposal_boundary",
+          "verification_failure",
+          "recoverable_closeout",
+          "dirty_worktree",
+          "scope_change",
+          "dependency_or_env",
+          "security_or_secret",
+          "release_or_git",
+          "external_service",
+          "unknown_context"
+        ]
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ready_next_task",
+        "recoverable_or_slow_verify",
+        "blocked_or_confirmation"
+      ],
+      "properties": {
+        "ready_next_task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recoverable_or_slow_verify": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blocked_or_confirmation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

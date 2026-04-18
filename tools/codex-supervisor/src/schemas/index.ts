@@ -7,3 +7,4 @@ export * from "./settings.schema.js";
 export * from "./results.schema.js";
 export * from "./install.schema.js";
 export * from "./verification.schema.js";
+export * from "./decision-policy.schema.js";

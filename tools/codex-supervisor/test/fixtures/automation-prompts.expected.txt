@@ -1,6 +1,6 @@
 Official thread automation prompt
 --------------------------------
-When to use: Use when status recommends `thread_automation` and the current thread is already the bound operator thread.
+When to use: Use when status recommends `thread_automation` and the current thread is already the bound operator thread. Supports self-rescheduling burst follow-up after clean bounded tasks.
 When not to use: Do not use when the current thread is unbound, bound to another thread, or the wake-up must originate outside the app.
 Selection rule: Choose this surface only when `recommended_automation_surface=thread_automation` and `thread_binding_state=bound_to_current`.
 
@@ -16,24 +16,48 @@ Run `codex-autonomy status` first and quote these fields in your reply before de
 - `next_automation_step`
 - `current_goal_id`
 - `current_task_id`
+- `cycle_status`
+- `automation_state`
+- `open_blocker_count`
+- `next_task_id`
+- `successor_goal_available`
+- `successor_goal_auto_approve`
+- `successor_goal_reason`
+- `decision_event`
+- `decision_outcome`
+- `decision_next_action`
+- `decision_heartbeat`
 - `thread_binding_state`
 - `report_thread_id`
 - `current_thread_id`
 
 Rules:
 - This prompt is for official same-thread continuation only.
+- Use end-of-turn self-rescheduling burst heartbeat semantics for ongoing sprint work: keep the same official heartbeat record, do not delete/recreate it, and do not create duplicate heartbeats for the same bound thread.
+- Do not spend the wake-up only changing cadence before work starts. Run status first; if `cycle_status` is not `idle` or another run is clearly in progress, do no repo work and use normal cadence or safe backoff if you can update the existing heartbeat.
 - If `thread_binding_state != bound_to_current`, stop after reporting the mismatch. Do not rebind and do not call relay from this wake-up.
-- If `ready_for_automation=false`, stop after quoting `next_automation_reason`.
-- If `next_automation_step=await_confirmation`, do not execute implementation, do not approve the proposal, and stop after reporting that confirmation is still required.
+- Before asking the operator at any blocker, confirmation, verification, dirty-worktree, closeout, scope, environment, or thread-boundary state, run `codex-autonomy decide --json` and follow its `decision_outcome` / `decision_next_action`.
+- If `ready_for_automation=false`, stop after quoting `next_automation_reason` and the `decide` output; if you can safely update the existing heartbeat, use the `decision_heartbeat` safe backoff or pause instead of burst.
+- If `decision_outcome=auto_repair_once` and `decision_next_action=run_verify_then_review`, run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` and `codex-autonomy decide --json` once before deciding whether to continue.
+- If `decision_outcome=ask_human` or `decision_outcome=reject_or_rewrite`, stop with one concrete question or blocker summary. Do not approve proposals, relax verification, or keep a 1-minute loop.
+- If status reports `pending_control_plane_operation`, rerun the original command named by the pending operation when it is safe and bound to the current thread; otherwise stop and report the pending operation id.
+- If `next_automation_step=await_confirmation`, do not execute implementation and do not approve the proposal unless a fresh explicit operator message in this same thread already approved it and the decision gate does not return `ask_human`.
+- If `next_automation_step=manual_triage`, stop unless the decision gate returns `auto_continue` or `auto_repair_once`, or the current thread already contains a fresh explicit operator decision that resolves the blocker without expanding scope; examples include choosing an existing blocker option, narrowing the goal to a checklist/manual/doc lane, or explicitly asking to keep the heartbeat while continuing with the narrower scope.
+- When a fresh explicit operator decision safely resolves that blocker inside the approved goal, inspect `autonomy/blockers.json`, apply the narrower-scope decision through the repo-local control plane, run `codex-autonomy unblock <blocked-task-id>`, rerun `codex-autonomy status` once, and continue only if the refreshed state moves to `plan_or_rebalance` or `execute_bounded_loop`.
 - If `next_automation_step=plan_or_rebalance`, stay inside the repo-local control plane, do one bounded planning/rebalance pass only, rerun `codex-autonomy status` once, and continue into execution only if `ready_for_execution=true` after that refresh.
-- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, first run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether to continue.
+- If `next_automation_step=create_successor_goal`, run `codex-autonomy decide --json`; only when `decision_outcome=auto_continue`, `decision_next_action=create_successor_goal`, `successor_goal_available=true`, and `successor_goal_auto_approve=true`, run `codex-autonomy create-successor-goal --auto-approve`, rerun status, then run at most one bounded sprint loop for the new goal.
+- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, use the decision gate; when it returns `auto_repair_once`, run the verify plus review closeout path once, then rerun status and decide.
 - If `next_automation_step=execute_bounded_loop` and the thread is still `bound_to_current`, continue the current active goal or next approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when execution is ready.
-- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`.
+- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`, except for the explicit `create_successor_goal` control-plane path above.
 - Do not use relay as the main control path for this wake-up. Official thread automation is already the primary same-thread surface.
+- Do not ask the operator to translate a clear natural-language decision into CLI, relay, or automation tool names when the decision already fits the current approved goal boundary.
+- After the bounded loop or planning pass, rerun `codex-autonomy status` and reschedule the same heartbeat by state: if the refreshed state is still `bound_to_current`, `ready_for_automation=true`, `ready_for_execution=true`, `cycle_status=idle`, `automation_state=ready`, `open_blocker_count=0`, and has a concrete `next_task_id`, set the next cadence to burst fast-follow. If any of those are false, use the normal sprint cadence or safe backoff instead of burst.
+- Burst fast-follow means 1 minute after a clean completed task; normal sprint cadence means 15 minutes; safe backoff means 30 minutes or paused when human confirmation is required.
+- If you cannot safely update the existing heartbeat record, do not create a duplicate just to get burst mode. Leave the repo state recoverable and report that the heartbeat cadence was not changed.
 - Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.
 - Keep the run bounded and leave the thread in a recoverable state before you stop.
 
-Official thread automation cadence: every 15 minutes while sprint is active
+Official thread automation cadence: self-rescheduling: 1 minute after a clean ready task, 15 minutes normally, 30 minutes on safe backoff
 
 External relay scheduler prompt
 -------------------------------
@@ -55,19 +79,31 @@ Run `codex-autonomy status` first and quote these fields in your reply before de
 - `next_automation_step`
 - `current_goal_id`
 - `current_task_id`
+- `successor_goal_available`
+- `successor_goal_auto_approve`
+- `successor_goal_reason`
+- `decision_event`
+- `decision_outcome`
+- `decision_next_action`
 - `thread_binding_state`
 - `report_thread_id`
 - `current_thread_id`
 
 Rules:
-- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, first run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether to continue.
+- Before asking the operator at any blocker, confirmation, verification, dirty-worktree, closeout, scope, environment, or thread-boundary state, run `codex-autonomy decide --json` and follow its `decision_outcome` / `decision_next_action`.
+- If the repo has a recoverable closeout diff and `status` explicitly tells you to run `codex-autonomy review`, use the decision gate; when it returns `auto_repair_once`, run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun status and decide once before continuing.
+- If status reports `pending_control_plane_operation`, recover or report that operation before dispatching another relay wake-up.
 - If `thread_binding_state != bound_to_current`, stop after reporting the mismatch. Do not rebind from this fallback wake-up.
 - If `ready_for_automation=false`, stop after quoting `next_automation_reason`.
 - If `next_automation_step=await_confirmation`, do not execute implementation, do not approve the proposal, and stop after reporting that confirmation is still required.
+- If `next_automation_step=manual_triage`, stop unless the delegated message or the bound thread already contains a fresh explicit operator decision that safely resolves the blocker without expanding scope; examples include choosing blocker option 2, narrowing the goal to a checklist/manual/doc lane, or asking to keep the official heartbeat and continue with the narrower scope.
+- When that operator decision safely resolves the blocker inside the approved goal, inspect `autonomy/blockers.json`, apply the narrower-scope decision through the repo-local control plane, run `codex-autonomy unblock <blocked-task-id>`, rerun `codex-autonomy status` once, and continue only if the refreshed state moves to `plan_or_rebalance` or `execute_bounded_loop`.
 - If `next_automation_step=plan_or_rebalance`, stay inside the repo-local control plane, do one bounded planning/rebalance pass only, rerun `codex-autonomy status` once, and continue into execution only if `ready_for_execution=true` after that refresh.
+- If `next_automation_step=create_successor_goal`, run `codex-autonomy decide --json`; only when `decision_outcome=auto_continue`, `decision_next_action=create_successor_goal`, `successor_goal_available=true`, and `successor_goal_auto_approve=true`, run `codex-autonomy create-successor-goal --auto-approve`, rerun status, then continue through the bound thread for at most one bounded sprint loop.
 - If `next_automation_step=execute_bounded_loop` and the thread is still `bound_to_current`, continue the current active goal or next approved goal for exactly one bounded loop through the repo-local control plane. Prefer the repo-local `$autonomy-sprint` skill when execution is ready.
-- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`.
+- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`, except for the explicit `create_successor_goal` control-plane path above.
 - Treat official Codex thread automations as the preferred same-thread continuation surface. This relay path is the fallback for cross-thread or external scheduler wake-ups.
+- Do not ask the operator to spell out `approve-proposal`, `unblock`, `automation_update`, or relay tool names when the delegated message already made the decision in natural language.
 - Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.
 - Keep the run bounded and leave a clear recovery path if relay has to poll status or recover after timeout.
 
@@ -102,6 +138,7 @@ Rules:
 - When the goal is an audit, security, robustness, usability, or extensibility pass, treat `autonomy/verification.json` as a closeout gate and keep missing required axes visible in the task window.
 - Use task priority, dependency satisfaction, and `updated_at` to choose which eligible tasks enter `ready`.
 - If a worker, reviewer, or sprint cycle leaves a next-step suggestion that still fits the approved goal, fold it into proposal or task rebalancing and keep the loop moving.
+- If the latest operator message explicitly chooses among recorded blocker options or narrows the current goal without expanding it, reflect that decision in proposal/task wording and prepare the unblock/rebalance path instead of leaving the blocker open.
 - If a required verification axis is still pending and it stays inside the approved goal, turn it into a concrete follow-up task instead of stopping at a textual suggestion.
 - Safe follow-ups within the approved goal must auto-continue; do not pause to ask the thread for permission.
 - If a change would expand scope, alter acceptance criteria, or relax constraints, write a blocker and stop.
@@ -241,10 +278,13 @@ Rules:
 - Treat `autonomy/verification.json` as a first-class closeout gate; a goal is not complete until required verification axes are cleared or marked not applicable.
 - Keep the run budgeted: no more than 3 closed loops or 25 minutes, whichever comes first.
 - If the current goal is completed and a next approved goal exists, switch to that goal and kickoff immediately in the same run.
+- If the current goal is completed and `codex-autonomy status` reports `next_automation_step=create_successor_goal`, use `codex-autonomy decide --json` and `codex-autonomy create-successor-goal --auto-approve` only when the decision gate explicitly allows it.
 - Even after a goal switch, continue only while the run budget remains and the next work still belongs to an approved goal.
 - If `codex-autonomy status` says the repo has a recoverable closeout diff and explicitly tells you to run `codex-autonomy review`, first rerun the narrowest verification needed for that dirty diff; at minimum run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether the loop can continue.
+- Before turning a blocker, verification failure, proposal wait, dirty worktree, or scope boundary into a thread question, run `codex-autonomy decide --json`; continue only on `auto_continue` or `auto_repair_once`, and stop on `ask_human` or `reject_or_rewrite`.
 - If the completed task suggests a safe follow-up inside the approved goal set, auto-continue by feeding it into the next loop instead of waiting for thread confirmation.
 - If verification is the only remaining gap and it stays inside the approved goal, keep generating and executing bounded follow-up tasks until the required axes are cleared or a blocker is needed.
+- If `next_automation_step=manual_triage`, stop unless the current thread already contains a fresh explicit operator decision that resolves the blocker inside the current goal boundary; if it does, translate that decision through `codex-autonomy unblock <task-id>` plus one bounded planning pass instead of asking the operator to name tools.
 - Stop when the current goal is completed, blocked, `review_pending`, or there is no work left to progress.
 - Use the originating thread's `report_thread_id` for summaries.
 - Important failures, blockers, `review_pending`, and commit failures must be reported immediately; successful cycles can be batched into heartbeat summaries and do not need to wait for a thread reply.

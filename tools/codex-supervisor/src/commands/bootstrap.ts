@@ -9,6 +9,7 @@ import { writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
 import { appendJournalEntry } from "../infra/journal.js";
 import {
   blockersSchema,
+  decisionPolicySchema,
   goalsSchema,
   proposalsSchema,
   resultsSchema,
@@ -20,6 +21,7 @@ import {
 import { resolveRepoPaths } from "../shared/paths.js";
 import {
   getAgentsMarkdown,
+  getAutonomyDecisionSkillMarkdown,
   getAutonomyIntakeSkillMarkdown,
   getAutonomyPlanSkillMarkdown,
   getAutonomyReportSkillMarkdown,
@@ -37,6 +39,7 @@ import {
 } from "../scaffold/templates.js";
 import {
   createDefaultGoalsDocument,
+  createDefaultDecisionPolicy,
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
@@ -84,6 +87,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const reviewSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-review", "SKILL.md");
   const reportSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-report", "SKILL.md");
   const sprintSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-sprint", "SKILL.md");
+  const decisionSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-decision", "SKILL.md");
   const readmeFile = path.join(repoRoot, "README.md");
   const tasksSchemaFile = path.join(paths.schemaDir, "tasks.schema.json");
   const goalsSchemaFile = path.join(paths.schemaDir, "goals.schema.json");
@@ -93,6 +97,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const resultsSchemaFile = path.join(paths.schemaDir, "results.schema.json");
   const blockersSchemaFile = path.join(paths.schemaDir, "blockers.schema.json");
   const verificationSchemaFile = path.join(paths.schemaDir, "verification.schema.json");
+  const decisionPolicySchemaFile = path.join(paths.schemaDir, "decision-policy.schema.json");
   const cycleLockKeepFile = path.join(paths.locksDir, ".gitkeep");
 
   const repoDirectories = [
@@ -105,6 +110,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
     path.dirname(reviewSkillFile),
     path.dirname(reportSkillFile),
     path.dirname(sprintSkillFile),
+    path.dirname(decisionSkillFile),
   ];
 
   for (const directory of repoDirectories) {
@@ -133,6 +139,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [reviewSkillFile, getAutonomyReviewSkillMarkdown() + "\n"],
       [reportSkillFile, getAutonomyReportSkillMarkdown() + "\n"],
       [sprintSkillFile, getAutonomySprintSkillMarkdown() + "\n"],
+      [decisionSkillFile, getAutonomyDecisionSkillMarkdown() + "\n"],
       [paths.goalFile, formatGoalMarkdown(null) + "\n"],
       [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
       [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
@@ -158,6 +165,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [paths.settingsFile, createDefaultSettingsDocument()],
       [paths.resultsFile, createDefaultResultsDocument()],
       [paths.verificationFile, createDefaultVerificationDocument()],
+      [paths.decisionPolicyFile, createDefaultDecisionPolicy()],
       [paths.blockersFile, DEFAULT_BLOCKERS],
       [tasksSchemaFile, tasksSchema],
       [goalsSchemaFile, goalsSchema],
@@ -167,6 +175,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [resultsSchemaFile, resultsSchema],
       [blockersSchemaFile, blockersSchema],
       [verificationSchemaFile, verificationSchema],
+      [decisionPolicySchemaFile, decisionPolicySchema],
     ];
 
     for (const [filePath, value] of jsonFileEntries) {

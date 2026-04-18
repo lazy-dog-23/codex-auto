@@ -17,6 +17,7 @@ import {
 } from "../shared/thread-context.js";
 import {
   getAgentsMarkdown,
+  getAutonomyDecisionSkillMarkdown,
   getAutonomyIntakeSkillMarkdown,
   getAutonomyPlanSkillMarkdown,
   getAutonomyReportSkillMarkdown,
@@ -34,6 +35,7 @@ import {
 } from "../scaffold/templates.js";
 import {
   createDefaultGoalsDocument,
+  createDefaultDecisionPolicy,
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
@@ -43,6 +45,7 @@ import {
 } from "./control-plane.js";
 import {
   blockersSchema,
+  decisionPolicySchema,
   goalsSchema,
   proposalsSchema,
   resultsSchema,
@@ -485,20 +488,45 @@ async function buildManagedUpgradePlan(
       }
 
       const managementClass = getManagedFileClass(spec.relative_path);
-      plan.push({
-        path: spec.path,
-        relative_path: spec.relative_path,
-        template_id: spec.template_id,
-        management_class: managementClass,
-        upgrade_blocking: isBlockingManagedFileClass(managementClass),
-        status: "foreign_occupied",
-        reason: "No managed metadata record exists for this path.",
-        installed_hash: null,
-        current_hash: null,
-        desired_hash: getManagedSpecHash(spec, spec.content),
-        last_reconciled_product_version: null,
-        action: "manual",
-      });
+      const desiredHash = getManagedSpecHash(spec, spec.content);
+      try {
+        const stats = await fs.lstat(spec.path);
+        plan.push({
+          path: spec.path,
+          relative_path: spec.relative_path,
+          template_id: spec.template_id,
+          management_class: managementClass,
+          upgrade_blocking: isBlockingManagedFileClass(managementClass),
+          status: "foreign_occupied",
+          reason: stats.isFile()
+            ? "No managed metadata record exists for this existing file."
+            : "No managed metadata record exists and the path is occupied by a non-file entry.",
+          installed_hash: null,
+          current_hash: stats.isFile() ? getManagedSpecHash(spec, await fs.readFile(spec.path, "utf8")) : null,
+          desired_hash: desiredHash,
+          last_reconciled_product_version: null,
+          action: "manual",
+        });
+      } catch (error) {
+        if (error instanceof Error && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+
+        plan.push({
+          path: spec.path,
+          relative_path: spec.relative_path,
+          template_id: spec.template_id,
+          management_class: managementClass,
+          upgrade_blocking: isBlockingManagedFileClass(managementClass),
+          status: "safe_replace",
+          reason: "New managed file is missing and can be added from the current template.",
+          installed_hash: null,
+          current_hash: null,
+          desired_hash: desiredHash,
+          last_reconciled_product_version: null,
+          action: "replace",
+        });
+      }
       continue;
     }
 
@@ -1111,6 +1139,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${getAutonomySprintSkillMarkdown()}\n`,
     },
     {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-decision", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-decision/SKILL.md",
+      template_id: "autonomy_decision_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyDecisionSkillMarkdown()}\n`,
+    },
+    {
       path: paths.environmentFile,
       relative_path: ".codex/environments/environment.toml",
       template_id: "environment_toml",
@@ -1216,6 +1251,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${JSON.stringify(createDefaultVerificationDocument(), null, 2)}\n`,
     },
     {
+      path: paths.decisionPolicyFile,
+      relative_path: "autonomy/decision-policy.json",
+      template_id: "decision_policy_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultDecisionPolicy(), null, 2)}\n`,
+    },
+    {
       path: paths.blockersFile,
       relative_path: "autonomy/blockers.json",
       template_id: "blockers_json",
@@ -1277,6 +1319,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "verification_schema_json",
       kind: "json",
       content: `${JSON.stringify(verificationSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "decision-policy.schema.json"),
+      relative_path: "autonomy/schema/decision-policy.schema.json",
+      template_id: "decision_policy_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(decisionPolicySchema, null, 2)}\n`,
     },
   ];
 

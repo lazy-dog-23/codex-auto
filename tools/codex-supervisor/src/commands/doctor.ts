@@ -17,6 +17,7 @@ import { readTomlFile } from '../infra/toml.js';
 import type { DiagnosticIssue, FileSnapshot, WorktreeSummary } from '../infra/types.js';
 import {
   blockersSchema,
+  decisionPolicySchema,
   goalsSchema,
   proposalsSchema,
   resultsSchema,
@@ -27,6 +28,7 @@ import {
 } from '../schemas/index.js';
 import { resolveRepoPaths } from '../shared/paths.js';
 import { inspectManagedUpgradeState } from './upgrade-managed.js';
+import { loadPendingOperation } from './control-plane.js';
 import type {
   AutonomyResults,
   AutonomySettings,
@@ -36,6 +38,7 @@ import type {
   ProposalsDocument,
   TasksDocument,
   VerificationDocument,
+  DecisionPolicyDocument,
 } from '../contracts/autonomy.js';
 
 export interface DoctorOptions {
@@ -93,6 +96,7 @@ const REQUIRED_PATHS: Array<{ path: string; kind: 'file' | 'directory'; required
   { path: '.agents/skills/$autonomy-review/SKILL.md', kind: 'file', required: true },
   { path: '.agents/skills/$autonomy-report/SKILL.md', kind: 'file', required: true },
   { path: '.agents/skills/$autonomy-sprint/SKILL.md', kind: 'file', required: true },
+  { path: '.agents/skills/$autonomy-decision/SKILL.md', kind: 'file', required: true },
   { path: 'autonomy/goal.md', kind: 'file', required: true },
   { path: 'autonomy/journal.md', kind: 'file', required: true },
   { path: 'autonomy/goals.json', kind: 'file', required: true },
@@ -102,6 +106,7 @@ const REQUIRED_PATHS: Array<{ path: string; kind: 'file' | 'directory'; required
   { path: 'autonomy/settings.json', kind: 'file', required: true },
   { path: 'autonomy/results.json', kind: 'file', required: true },
   { path: 'autonomy/verification.json', kind: 'file', required: true },
+  { path: 'autonomy/decision-policy.json', kind: 'file', required: true },
   { path: 'autonomy/blockers.json', kind: 'file', required: true },
   { path: 'autonomy/schema', kind: 'directory', required: true },
   { path: 'autonomy/schema/goals.schema.json', kind: 'file', required: true },
@@ -112,6 +117,7 @@ const REQUIRED_PATHS: Array<{ path: string; kind: 'file' | 'directory'; required
   { path: 'autonomy/schema/results.schema.json', kind: 'file', required: true },
   { path: 'autonomy/schema/blockers.schema.json', kind: 'file', required: true },
   { path: 'autonomy/schema/verification.schema.json', kind: 'file', required: true },
+  { path: 'autonomy/schema/decision-policy.schema.json', kind: 'file', required: true },
 ];
 
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -296,6 +302,25 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
 
   await validateAutonomyDocuments(repoPaths, issues);
   await validateCodexConfig(repoPaths.configFile, issues);
+
+  try {
+    const pendingOperation = await loadPendingOperation(repoPaths);
+    if (pendingOperation) {
+      issues.push({
+        severity: 'error',
+        code: 'pending_control_plane_operation',
+        message: `Pending control-plane operation ${pendingOperation.kind} (${pendingOperation.id}) must be recovered before automation continues.`,
+        path: repoPaths.pendingOperationFile,
+      });
+    }
+  } catch (error) {
+    issues.push({
+      severity: 'error',
+      code: 'pending_control_plane_operation_invalid',
+      message: error instanceof Error ? error.message : String(error),
+      path: repoPaths.pendingOperationFile,
+    });
+  }
 
   const cliInstallState = await detectGlobalCliInstall();
   if (cliInstallState === 'global_missing') {
@@ -597,6 +622,12 @@ async function validateAutonomyDocuments(
       code: 'verification_schema_invalid',
       schema: verificationSchema,
       load: () => readJsonFile<VerificationDocument>(repoPaths.verificationFile),
+    },
+    {
+      path: repoPaths.decisionPolicyFile,
+      code: 'decision_policy_schema_invalid',
+      schema: decisionPolicySchema,
+      load: () => readJsonFile<DecisionPolicyDocument>(repoPaths.decisionPolicyFile),
     },
   ];
 

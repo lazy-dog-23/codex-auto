@@ -96,13 +96,25 @@ After `scripts/install-global.ps1` finishes, a new Codex thread can drive instal
 - `升级当前项目里的 auto`
 - `目标是……`
 - `确认提案`
+- `确认提案并继续`
 - `用冲刺模式推进这个目标`
 - `继续当前目标`
+- `快速续跑`
+- `任务完成后 1 分钟继续`
+- `按第二条处理 blocker`
+- `把这个 goal 收窄为 checklist/manual lane`
+- `保留 heartbeat 继续推进`
 - `汇报当前情况`
 
 Chats without a project are for research, planning, or discussion. Repo-local autonomy install and continuation should happen inside a project thread with a real repository root.
 
 When the current thread identity is available, the router auto-binds that thread on first use. If the current thread does not match the already-bound `report_thread_id`, the router blocks and requires an explicit rebind instead of silently continuing on the old binding.
+
+If the natural-language request already means "approve and keep going" or "keep this bound thread running", the router should not stop at proposal approval. It should translate that into `approve-proposal -> status -> official thread heartbeat -> bounded kickoff` when the current thread is already the bound thread.
+
+The same rule applies to blocker decisions: if the user says things like "use blocker option 2", "narrow this goal to a checklist/manual lane", or "keep the heartbeat and continue with the narrower scope", the router and automation prompts should translate that into the repo-local unblock and bounded plan/sprint flow instead of making the user name CLI tools.
+
+Fast follow-up requests such as `快速续跑`, `任务完成后 1 分钟继续`, or "continue one minute after each clean task" should use the same official thread heartbeat, not a second scheduler. The heartbeat should use end-of-turn self-rescheduling: check status and locks first, run exactly one bounded loop, then set that same heartbeat to a 1-minute burst only when the refreshed status is still bound, clean, unblocked, execution-ready, and has a concrete next task. Otherwise it should fall back to the normal cadence, safe backoff, or pause.
 
 Relay completion events are treated as status callbacks, not as new goal intake. They use the fixed envelope:
 
@@ -121,12 +133,17 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy prepare-worktree`
 - `codex-autonomy emit-automation-prompts --json` (machine-readable prompt bundle for official thread automation and relay fallback surfaces)
 - The surface-first prompt bundle now includes `whenToUse`, `whenNotToUse`, and `selectionRule` metadata so an agent can choose the right automation surface or role without extra operator coaching.
+- The `official_thread_automation` prompt includes self-rescheduling burst semantics for bound-thread sprint work: clean completed task plus a ready next task means 1-minute fast follow-up; blockers, dirty state, confirmation waits, review pending, or thread mismatch mean normal cadence, safe backoff, or pause.
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`
 - `codex-autonomy generate-proposal`
 - `codex-autonomy approve-proposal --goal-id <goalId>`
+- natural-language "approve and continue" should map to `approve-proposal`, then the same-thread heartbeat path when the bound thread can continue safely
+- `codex-autonomy create-successor-goal --auto-approve` (only when the repo decision policy enables a charter-bound long-running program successor)
 - `codex-autonomy review` (runs the review gate, attempts the controlled autonomy closeout commit when eligible, and immediately realigns the background worktree)
 - `codex-autonomy report`
 - `codex-autonomy status`
+- `codex-autonomy decide --json` (classifies the current boundary and returns whether the agent may continue, repair once, back off, or must ask the operator)
+- `codex-autonomy unblock <taskId>` when a blocker decision was already made in natural language and that decision only narrows scope or picks an existing blocker option
 - `codex-autonomy pause` / `resume`
 - `codex-autonomy merge-autonomy-branch`
 
@@ -137,7 +154,10 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `ready_for_automation=true` means the control plane can safely wake up and do one bounded next step. That next step may still be planning-only or confirmation-only work.
 - `ready_for_execution=true` means the next wake-up can actually enter a bounded implementation loop.
 - `goal_supply_state` distinguishes whether the next step is continuing an active goal, picking up another approved goal, waiting for proposal confirmation, idling after completion, staying empty, or stopping for manual triage.
-- `next_automation_step` tells the runner whether it should `execute_bounded_loop`, `plan_or_rebalance`, `await_confirmation`, `idle`, or `manual_triage`.
+- `next_automation_step` tells the runner whether it should `execute_bounded_loop`, `plan_or_rebalance`, `create_successor_goal`, `await_confirmation`, `idle`, or `manual_triage`.
+- `decision_event`, `decision_outcome`, `decision_next_action`, and `decision_heartbeat` tell a heartbeat or bound thread whether it can keep going without the user. Agents should run `codex-autonomy decide --json` before converting blocker, verification, dirty worktree, closeout, scope, environment, or thread-boundary states into a human question.
+- `create_successor_goal` is disabled by default. It only becomes automation-ready when `autonomy/decision-policy.json` defines an authorized long-running charter and allows one minimal successor goal after all approved work is complete. The write command also enforces the same bound-thread and `status` / `decide` gates at the CLI boundary.
+- If a control-plane write is interrupted, `autonomy/operations/pending.json` blocks the next heartbeat until `codex-autonomy status`, `doctor`, or rerunning the original command can surface or recover the pending operation.
 
 ## Developer Fallback
 
@@ -169,6 +189,8 @@ Oversized files, files with NUL bytes, broken markers, or non-text files stay in
 - `.codex/environments/environment.toml`: shared Windows setup plus `verify`, `smoke`, and `review` actions
 - `.codex/config.toml`: repo fallback config with `approval_policy = "never"` and `sandbox_mode = "workspace-write"`
 - `autonomy/*.json`: canonical repo-local autonomy state
+- `autonomy/decision-policy.json`: repo-local decision boundary policy for auto-continue, one-shot repair, safe backoff, and human escalation
+- `autonomy/operations/pending.json`: transient recovery marker for interrupted multi-file control-plane writes
 - `scripts/verify.ps1`: worker acceptance gate
 - `scripts/review.ps1`: baseline effect-review gate consumed by `codex-autonomy review`
 - `tools/codex-supervisor`: TypeScript CLI implementation

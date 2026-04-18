@@ -18,7 +18,8 @@ export function getAgentsMarkdown(): string {
     "5. 手工 `commit`、`push`、`deploy` 统统禁止；自动提交只允许自治流程在 `codex/autonomy` 分支上执行。",
     "6. 所有写入 `autonomy/*` 的动作，先拿 `autonomy/locks/cycle.lock`。",
     "7. `autonomy/*` 下的 JSON 必须原子写入，时间统一用 UTC ISO 8601，路径统一用 repo-relative forward-slash。",
-    "8. 由于 repo 默认 `approval_policy=never`，禁止 destructive 或高影响操作：不得执行 force push、history rewrite、批量删除、越界写入、凭据变更、部署、外部系统副作用；需要这类动作时必须先写 blocker 并停止。",
+    "8. 若存在 `autonomy/operations/pending.json`，先恢复或汇报该 pending operation，禁止开启新的 bounded loop。",
+    "9. 由于 repo 默认 `approval_policy=never`，禁止 destructive 或高影响操作：不得执行 force push、history rewrite、批量删除、越界写入、凭据变更、部署、外部系统副作用；需要这类动作时必须先写 blocker 并停止。",
     "",
     "## 运行约定",
     "",
@@ -29,6 +30,8 @@ export function getAgentsMarkdown(): string {
     "- Reviewer 运行 `codex-autonomy review` 做效果检查、受控 closeout commit 与 background worktree 对齐，不扩大任务范围。",
     "- Reporter 只有异常、blocked、review_pending、commit 失败等情况立即回线程；正常成功按 heartbeat 汇总，详细运行记录留在 Inbox 和 journal。",
     "- Sprint runner 的 heartbeat 只是唤醒间隔，不是任务时长；每次唤醒只推进单个任务闭环，当前 goal 完成且存在下一个 approved goal 时同轮直接接续。",
+    "- 官方 thread heartbeat 可以使用 end-of-turn self-rescheduling burst：每轮先查 `status` / 锁状态，不在开头只改 cadence；干净完成且仍有 ready next task 时再把同一个 heartbeat 设为 1 分钟快速续跑；遇到 blocker、review_pending、needs_confirmation、dirty worktree 或线程不匹配时退回安全节拍或暂停。",
+    "- 遇到 proposal、verification、dirty worktree、closeout、环境、scope 或线程边界时，先用 `codex-autonomy decide --json` 或 `$autonomy-decision` 做统一边界裁决；只有 `decision_outcome=auto_continue` / `auto_repair_once` 才继续，`ask_human` / `reject_or_rewrite` 必须停下。",
     "- `sprint_active=false` 或 `paused=true` 时只做状态检查和汇报，不做新的 plan/work/review 推进。",
     "- Sprint runner 遇到 blocker、review_pending 或无任务时停下。",
     "- Worker、Reviewer 或 Sprint runner 如果生成了“下一步建议”，只允许目标内 follow-up 自动入队；一旦改变验收、约束或范围，必须写 blocker 等线程确认。",
@@ -38,9 +41,9 @@ export function getAgentsMarkdown(): string {
     "## 线程入口",
     "",
     "- 原线程是唯一操作入口，`report_thread_id` 是所有摘要和异常回传的锚点。",
-    "- 线程内的自然语言动作固定收口为：`把 auto 装进当前项目`、`目标是……`、`确认提案`、`用冲刺模式推进这个目标`、`用巡航模式推进这个目标`、`汇报当前情况`、`暂停当前目标`、`继续当前目标`、`处理下一个目标`、`合并自治分支`。",
+    "- 线程内的自然语言动作固定收口为：`把 auto 装进当前项目`、`目标是……`、`确认提案`、`确认提案并继续`、`用冲刺模式推进这个目标`、`用巡航模式推进这个目标`、`汇报当前情况`、`暂停当前目标`、`继续当前目标`、`处理下一个目标`、`快速续跑`、`任务完成后 1 分钟继续`、`自动判断能不能继续`、`只有越界或高风险时问我`、`按第二条处理 blocker`、`把这个 goal 收窄为 checklist/manual lane`、`保留 heartbeat 继续推进`、`合并自治分支`。",
     "- `汇报当前情况` 必须先运行 `codex-autonomy status`；只有明确要求详细结果时才运行 `codex-autonomy report`，并且以最终命令输出里的 `automation_state`、`ready_for_automation`、`ready_for_execution`、`goal_supply_state`、`next_automation_step`、`next_automation_reason`、`report_thread_id`、`current_thread_id`、`thread_binding_state`、`thread_binding_hint` 为准。若状态里出现 `git_runtime_probe_deferred` 或 `background_runtime_probe_deferred`，还必须直接运行一次 `git status --short` 再判断真实 blocker。",
-    "- `继续当前目标`、`处理下一个目标`、`用冲刺模式推进这个目标` 在执行前必须先运行 `codex-autonomy status`；如果 `ready_for_automation=false`，原样汇报 `next_automation_reason` 并停止；如果 `ready_for_execution=false`，则严格按 `next_automation_step` 收口：`plan_or_rebalance` 只做一轮规划/收口，`await_confirmation` 只汇报待确认并停止，只有 `execute_bounded_loop` 才能进入业务代码闭环。若状态里出现 `git_runtime_probe_deferred` 或 `background_runtime_probe_deferred`，还必须直接运行一次 `git status --short`，发现 unmanaged drift 就停止。",
+    "- `继续当前目标`、`处理下一个目标`、`用冲刺模式推进这个目标` 在执行前必须先运行 `codex-autonomy status`；如果出现 `pending_control_plane_operation`，先恢复或汇报该 operation，不要开启新 loop；如果 `ready_for_automation=false`，原样汇报 `next_automation_reason` 并停止；如果 `ready_for_execution=false`，则严格按 `next_automation_step` 收口：`plan_or_rebalance` 只做一轮规划/收口，`await_confirmation` 只汇报待确认并停止，`manual_triage` 只在当前线程已经给出明确决策且该决策只是收窄范围/选择已有 blocker 方案时，才允许走 `codex-autonomy unblock <task-id>` 加一轮 bounded plan/sprint，只有 `execute_bounded_loop` 才能进入业务代码闭环。若状态里出现 `git_runtime_probe_deferred` 或 `background_runtime_probe_deferred`，还必须直接运行一次 `git status --short`，发现 unmanaged drift 就停止。",
     "- 如果 `thread_binding_state=bound_to_other`，当前线程不是 operator thread；必须明确报告 mismatch 并停止，不得静默沿用旧 `report_thread_id` 继续。",
     "- `goal.md` 只镜像当前 active goal；真正的目标队列和批准边界以 `goals.json`、`proposals.json`、`tasks.json` 为准。",
     "",
@@ -52,6 +55,7 @@ export function getAgentsMarkdown(): string {
     "- `.agents/skills/$autonomy-review/SKILL.md`",
     "- `.agents/skills/$autonomy-report/SKILL.md`",
     "- `.agents/skills/$autonomy-sprint/SKILL.md`",
+    "- `.agents/skills/$autonomy-decision/SKILL.md`",
     "",
     "## Shared Environment",
     "",
@@ -77,6 +81,7 @@ export function getAutonomyPlanSkillMarkdown(): string {
     "- If a goal is still `awaiting_confirmation`, update only `autonomy/proposals.json` and do not materialize tasks yet.",
     "- If the goal is `approved` or `active`, rebalance only inside that approved boundary.",
     "- If a worker, reviewer, or sprint loop leaves a follow-up suggestion that still fits the approved goal, convert it into proposal or task queue adjustments.",
+    "- If the latest operator message clearly chooses among recorded blocker options or narrows scope inside the current goal, reflect that decision in proposal/task wording and prepare the unblock/rebalance path instead of keeping the blocker open.",
     "- Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.",
     "- Write `autonomy/*.json` via atomic temp-file then rename semantics.",
     "- Update only autonomy state, proposal, result, and journal entries.",
@@ -153,7 +158,7 @@ export function getAutonomyIntakeSkillMarkdown(): string {
     "- Read the current `autonomy/goal.md` and existing journal entries before writing anything.",
     "- Turn the user request into a concise objective, constraints, and success criteria.",
     "- Keep the intake focused on the current repository and current thread.",
-    "- Treat thread phrases like `目标是……` as goal intake, and leave `确认提案` or mode changes to their dedicated command paths.",
+    "- Treat thread phrases like `目标是……` as goal intake, and leave `确认提案`、`确认提案并继续`、blocker 处理、or mode changes to their dedicated command paths.",
     "- Update only the repo-local intake artifacts that already exist.",
     "",
     "## Guardrails",
@@ -243,14 +248,18 @@ export function getAutonomySprintSkillMarkdown(): string {
     "- Read the current goal, task queue, most recent result, and the latest `ready_for_automation`, `ready_for_execution`, `goal_supply_state`, `next_automation_step`, and `next_automation_reason` fields.",
     "- If the status output warns `git_runtime_probe_deferred` or `background_runtime_probe_deferred`, run `git status --short` from the repo root before continuing; if that direct Git check shows unmanaged diffs, report them and stop.",
     "- If `codex-autonomy status` says the repo has a recoverable closeout diff and explicitly tells you to run `codex-autonomy review`, first rerun the narrowest verification needed for that dirty diff; at minimum run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether the loop can continue.",
+    "- If `codex-autonomy status` reports `pending_control_plane_operation`, recover that operation by rerunning the original command from the bound thread when safe; otherwise stop and report the operation id.",
     "- Start with one immediate kickoff loop when the goal is first approved.",
     "- Treat the sprint heartbeat as a wake-up interval, not a task duration.",
+    "- In an official thread heartbeat, self-rescheduling burst mode means status and locks are checked first, then the same heartbeat is set to 1 minute only after a clean bounded task when status still shows a ready next task. Do not create duplicate heartbeats.",
     "- When sprint_active is false or paused is true, keep the loop to a status check and report, then stop.",
     "- If `ready_for_automation=false`, stop after reporting `next_automation_reason` instead of improvising a freeform coding pass.",
     "- If `ready_for_execution=false`, obey `next_automation_step`: `plan_or_rebalance` means do one bounded planning/rebalance pass and rerun status once, `await_confirmation` means report the approval wait and stop, and only `execute_bounded_loop` may enter the business-code loop.",
+    "- If `next_automation_step=manual_triage`, stop unless the current thread already contains a fresh explicit operator decision that resolves the blocker inside the current goal boundary; if it does, translate that decision through `codex-autonomy unblock <task-id>` plus one bounded planning pass instead of asking the operator to name tools.",
     "- If `thread_binding_state=bound_to_other`, stop and report the operator-thread mismatch instead of continuing in the wrong thread.",
     "- Move through plan, work, review, and report in a single bounded pass.",
     "- When the current goal completes and another approved goal exists, continue in the same loop instead of waiting for the next heartbeat.",
+    "- 已授权长期自治只允许通过 `codex-autonomy create-successor-goal --auto-approve` 创建最小 successor goal；必须先由 `status` 给出 `next_automation_step=create_successor_goal`，且 `decide --json` 给出 `decision_outcome=auto_continue`。",
     "- If a task finishes and the next step still belongs to the approved goal set, leave a concise follow-up suggestion for the next planning pass or immediate continuation.",
     "- Stop when sprint_active is false, paused is true, the goal is blocked, or there is nothing eligible to do.",
     "",
@@ -262,6 +271,47 @@ export function getAutonomySprintSkillMarkdown(): string {
     "- Do not keep running after a blocker, review_pending condition, commit failure, or pause.",
     "- Do not broaden the goal beyond its approved boundaries.",
     "- If the suggested next step would change acceptance, constraints, or scope, write a blocker instead of continuing.",
+  ].join("\n");
+}
+
+export function getAutonomyDecisionSkillMarkdown(): string {
+  return [
+    "---",
+    "name: autonomy-decision",
+    "description: Classify autonomy boundary events and decide whether the bound thread should continue, repair once, back off, or ask the operator.",
+    "---",
+    "",
+    "# autonomy-decision",
+    "",
+    "Use this skill before asking the operator when autonomy hits a boundary such as proposal confirmation, verification failure, dirty worktree, closeout drift, environment mismatch, dependency uncertainty, scope change, or thread mismatch.",
+    "",
+    "## Responsibilities",
+    "",
+    "- Run `codex-autonomy status` first and quote `ready_for_automation`, `ready_for_execution`, `automation_state`, `goal_supply_state`, `next_automation_step`, `next_automation_reason`, `current_goal_id`, `current_task_id`, `next_task_id`, `thread_binding_state`, `successor_goal_available`, `successor_goal_auto_approve`, and `successor_goal_reason`.",
+    "- Run `codex-autonomy decide --json` and treat its `decision_event`, `decision_outcome`, `decision_next_action`, `decision_heartbeat`, and `decision_reason` as the control-plane decision.",
+    "- Read `autonomy/decision-policy.json` when you need to explain why a decision is automatic versus human-confirmed.",
+    "- For `decision_outcome=auto_continue`, continue only through the bounded repo-local control plane and only when the status surface permits it.",
+    "- For `decision_next_action=create_successor_goal`, continue only when status reports `successor_goal_available=true` and policy reports `successor_goal_auto_approve=true`; run `codex-autonomy create-successor-goal --auto-approve`, rerun status, then run at most one bounded sprint loop.",
+    "- For `decision_outcome=auto_repair_once`, do only the named repair action, such as `run_verify_then_review` or `retry_verification_once`, then rerun `codex-autonomy status` and `codex-autonomy decide --json` before continuing.",
+    "- For `decision_outcome=safe_backoff`, leave repo state unchanged except for normal reporting or heartbeat cadence updates.",
+    "- For `decision_outcome=ask_human`, stop with one concrete question and the decision evidence. Do not keep looping at 1 minute.",
+    "- For `decision_outcome=reject_or_rewrite`, write or preserve the blocker and stop.",
+    "",
+    "## Event classes",
+    "",
+    "- `proposal_boundary`: goal or proposal confirmation is required.",
+    "- `successor_goal_boundary`: all approved work is complete and a policy-authorized program charter may supply one minimal successor goal.",
+    "- `verification_failure`: tests, browser checks, e2e, or closeout verification need bounded repair or confirmation.",
+    "- `recoverable_closeout`: a controlled diff can be closed through verify plus `codex-autonomy review`.",
+    "- `dirty_worktree`: repo or background worktree state is unsafe or unclear.",
+    "- `scope_change`, `dependency_or_env`, `security_or_secret`, `release_or_git`, `external_service`, `unknown_context`: treat as human-confirmed unless the repo policy explicitly narrows them.",
+    "",
+    "## Guardrails",
+    "",
+    "- Do not override `autonomy/decision-policy.json` from chat context.",
+    "- Do not convert `ask_human` into approval just because the current model believes the answer is obvious.",
+    "- Do not approve proposals, relax tests, add dependencies, touch credentials, deploy, force-push, bulk-delete, or move the operator thread unless the policy and current user message explicitly allow it.",
+    "- Keep every run bounded: one decision, one repair or continuation action, then status again.",
   ].join("\n");
 }
 
@@ -738,6 +788,25 @@ function Test-BlockerCollection {
     }
 }
 
+function Test-DecisionPolicyDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($key in @('version','auto_continue','ask_human','heartbeat')) {
+        Assert-PropertyExists -Item $doc -Name $key -Path $Path
+    }
+    foreach ($key in @('docs_only_changes','approved_goal_followups','recoverable_closeout_paths','verification_retry','auto_successor_goal')) {
+        Assert-PropertyExists -Item $doc.auto_continue -Name $key -Path $Path -Context 'auto_continue from'
+    }
+    Assert-PropertyExists -Item $doc.auto_continue.verification_retry -Name 'max_retry_per_task' -Path $Path -Context 'verification_retry from'
+    Assert-PropertyExists -Item $doc.auto_continue.verification_retry -Name 'allowed_failure_kinds' -Path $Path -Context 'verification_retry from'
+    foreach ($key in @('enabled','auto_approve_minimal_successor','default_run_mode','max_consecutive_auto_successors','max_successor_goals_per_day','objective','success_criteria','constraints','out_of_scope','allowed_lanes','forbidden_lanes')) {
+        Assert-PropertyExists -Item $doc.auto_continue.auto_successor_goal -Name $key -Path $Path -Context 'auto_successor_goal from'
+    }
+    foreach ($key in @('ready_next_task','recoverable_or_slow_verify','blocked_or_confirmation')) {
+        Assert-PropertyExists -Item $doc.heartbeat -Name $key -Path $Path -Context 'heartbeat from'
+    }
+}
+
 function Invoke-CliHarness {
     $cliDir = Join-Path $repoRoot 'tools/codex-supervisor'
     $packageJson = Join-Path $cliDir 'package.json'
@@ -776,6 +845,7 @@ foreach ($requiredPath in @(
     '.agents/skills/$autonomy-review/SKILL.md',
     '.agents/skills/$autonomy-report/SKILL.md',
     '.agents/skills/$autonomy-sprint/SKILL.md',
+    '.agents/skills/$autonomy-decision/SKILL.md',
     '.codex/environments/environment.toml',
     '.codex/config.toml',
     'scripts/setup.windows.ps1',
@@ -791,6 +861,7 @@ foreach ($requiredPath in @(
     'autonomy/settings.json',
     'autonomy/results.json',
     'autonomy/verification.json',
+    'autonomy/decision-policy.json',
     'autonomy/blockers.json',
     'autonomy/schema/tasks.schema.json',
     'autonomy/schema/goals.schema.json',
@@ -800,6 +871,7 @@ foreach ($requiredPath in @(
     'autonomy/schema/results.schema.json',
     'autonomy/schema/blockers.schema.json',
     'autonomy/schema/verification.schema.json',
+    'autonomy/schema/decision-policy.schema.json',
     'autonomy/locks'
 )) {
     Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $requiredPath)) "Missing required path: $requiredPath"
@@ -815,7 +887,9 @@ Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
     'repo-relative forward-slash',
     'codex/autonomy',
     'Reporter 只有异常',
-    'Sprint runner 的 heartbeat 只是唤醒间隔'
+    'Sprint runner 的 heartbeat 只是唤醒间隔',
+    'codex-autonomy decide --json',
+    'codex-autonomy create-successor-goal --auto-approve'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-plan/SKILL.md') -Patterns @(
@@ -856,7 +930,16 @@ Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-report/SK
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-sprint/SKILL.md') -Patterns @(
     '(?m)^---',
     '(?m)^name:\s*autonomy-sprint',
-    'short, bounded execution loops'
+    'short, bounded execution loops',
+    'create-successor-goal'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-decision/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-decision',
+    'codex-autonomy decide --json',
+    'decision_outcome',
+    'successor_goal_boundary'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/goal.md') -Patterns @(
@@ -908,6 +991,7 @@ Test-ProposalCollection -Path (Join-Path $repoRoot 'autonomy/proposals.json')
 Test-SettingsDocument -Path (Join-Path $repoRoot 'autonomy/settings.json')
 Test-ResultsDocument -Path (Join-Path $repoRoot 'autonomy/results.json')
 Test-VerificationDocument -Path (Join-Path $repoRoot 'autonomy/verification.json')
+Test-DecisionPolicyDocument -Path (Join-Path $repoRoot 'autonomy/decision-policy.json')
 Test-BlockerCollection -Path (Join-Path $repoRoot 'autonomy/blockers.json')
 
 Invoke-CliHarness
@@ -1068,14 +1152,19 @@ export function getReadmeManagedSectionMarkdown(): string {
     "### 日常命令入口",
     "",
     "- 标准路径：`codex-autonomy <command>`。",
-    "- 机器级自然语言入口支持“把 auto 装进当前项目”“目标是……”“确认提案”“用冲刺模式推进这个目标”“继续当前目标”“汇报当前情况”等表达；router 会先做 install/upgrade/bind，再继续目标流。",
+    "- 机器级自然语言入口支持“把 auto 装进当前项目”“目标是……”“确认提案”“确认提案并继续”“用冲刺模式推进这个目标”“继续当前目标”“快速续跑”“任务完成后 1 分钟继续”“自动判断能不能继续”“只有越界或高风险时问我”“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”“汇报当前情况”等表达；router 会先做 install/upgrade/bind，再继续目标流。",
     "- 官方同线程持续推进主路：在已绑定的项目线程内，用 `codex-autonomy emit-automation-prompts --json` 取 `official_thread_automation.prompt`，并先阅读同一条记录里的 `whenToUse` / `whenNotToUse` / `selectionRule`，再交给 Codex thread automation heartbeat。",
+    "- 快速续跑不是常驻 1 分钟轮询，而是 end-of-turn self-rescheduling burst heartbeat：每轮先查 `status` / 锁状态，不在开头只改 cadence；当前轮干净结束且 `status` 仍显示可执行 next task 时，把同一个官方 heartbeat 设为 1 分钟后继续；否则退回正常节拍、安全退避或暂停。",
     "- 外部 `Task Scheduler -> relay -> 绑定线程` 属于 fallback bridge，不是默认主路。",
     "- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标转成待确认 goal。",
-    "- `codex-autonomy approve-proposal --goal-id <goalId>`：确认提案并物化任务。",
+    "- `codex-autonomy approve-proposal --goal-id <goalId>`：确认提案并物化任务；如果自然语言已经表达“确认后继续/直接开始自治”，router 要继续创建或刷新官方 heartbeat，并在同线程里立刻 kickoff 一轮 bounded sprint。",
+    "- `codex-autonomy create-successor-goal --auto-approve`：只在 `autonomy/decision-policy.json` 明确启用长期 charter 且允许自动批准时使用；它会在所有已批准工作完成后创建并批准一个最小 successor goal，并在 CLI 写入口强制复核绑定线程和 `status` / `decide` gate。",
+    "- `codex-autonomy unblock <taskId>`：当用户已经在自然语言里明确选择某个 blocker 方案，且该方案只会收窄 scope 或选择已有选项时，用它关闭 blocker 并把任务恢复到 `queued/ready`，然后继续 bounded plan/sprint。",
+    "- `codex-autonomy decide --json`：通用边界裁决入口。遇到 proposal、verification、dirty worktree、closeout、环境、scope、线程 mismatch 等问题时，先输出 `decision_event` / `decision_outcome` / `decision_next_action`，再决定继续、修复一次、退避或问人。",
     "- `codex-autonomy status` / `report` / `review`：查看状态、结果与 review gate；`review` 会在可提交时自动完成受控 closeout commit 并立刻对齐 background worktree。",
     "- `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路与 relay fallback 所需的机读 prompt bundle，并附带 `whenToUse` / `whenNotToUse` / `selectionRule`，让 agent 自行判断该选哪条 surface 或 role。",
-    "- `codex-autonomy status` 会把调度可唤醒态和执行可进入态拆开表达：`ready_for_automation` 负责“是否该唤醒”，`ready_for_execution` 负责“是否该进执行闭环”，并通过 `goal_supply_state` / `next_automation_step` 指明这轮该执行、规划、等待确认还是停机。",
+    "- `codex-autonomy status` 会把调度可唤醒态和执行可进入态拆开表达：`ready_for_automation` 负责“是否该唤醒”，`ready_for_execution` 负责“是否该进执行闭环”，并通过 `goal_supply_state` / `next_automation_step` 指明这轮该执行、规划、创建 `create_successor_goal`、等待确认还是停机。",
+    "- `create_successor_goal` 默认关闭。只有 repo 在 `autonomy/decision-policy.json` 写入明确长期 charter，并开启 `auto_successor_goal.enabled` / `auto_approve_minimal_successor` 后，绑定线程才可以在 `completed_only` 后自动创建并批准一个最小 successor goal；如果中断留下 `autonomy/operations/pending.json`，下一轮必须先恢复或清理 pending operation。",
     "",
     "### 控制面文件入口",
     "",
@@ -1084,6 +1173,8 @@ export function getReadmeManagedSectionMarkdown(): string {
     "- `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。",
     "- `.codex/config.toml`：repo 级默认模型与运行配置。",
     "- `autonomy/goals.json`、`proposals.json`、`tasks.json`、`state.json`、`settings.json`、`results.json`、`blockers.json`：自治真源。",
+    "- `autonomy/decision-policy.json`：绑定线程的通用边界策略。它决定哪些边界可自动继续、哪些只能修复一次、哪些必须问人。",
+    "- `autonomy/operations/pending.json`：多文件控制面写入的临时恢复标记；存在时 heartbeat 不应继续执行新的 bounded loop。",
     "",
     "### thread binding / report",
     "",

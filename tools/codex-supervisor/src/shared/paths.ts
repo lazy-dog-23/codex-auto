@@ -12,6 +12,7 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   ".agents/skills/$autonomy-review/SKILL.md",
   ".agents/skills/$autonomy-report/SKILL.md",
   ".agents/skills/$autonomy-sprint/SKILL.md",
+  ".agents/skills/$autonomy-decision/SKILL.md",
   ".codex/config.toml",
   ".codex/environments/environment.toml",
   "scripts/setup.windows.ps1",
@@ -29,6 +30,8 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   "autonomy/settings.json",
   "autonomy/results.json",
   "autonomy/blockers.json",
+  "autonomy/decision-policy.json",
+  "autonomy/operations",
   "autonomy/schema/goals.schema.json",
   "autonomy/schema/proposals.schema.json",
   "autonomy/schema/tasks.schema.json",
@@ -37,6 +40,7 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   "autonomy/schema/results.schema.json",
   "autonomy/schema/blockers.schema.json",
   "autonomy/schema/verification.schema.json",
+  "autonomy/schema/decision-policy.schema.json",
 ] as const;
 
 const AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS = [
@@ -62,6 +66,7 @@ const STATIC_TEMPLATE_RELATIVE_PATHS = [
   "autonomy/schema/results.schema.json",
   "autonomy/schema/blockers.schema.json",
   "autonomy/schema/verification.schema.json",
+  "autonomy/schema/decision-policy.schema.json",
 ] as const;
 
 const RUNTIME_STATE_RELATIVE_PATHS = [
@@ -75,6 +80,7 @@ const RUNTIME_STATE_RELATIVE_PATHS = [
   "autonomy/state.json",
   "autonomy/results.json",
   "autonomy/blockers.json",
+  "autonomy/operations",
 ] as const;
 
 const NORMALIZED_STATIC_TEMPLATE_RELATIVE_PATHS = new Set(
@@ -106,6 +112,8 @@ export function resolveRepoPaths(repoRoot = process.cwd()): RepoPaths {
     resultsFile: path.join(autonomyDir, "results.json"),
     installFile: path.join(autonomyDir, "install.json"),
     verificationFile: path.join(autonomyDir, "verification.json"),
+    decisionPolicyFile: path.join(autonomyDir, "decision-policy.json"),
+    pendingOperationFile: path.join(autonomyDir, "operations", "pending.json"),
     blockersFile: path.join(autonomyDir, "blockers.json"),
     journalFile: path.join(autonomyDir, "journal.md"),
     goalFile: path.join(autonomyDir, "goal.md"),

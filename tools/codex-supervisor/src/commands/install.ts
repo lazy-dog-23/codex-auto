@@ -19,6 +19,7 @@ import {
 } from "../shared/thread-context.js";
 import {
   blockersSchema,
+  decisionPolicySchema,
   goalsSchema,
   proposalsSchema,
   resultsSchema,
@@ -29,6 +30,7 @@ import {
 } from "../schemas/index.js";
 import {
   getAgentsMarkdown,
+  getAutonomyDecisionSkillMarkdown,
   getAutonomyIntakeSkillMarkdown,
   getAutonomyPlanSkillMarkdown,
   getAutonomyReportSkillMarkdown,
@@ -47,6 +49,7 @@ import {
 } from "../scaffold/templates.js";
 import {
   createDefaultInstallDocument,
+  createDefaultDecisionPolicy,
   createDefaultGoalsDocument,
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
@@ -878,6 +881,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${getAutonomySprintSkillMarkdown()}\n`,
     },
     {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-decision", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-decision/SKILL.md",
+      template_id: "autonomy_decision_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyDecisionSkillMarkdown()}\n`,
+    },
+    {
       path: paths.environmentFile,
       relative_path: ".codex/environments/environment.toml",
       template_id: "environment_toml",
@@ -983,6 +993,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${JSON.stringify(createDefaultVerificationDocument(), null, 2)}\n`,
     },
     {
+      path: paths.decisionPolicyFile,
+      relative_path: "autonomy/decision-policy.json",
+      template_id: "decision_policy_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultDecisionPolicy(), null, 2)}\n`,
+    },
+    {
       path: paths.blockersFile,
       relative_path: "autonomy/blockers.json",
       template_id: "blockers_json",
@@ -1044,6 +1061,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "verification_schema_json",
       kind: "json",
       content: `${JSON.stringify(verificationSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "decision-policy.schema.json"),
+      relative_path: "autonomy/schema/decision-policy.schema.json",
+      template_id: "decision_policy_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(decisionPolicySchema, null, 2)}\n`,
     },
   ];
 
@@ -1260,6 +1284,7 @@ async function migrateGeneratedSchemaFiles(paths: ReturnType<typeof resolveRepoP
       legacyVariants: [LEGACY_RESULTS_SCHEMA],
     },
     { filePath: path.join(paths.schemaDir, "blockers.schema.json"), current: blockersSchema },
+    { filePath: path.join(paths.schemaDir, "decision-policy.schema.json"), current: decisionPolicySchema },
   ];
   const writes = await Promise.all(
     generatedSchemas.map((schema) => maybeMigrateGeneratedJsonFile(schema.filePath, schema.current, schema.legacyVariants ?? [])),

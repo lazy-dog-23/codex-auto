@@ -35,6 +35,7 @@ describe("automation prompts", () => {
     expect(prompt).toContain("If a goal is still `awaiting_confirmation`");
     expect(prompt).toContain("Safe follow-ups within the approved goal must auto-continue");
     expect(prompt).toContain("required verification axis is still pending");
+    expect(prompt).toContain("latest operator message explicitly chooses among recorded blocker options");
     expect(prompt).toContain("Respect run mode: sprint means immediate kickoff plus a budgeted multi-loop heartbeat runner, cruise means scheduled cadence.");
     expect(prompt).toContain("next-step suggestion");
   });
@@ -92,10 +93,24 @@ describe("automation prompts", () => {
     expect(officialPrompt).toContain("thread_binding_state");
     expect(officialPrompt).toContain("bound_to_current");
     expect(officialPrompt).toContain("codex-autonomy status");
+    expect(officialPrompt).toContain("end-of-turn self-rescheduling burst heartbeat");
+    expect(officialPrompt).toContain("Do not spend the wake-up only changing cadence");
+    expect(officialPrompt).toContain("next_task_id");
+    expect(officialPrompt).toContain("decision_outcome");
+    expect(officialPrompt).toContain("codex-autonomy decide --json");
+    expect(officialPrompt).toContain("decision_outcome=auto_repair_once");
+    expect(officialPrompt).toContain("decision_outcome=ask_human");
+    expect(officialPrompt).toContain("Burst fast-follow means 1 minute");
+    expect(officialPrompt).toContain("Do not approve proposals, relax verification, or keep a 1-minute loop");
     expect(officialPrompt).toContain("next_automation_step=await_confirmation");
+    expect(officialPrompt).toContain("next_automation_step=manual_triage");
+    expect(officialPrompt).toContain("next_automation_step=create_successor_goal");
+    expect(officialPrompt).toContain("codex-autonomy create-successor-goal --auto-approve");
+    expect(officialPrompt).toContain("codex-autonomy unblock <blocked-task-id>");
     expect(officialPrompt).toContain("next_automation_step=plan_or_rebalance");
     expect(officialPrompt).toContain("next_automation_step=execute_bounded_loop");
     expect(officialPrompt).toContain("Do not use relay as the main control path");
+    expect(officialPrompt).toContain("Do not ask the operator to translate a clear natural-language decision");
     expect(officialPrompt).toContain("in-app browser");
 
     expect(relayPrompt).toContain("external scheduler wake-up through the relay fallback path");
@@ -107,11 +122,18 @@ describe("automation prompts", () => {
     expect(relayPrompt).toContain("goal_supply_state");
     expect(relayPrompt).toContain("next_automation_step");
     expect(relayPrompt).toContain("thread_binding_state");
+    expect(relayPrompt).toContain("decision_outcome");
+    expect(relayPrompt).toContain("codex-autonomy decide --json");
     expect(relayPrompt).toContain("bound_to_current");
     expect(relayPrompt).toContain("next_automation_step=await_confirmation");
+    expect(relayPrompt).toContain("next_automation_step=manual_triage");
+    expect(relayPrompt).toContain("next_automation_step=create_successor_goal");
+    expect(relayPrompt).toContain("codex-autonomy create-successor-goal --auto-approve");
+    expect(relayPrompt).toContain("codex-autonomy unblock <blocked-task-id>");
     expect(relayPrompt).toContain("next_automation_step=plan_or_rebalance");
     expect(relayPrompt).toContain("next_automation_step=execute_bounded_loop");
     expect(relayPrompt).toContain("Treat official Codex thread automations as the preferred same-thread continuation surface.");
+    expect(relayPrompt).toContain("Do not ask the operator to spell out `approve-proposal`, `unblock`, `automation_update`, or relay tool names");
   });
 
   it("renders the golden output", () => {
@@ -127,8 +149,10 @@ describe("automation prompts", () => {
     expect(result.ok).toBe(true);
     expect(result.official_thread_automation.name).toBe("official-thread-automation");
     expect(result.external_relay_scheduler.name).toBe("external-relay-scheduler");
-    expect(result.official_thread_automation.cadence).toBe("every 15 minutes while sprint is active");
-    expect(result.official_thread_automation.whenToUse).toContain("thread_automation");
+    expect(result.official_thread_automation.cadence).toBe(
+      "self-rescheduling: 1 minute after a clean ready task, 15 minutes normally, 30 minutes on safe backoff",
+    );
+    expect(result.official_thread_automation.whenToUse).toContain("self-rescheduling burst");
     expect(result.external_relay_scheduler.whenNotToUse).toContain("same-thread recurring work");
     expect(result.worker.selectionRule).toContain("ready_for_execution=true");
     expect(result.planner.name).toBe("planner-cruise");

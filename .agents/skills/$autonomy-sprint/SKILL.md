@@ -13,12 +13,15 @@ Use this skill when the goal should start immediately and keep moving in short c
 - Read the current goal, task queue, most recent result, and the latest `ready_for_automation` / `next_automation_reason` fields.
 - If the status output warns `git_runtime_probe_deferred` or `background_runtime_probe_deferred`, run `git status --short` from the repo root before continuing; if that direct Git check shows unmanaged diffs, report them and stop.
 - If `codex-autonomy status` says the repo has a recoverable closeout diff and explicitly tells you to run `codex-autonomy review`, first rerun the narrowest verification needed for that dirty diff; at minimum run `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`, then `codex-autonomy review`, then rerun `codex-autonomy status` once before deciding whether the loop can continue.
+- Before turning a blocker, verification failure, proposal wait, dirty worktree, or scope boundary into a thread question, run `codex-autonomy decide --json`; continue only on `auto_continue` or `auto_repair_once`, and stop on `ask_human` or `reject_or_rewrite`.
 - Start with one immediate kickoff loop when the goal is first approved.
 - Treat the sprint heartbeat as a wake-up interval, not a task duration.
 - When sprint_active is false or paused is true, keep the loop to a status check and report, then stop.
+- If `codex-autonomy status` reports `pending_control_plane_operation`, recover that operation by rerunning the original command from the bound thread when safe; otherwise stop and report the operation id.
 - If `ready_for_automation=false`, stop after reporting `next_automation_reason` instead of improvising a freeform coding pass.
 - Move through plan, work, review, and report in a single bounded pass.
 - When the current goal completes and another approved goal exists, continue in the same loop instead of waiting for the next heartbeat.
+- When the current goal completes and status reports `next_automation_step=create_successor_goal`, run `codex-autonomy decide --json`; only if it returns `decision_outcome=auto_continue` and `decision_next_action=create_successor_goal`, run `codex-autonomy create-successor-goal --auto-approve`, rerun status, and then run at most one bounded sprint loop for the new goal.
 - If a task finishes and the next step still belongs to the approved goal set, leave a concise follow-up suggestion for the next planning pass or immediate continuation.
 - Stop when sprint_active is false, paused is true, the goal is blocked, or there is nothing eligible to do.
 

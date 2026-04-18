@@ -7,7 +7,7 @@ import { detectGitRepository } from "../infra/git.js";
 import { resolveRepoPaths } from "../shared/paths.js";
 import { CliError, CLI_EXIT_CODES } from "../shared/errors.js";
 import { resolveReportThreadBinding } from "../shared/thread-context.js";
-import { loadStateDocument, writeStateDocument } from "./control-plane.js";
+import { loadPendingOperation, loadStateDocument, writeStateDocument } from "./control-plane.js";
 
 interface BindThreadOptions {
   workspaceRoot?: string;
@@ -21,6 +21,13 @@ export async function runBindThreadCommand(
   const gitRepo = await detectGitRepository(options.workspaceRoot?.trim() || repoRoot);
   const controlRoot = gitRepo?.path ?? repoRoot;
   const paths = resolveRepoPaths(controlRoot);
+  const pendingOperation = await loadPendingOperation(paths);
+  if (pendingOperation) {
+    throw new CliError(
+      `Cannot bind report_thread_id while pending control-plane operation ${pendingOperation.kind} (${pendingOperation.id}) exists; recover or clear it first.`,
+      CLI_EXIT_CODES.blocked,
+    );
+  }
   const lock = await acquireCycleLock(paths.cycleLockFile, "codex-autonomy bind-thread");
 
   try {

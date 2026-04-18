@@ -6,6 +6,7 @@ import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import { describe, expect, it } from "vitest";
 
 import { blockersSchema } from "../src/schemas/blockers.schema.js";
+import { decisionPolicySchema } from "../src/schemas/decision-policy.schema.js";
 import { goalsSchema } from "../src/schemas/goals.schema.js";
 import { installSchema } from "../src/schemas/install.schema.js";
 import { proposalsSchema } from "../src/schemas/proposals.schema.js";
@@ -100,6 +101,14 @@ describe("schema fixtures", () => {
   it("accepts the sample verification document", () => {
     const validate = createValidator(verificationSchema);
     const data = readJsonFixture("verification.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
+  it("accepts the sample decision policy document", () => {
+    const validate = createValidator(decisionPolicySchema);
+    const data = readJsonFixture("decision-policy.sample.json");
 
     expect(validate(data)).toBe(true);
     expect(validate.errors).toBeNull();

@@ -113,10 +113,16 @@ describe("install scaffold", () => {
       "wake-up interval",
     );
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
+      "self-rescheduling burst mode",
+    );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
       "ready_for_automation=false",
     );
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-sprint", "SKILL.md"), "utf8")).toContain(
       "git status --short",
+    );
+    expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-decision", "SKILL.md"), "utf8")).toContain(
+      "codex-autonomy decide --json",
     );
     expect(await readFile(join(workspace, "README.md"), "utf8")).toContain(
       "codex-autonomy bind-thread",
@@ -144,8 +150,10 @@ describe("install scaffold", () => {
     expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.last_reconciled_product_version).toBe("0.1.0");
     expect(installMetadata.managed_files.find((item) => item.path === "AGENTS.md")?.management_class).toBe("repo_customized");
     expect(await readFile(join(workspace, "autonomy", "goals.json"), "utf8")).toContain('"goals"');
+    expect(await readFile(join(workspace, "autonomy", "decision-policy.json"), "utf8")).toContain("recoverable_closeout_paths");
     expect(await readFile(join(workspace, "autonomy", "settings.json"), "utf8")).toContain('"autonomy_branch"');
     expect(await readFile(join(workspace, "autonomy", "schema", "results.schema.json"), "utf8")).toContain('"reporter"');
+    expect(await readFile(join(workspace, "autonomy", "schema", "decision-policy.schema.json"), "utf8")).toContain("AutonomyDecisionPolicyFile");
     expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('service_tier = "fast"');
     expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('model_reasoning_effort = "xhigh"');
     expect(await readFile(join(workspace, ".codex", "config.toml"), "utf8")).toContain('model = "gpt-5.4"');
@@ -184,6 +192,12 @@ describe("install scaffold", () => {
     expect(readme).toContain("heartbeat + MINUTELY");
     expect(readme).toContain("官方 thread automation 是同线程持续推进的首选路径");
     expect(readme).toContain("fallback bridge");
+    expect(readme).toContain("确认提案并继续");
+    expect(readme).toContain("self-rescheduling burst heartbeat");
+    expect(readme).toContain("任务完成后 1 分钟继续");
+    expect(readme).toContain("codex-autonomy unblock <taskId>");
+    expect(readme).toContain("codex-autonomy decide --json");
+    expect(readme).toContain("autonomy/decision-policy.json");
 
     const installMetadata = JSON.parse(await readFile(join(workspace, "autonomy", "install.json"), "utf8")) as {
       managed_paths: string[];

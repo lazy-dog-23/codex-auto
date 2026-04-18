@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import { runBootstrapCommand } from "../src/commands/bootstrap.js";
 import { runDoctor } from "../src/commands/doctor.js";
 import { runBindThreadCommand } from "../src/commands/bind-thread.js";
 import { runApproveProposal } from "../src/commands/approve-proposal.js";
+import { runCreateSuccessorGoal } from "../src/commands/create-successor-goal.js";
 import { runGenerateProposal } from "../src/commands/generate-proposal.js";
 import { registerInstallCommand } from "../src/commands/install.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
@@ -25,6 +26,11 @@ import type { BlockersDocument, TasksDocument } from "../src/contracts/autonomy.
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const tempRoots: string[] = [];
+const gitEnvStack: Array<{
+  HOME: string | undefined;
+  USERPROFILE: string | undefined;
+  GIT_CONFIG_GLOBAL: string | undefined;
+}> = [];
 
 beforeEach(() => {
   delete process.env.CODEX_THREAD_ID;
@@ -32,6 +38,12 @@ beforeEach(() => {
 
 afterEach(async () => {
   delete process.env.CODEX_THREAD_ID;
+  while (gitEnvStack.length > 0) {
+    const env = gitEnvStack.pop();
+    restoreEnv("HOME", env?.HOME);
+    restoreEnv("USERPROFILE", env?.USERPROFILE);
+    restoreEnv("GIT_CONFIG_GLOBAL", env?.GIT_CONFIG_GLOBAL);
+  }
   while (tempRoots.length > 0) {
     const target = tempRoots.pop();
     if (target) {
@@ -50,6 +62,123 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function restoreEnv(name: "HOME" | "USERPROFILE" | "GIT_CONFIG_GLOBAL", value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+
+  process.env[name] = value;
+}
+
+function runGit(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    env: process.env,
+    encoding: "utf8",
+  }).trim();
+}
+
+async function prepareGitAutomationWorkspace(workspace: string): Promise<void> {
+  const gitHome = await mkdtemp(join(tmpdir(), "codex-git-home-"));
+  tempRoots.push(gitHome);
+  const gitConfigGlobal = join(gitHome, "gitconfig");
+  await mkdir(gitHome, { recursive: true });
+  await writeFile(gitConfigGlobal, "", "utf8");
+  gitEnvStack.push({
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+  });
+  process.env.HOME = gitHome;
+  process.env.USERPROFILE = gitHome;
+  process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+
+  runGit(workspace, ["init"]);
+  runGit(workspace, ["config", "user.name", "Codex Test"]);
+  runGit(workspace, ["config", "user.email", "codex-test@example.com"]);
+  await runBootstrapCommand(workspace);
+  runGit(workspace, ["add", "-A"]);
+  runGit(workspace, ["commit", "-m", "bootstrap control surface"]);
+  const prepare = await runPrepareWorktree({ workspaceRoot: workspace });
+  if (prepare.backgroundPath) {
+    tempRoots.push(prepare.backgroundPath);
+  }
+}
+
+async function seedCompletedOnlySuccessorState(
+  workspace: string,
+  options: { reportThreadId?: string; allowedLanes?: string[]; sprintActive?: boolean } = {},
+): Promise<void> {
+  await writeJson(join(workspace, "autonomy", "decision-policy.json"), {
+    version: 1,
+    auto_continue: {
+      docs_only_changes: true,
+      approved_goal_followups: true,
+      recoverable_closeout_paths: ["autonomy/**", "docs/**", "README.md", "TEAM_GUIDE.md"],
+      verification_retry: {
+        max_retry_per_task: 1,
+        allowed_failure_kinds: ["timeout"],
+      },
+      auto_successor_goal: {
+        enabled: true,
+        auto_approve_minimal_successor: true,
+        default_run_mode: "sprint",
+        max_consecutive_auto_successors: 3,
+        max_successor_goals_per_day: 8,
+        objective: "Keep improving this repository through small verified slices.",
+        success_criteria: ["A bounded successor goal is completed or blocked with evidence"],
+        constraints: ["Stay inside the repository"],
+        out_of_scope: ["Deployments"],
+        allowed_lanes: options.allowedLanes ?? ["documentation", "verification"],
+        forbidden_lanes: ["deploy", "release", "secret", "external_service"],
+      },
+    },
+    ask_human: ["proposal_boundary", "scope_change", "dependency_or_env", "security_or_secret", "release_or_git", "external_service", "unknown_context"],
+    heartbeat: {
+      ready_next_task: "1m",
+      recoverable_or_slow_verify: "15m",
+      blocked_or_confirmation: "30m_or_pause",
+    },
+  });
+  await writeJson(join(workspace, "autonomy", "goals.json"), {
+    version: 1,
+    goals: [
+      {
+        id: "goal-complete",
+        title: "Completed Goal",
+        objective: "Finish the previous slice",
+        success_criteria: ["done"],
+        constraints: [],
+        out_of_scope: [],
+        status: "completed",
+        run_mode: "sprint",
+        created_at: "2026-04-10T00:00:00Z",
+        approved_at: "2026-04-10T00:05:00Z",
+        completed_at: "2026-04-10T01:00:00Z",
+      },
+    ],
+  });
+  await writeJson(join(workspace, "autonomy", "state.json"), {
+    version: 1,
+    current_goal_id: null,
+    current_task_id: null,
+    cycle_status: "idle",
+    run_mode: null,
+    last_planner_run_at: null,
+    last_worker_run_at: null,
+    last_result: "passed",
+    consecutive_worker_failures: 0,
+    needs_human_review: false,
+    open_blocker_count: 0,
+    report_thread_id: options.reportThreadId ?? "thread-123",
+    autonomy_branch: "codex/autonomy",
+    sprint_active: options.sprintActive ?? true,
+    paused: false,
+    pause_reason: null,
+  });
+}
+
 describe("command integration contracts", () => {
   it("keeps README command examples aligned with the CLI contract", async () => {
     const readme = await readFile(join(repoRoot, "README.md"), "utf8");
@@ -57,6 +186,7 @@ describe("command integration contracts", () => {
     expect(readme).toContain("codex-autonomy install --target <repo>");
     expect(readme).toContain("codex-autonomy bind-thread --report-thread-id <thread-id>");
     expect(readme).toContain("codex-autonomy approve-proposal --goal-id <goalId>");
+    expect(readme).toContain("codex-autonomy create-successor-goal --auto-approve");
     expect(readme).toContain("codex-autonomy rebaseline-managed --target <repo>");
     expect(readme).toContain("pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-global.ps1");
     expect(readme).toContain("## Developer Fallback");
@@ -562,6 +692,388 @@ describe("command integration contracts", () => {
     expect(stateDoc.run_mode).toBe("sprint");
     expect(resultsDoc.last_summary_kind).toBe("normal_success");
     expect(resultsDoc.last_summary_reason).toContain("Approved proposal for goal-approve");
+  });
+
+  it("create-successor-goal can auto-approve a minimal charter-bound successor", async () => {
+    const workspace = await makeTempWorkspace();
+    await prepareGitAutomationWorkspace(workspace);
+    process.env.CODEX_THREAD_ID = "thread-123";
+    await seedCompletedOnlySuccessorState(workspace);
+
+    const result = await runCreateSuccessorGoal({ autoApprove: true }, workspace);
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
+
+    expect(result.ok).toBe(true);
+    expect(result.auto_approved).toBe(true);
+    expect(goalsDoc.goals).toHaveLength(2);
+    expect(goalsDoc.goals[1]?.source).toBe("auto_successor");
+    expect(goalsDoc.goals[1]?.source_goal_id).toBe("goal-complete");
+    expect(goalsDoc.goals[1]?.status).toBe("active");
+    expect(tasksDoc.tasks.length).toBeGreaterThan(0);
+    expect(stateDoc.current_goal_id).toBe(goalsDoc.goals[1]?.id);
+    expect(stateDoc.sprint_active).toBe(true);
+    expect(resultsDoc.last_summary_kind).toBe("goal_transition");
+  });
+
+  it("create-successor-goal auto-approve rejects a non-bound current thread", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await seedCompletedOnlySuccessorState(workspace, { reportThreadId: "thread-bound" });
+    process.env.CODEX_THREAD_ID = "thread-other";
+
+    await expect(runCreateSuccessorGoal({ autoApprove: true }, workspace)).rejects.toThrow(/thread_binding_state=bound_to_other/i);
+  });
+
+  it("create-successor-goal auto-approve rejects when current thread identity is unavailable", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await seedCompletedOnlySuccessorState(workspace, { reportThreadId: "thread-bound" });
+
+    await expect(runCreateSuccessorGoal({ autoApprove: true }, workspace)).rejects.toThrow(/thread_binding_state=bound_without_current_thread/i);
+  });
+
+  it("create-successor-goal auto-approve rejects when the sprint runner is inactive", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await seedCompletedOnlySuccessorState(workspace, { sprintActive: false });
+    process.env.CODEX_THREAD_ID = "thread-123";
+
+    await expect(runCreateSuccessorGoal({ autoApprove: true }, workspace)).rejects.toThrow(/ready_for_automation=false/i);
+  });
+
+  it("status and doctor block while a control-plane operation is pending", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await mkdir(join(workspace, "autonomy", "operations"), { recursive: true });
+    await writeJson(join(workspace, "autonomy", "operations", "pending.json"), {
+      version: 1,
+      id: "op-pending",
+      kind: "create_successor_goal",
+      created_at: "2026-04-10T00:00:00Z",
+      updated_at: "2026-04-10T00:00:00Z",
+      command: "codex-autonomy create-successor-goal",
+      auto_approved: true,
+      goal_id: "goal-next",
+      source_goal_id: "goal-complete",
+      task_ids: ["task-next"],
+      expected_paths: ["autonomy/goals.json"],
+      payload: {
+        goals: { version: 1, goals: [] },
+        proposals: { version: 1, proposals: [] },
+        tasks: { version: 1, tasks: [] },
+        state: {
+          version: 1,
+          current_goal_id: null,
+          current_task_id: null,
+          cycle_status: "idle",
+          run_mode: null,
+          last_planner_run_at: null,
+          last_worker_run_at: null,
+          last_result: "planned",
+          consecutive_worker_failures: 0,
+          needs_human_review: false,
+          open_blocker_count: 0,
+          report_thread_id: "thread-123",
+          autonomy_branch: "codex/autonomy",
+          sprint_active: true,
+          paused: false,
+          pause_reason: null,
+        },
+        verification: { version: 1, goal_id: null, policy: "strong_template", axes: [] },
+        results: {
+          version: 1,
+          planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null, next_step_summary: null, continuation_decision: null, verification_pending_axes: null },
+          worker: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null, next_step_summary: null, continuation_decision: null, verification_pending_axes: null },
+          review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null, next_step_summary: null, continuation_decision: null, verification_pending_axes: null },
+          commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null, next_step_summary: null, continuation_decision: null, verification_pending_axes: null },
+          reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null, next_step_summary: null, continuation_decision: null, verification_pending_axes: null },
+          last_thread_summary_sent_at: null,
+          last_inbox_run_at: null,
+          last_summary_kind: null,
+          last_summary_reason: null,
+          latest_goal_transition: null,
+        },
+        active_goal_id: null,
+        journal_entry: {
+          timestamp: "2026-04-10T00:00:00Z",
+          actor: "supervisor",
+          taskId: "goal-next",
+          result: "planned",
+          summary: "pending",
+          verify: "not run",
+          blocker: "none",
+        },
+      },
+    });
+
+    const status = await runStatusCommand(workspace);
+    const doctor = await runDoctor({ workspaceRoot: workspace });
+
+    expect(status.ready_for_automation).toBe(false);
+    expect(status.warnings?.some((warning) => warning.code === "pending_control_plane_operation")).toBe(true);
+    expect(doctor.ok).toBe(false);
+    expect(doctor.issues.some((issue) => issue.code === "pending_control_plane_operation")).toBe(true);
+  });
+
+  it("create-successor-goal recovers a pending operation without creating a duplicate goal", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await mkdir(join(workspace, "autonomy", "operations"), { recursive: true });
+    process.env.CODEX_THREAD_ID = "thread-bound";
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
+    const completedGoal = {
+      id: "goal-complete",
+      title: "Completed Goal",
+      objective: "Finish the previous slice",
+      success_criteria: ["done"],
+      constraints: [],
+      out_of_scope: [],
+      status: "completed",
+      run_mode: "sprint",
+      created_at: "2026-04-10T00:00:00Z",
+      approved_at: "2026-04-10T00:05:00Z",
+      completed_at: "2026-04-10T01:00:00Z",
+    };
+    const successorGoal = {
+      id: "goal-next",
+      title: "Program successor 1: verification",
+      objective: "Continue the authorized charter.",
+      success_criteria: ["verified"],
+      constraints: ["bounded"],
+      out_of_scope: ["Forbidden lane: deploy."],
+      status: "active",
+      run_mode: "sprint",
+      created_at: "2026-04-10T01:01:00Z",
+      approved_at: "2026-04-10T01:01:00Z",
+      completed_at: null,
+      source: "auto_successor",
+      source_goal_id: "goal-complete",
+    };
+    await writeJson(join(workspace, "autonomy", "operations", "pending.json"), {
+      version: 1,
+      id: "op-recover",
+      kind: "create_successor_goal",
+      created_at: "2026-04-10T01:01:00Z",
+      updated_at: "2026-04-10T01:01:00Z",
+      command: "codex-autonomy create-successor-goal",
+      auto_approved: true,
+      goal_id: "goal-next",
+      source_goal_id: "goal-complete",
+      task_ids: ["task-next"],
+      expected_paths: ["autonomy/goals.json", "autonomy/tasks.json"],
+      payload: {
+        goals: { version: 1, goals: [completedGoal, successorGoal] },
+        proposals: {
+          version: 1,
+          proposals: [
+            {
+              goal_id: "goal-next",
+              status: "approved",
+              summary: "Recovered proposal",
+              tasks: [
+                {
+                  id: "task-next",
+                  title: "Recovered task",
+                  priority: "P1",
+                  depends_on: [],
+                  acceptance: ["done"],
+                  file_hints: ["README.md"],
+                },
+              ],
+              created_at: "2026-04-10T01:01:00Z",
+              approved_at: "2026-04-10T01:01:00Z",
+            },
+          ],
+        },
+        tasks: {
+          version: 1,
+          tasks: [
+            {
+              id: "task-next",
+              goal_id: "goal-next",
+              title: "Recovered task",
+              status: "ready",
+              priority: "P1",
+              depends_on: [],
+              acceptance: ["done"],
+              file_hints: ["README.md"],
+              retry_count: 0,
+              last_error: null,
+              updated_at: "2026-04-10T01:01:00Z",
+              commit_hash: null,
+              review_status: "not_reviewed",
+              source: "proposal",
+              source_task_id: null,
+            },
+          ],
+        },
+        state: {
+          version: 1,
+          current_goal_id: "goal-next",
+          current_task_id: null,
+          cycle_status: "idle",
+          run_mode: "sprint",
+          last_planner_run_at: "2026-04-10T01:01:00Z",
+          last_worker_run_at: null,
+          last_result: "planned",
+          consecutive_worker_failures: 0,
+          needs_human_review: false,
+          open_blocker_count: 0,
+          report_thread_id: "thread-bound",
+          autonomy_branch: "codex/autonomy",
+          sprint_active: true,
+          paused: false,
+          pause_reason: null,
+        },
+        verification: { version: 1, goal_id: "goal-next", policy: "strong_template", axes: [] },
+        results: {
+          ...resultsDoc,
+          last_summary_kind: "goal_transition",
+          last_summary_reason: "Recovered successor operation op-recover.",
+        },
+        active_goal_id: "goal-next",
+        journal_entry: {
+          timestamp: "2026-04-10T01:01:00Z",
+          actor: "supervisor",
+          taskId: "goal-next",
+          result: "planned",
+          summary: "Recovered successor goal",
+          verify: "not run",
+          blocker: "none",
+        },
+      },
+    });
+
+    const result = await runCreateSuccessorGoal({ autoApprove: true }, workspace);
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+    const journalText = await readFile(join(workspace, "autonomy", "journal.md"), "utf8");
+
+    expect(result.message).toContain("Recovered pending");
+    expect(goalsDoc.goals.filter((goal: { id: string }) => goal.id === "goal-next")).toHaveLength(1);
+    expect(stateDoc.current_goal_id).toBe("goal-next");
+    await expect(pathExists(join(workspace, "autonomy", "operations", "pending.json"))).resolves.toBe(false);
+    expect(journalText).toContain("operation op-recover");
+  });
+
+  it("create-successor-goal refuses to recover stale pending operations after report_thread_id changes", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await mkdir(join(workspace, "autonomy", "operations"), { recursive: true });
+    process.env.CODEX_THREAD_ID = "thread-new";
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
+    await writeJson(join(workspace, "autonomy", "state.json"), {
+      version: 1,
+      current_goal_id: null,
+      current_task_id: null,
+      cycle_status: "idle",
+      run_mode: null,
+      last_planner_run_at: null,
+      last_worker_run_at: null,
+      last_result: "passed",
+      consecutive_worker_failures: 0,
+      needs_human_review: false,
+      open_blocker_count: 0,
+      report_thread_id: "thread-new",
+      autonomy_branch: "codex/autonomy",
+      sprint_active: true,
+      paused: false,
+      pause_reason: null,
+    });
+    await writeJson(join(workspace, "autonomy", "operations", "pending.json"), {
+      version: 1,
+      id: "op-stale",
+      kind: "create_successor_goal",
+      created_at: "2026-04-10T01:01:00Z",
+      updated_at: "2026-04-10T01:01:00Z",
+      command: "codex-autonomy create-successor-goal",
+      auto_approved: true,
+      goal_id: "goal-next",
+      source_goal_id: "goal-complete",
+      task_ids: ["task-next"],
+      expected_paths: ["autonomy/state.json"],
+      payload: {
+        goals: { version: 1, goals: [] },
+        proposals: { version: 1, proposals: [] },
+        tasks: { version: 1, tasks: [] },
+        state: {
+          version: 1,
+          current_goal_id: "goal-next",
+          current_task_id: null,
+          cycle_status: "idle",
+          run_mode: "sprint",
+          last_planner_run_at: "2026-04-10T01:01:00Z",
+          last_worker_run_at: null,
+          last_result: "planned",
+          consecutive_worker_failures: 0,
+          needs_human_review: false,
+          open_blocker_count: 0,
+          report_thread_id: "thread-old",
+          autonomy_branch: "codex/autonomy",
+          sprint_active: true,
+          paused: false,
+          pause_reason: null,
+        },
+        verification: { version: 1, goal_id: null, policy: "strong_template", axes: [] },
+        results: resultsDoc,
+        active_goal_id: "goal-next",
+        journal_entry: {
+          timestamp: "2026-04-10T01:01:00Z",
+          actor: "supervisor",
+          taskId: "goal-next",
+          result: "planned",
+          summary: "recover stale",
+          verify: "not run",
+          blocker: "none",
+        },
+      },
+    });
+
+    await expect(runCreateSuccessorGoal({ autoApprove: true }, workspace)).rejects.toThrow(/report_thread_id changed/i);
+  });
+
+  it("create-successor-goal chooses a safe verification lane over forbidden lanes", async () => {
+    const workspace = await makeTempWorkspace();
+    await prepareGitAutomationWorkspace(workspace);
+    process.env.CODEX_THREAD_ID = "thread-123";
+    await seedCompletedOnlySuccessorState(workspace, { allowedLanes: ["deploy", "verification"] });
+    await writeJson(join(workspace, "autonomy", "verification.json"), {
+      version: 1,
+      goal_id: null,
+      policy: "strong_template",
+      axes: [
+        {
+          id: "manual-evidence",
+          title: "Manual evidence",
+          required: true,
+          status: "pending",
+          evidence: [],
+          source_task_id: null,
+          last_checked_at: null,
+          reason: "Needs successor verification evidence",
+        },
+      ],
+    });
+
+    const result = await runCreateSuccessorGoal({ autoApprove: true }, workspace);
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const successorGoal = goalsDoc.goals.find((goal: { id: string }) => goal.id === result.goal_id);
+
+    expect(successorGoal?.title).toContain("verification");
+    expect(successorGoal?.title).not.toContain("deploy");
+    expect(successorGoal?.objective).toContain("Lane rationale");
+  });
+
+  it("create-successor-goal rejects successor policy with no safe allowed lane", async () => {
+    const workspace = await makeTempWorkspace();
+    await prepareGitAutomationWorkspace(workspace);
+    process.env.CODEX_THREAD_ID = "thread-123";
+    await seedCompletedOnlySuccessorState(workspace, { allowedLanes: ["deploy", "release"] });
+
+    await expect(runCreateSuccessorGoal({ autoApprove: true }, workspace)).rejects.toThrow(/at least one allowed lane/i);
   });
 
   it("approve-proposal records a goal transition when the previous active goal completes", async () => {

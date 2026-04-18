@@ -8,6 +8,7 @@ import type {
   AutoContinueState,
   AutonomyState,
   BlockersDocument,
+  DecisionPolicyDocument,
   GoalSupplyState,
   GoalStatus,
   GoalsDocument,
@@ -18,6 +19,7 @@ import type {
 } from "../contracts/autonomy.js";
 import { GOAL_STATUSES, TASK_STATUSES } from "../contracts/autonomy.js";
 import { countOpenBlockers, countReadyTasksForGoal, findNextReadyTask } from "../domain/autonomy.js";
+import { buildDecisionAdvice } from "../domain/decision.js";
 import { resolveSummarySnapshot, scopeResultsSummary } from "../domain/results.js";
 import { isGoalCompletionBlockedByVerification, summarizeVerification } from "../domain/verification.js";
 import { detectGlobalCliInstall } from "../infra/cli-install.js";
@@ -31,17 +33,19 @@ import {
 import { inspectCycleLock } from "../infra/lock.js";
 import { discoverPowerShellExecutable, detectCodexProcess, isChildProcessSpawnBlocked } from "../infra/process.js";
 import { isAutonomyRuntimeAllowlistedPath, resolveRepoPaths } from "../shared/paths.js";
-import { createDefaultAutonomySettings } from "../shared/policy.js";
+import { createDefaultAutonomySettings, createDefaultDecisionPolicyDocument } from "../shared/policy.js";
 import { inspectThreadBindingContext } from "../shared/thread-context.js";
 import { inspectManagedUpgradeState } from "./upgrade-managed.js";
 import {
   loadBlockersDocument,
   loadGoalsDocument,
+  loadPendingOperation,
   loadResultsDocument,
   loadSettingsDocument,
   loadStateDocument,
   loadTasksDocument,
   loadVerificationDocument,
+  loadDecisionPolicyDocument,
 } from "./control-plane.js";
 
 function createEmptyTaskCounts(): Record<TaskStatus, number> {
@@ -83,8 +87,13 @@ function hasOnlyCompletedIdleWork(goalsByStatus: Record<GoalStatus, number>): bo
     && goalsByStatus.draft === 0;
 }
 
+function countUnfinishedTasks(tasks: TasksDocument["tasks"]): number {
+  return tasks.filter((task) => task.status !== "done").length;
+}
+
 function buildNoWorkReason(options: {
   goalsByStatus: Record<GoalStatus, number>;
+  unfinishedTaskCount?: number;
   completionBlockedByVerification: boolean;
   verificationPending: number;
 }): string {
@@ -93,6 +102,9 @@ function buildNoWorkReason(options: {
   }
 
   if (hasOnlyCompletedIdleWork(options.goalsByStatus)) {
+    if ((options.unfinishedTaskCount ?? 0) > 0) {
+      return `All goals are completed, but tasks.json still contains ${options.unfinishedTaskCount} unfinished task(s); resolve the stale task backlog before creating a successor goal.`;
+    }
     return "All approved goal work is complete. Automation is idle until a new goal or proposal is created.";
   }
 
@@ -138,6 +150,126 @@ function hasApprovedGoalAvailable(goals: GoalsDocument["goals"]): boolean {
   return goals.some((goal) => goal.status === "approved");
 }
 
+function sortCompletedGoalsNewestFirst(goals: GoalsDocument["goals"]): GoalsDocument["goals"] {
+  return [...goals]
+    .filter((goal) => goal.status === "completed")
+    .sort((left, right) => {
+      const leftKey = left.completed_at ?? left.created_at;
+      const rightKey = right.completed_at ?? right.created_at;
+      const timeDiff = rightKey.localeCompare(leftKey);
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+
+      return right.id.localeCompare(left.id);
+    });
+}
+
+function countConsecutiveAutoSuccessorGoals(goals: GoalsDocument["goals"]): number {
+  let count = 0;
+  for (const goal of sortCompletedGoalsNewestFirst(goals)) {
+    if (goal.source !== "auto_successor") {
+      break;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function countAutoSuccessorGoalsCreatedSince(goals: GoalsDocument["goals"], sinceMs: number): number {
+  return goals.filter((goal) => {
+    if (goal.source !== "auto_successor") {
+      return false;
+    }
+    const createdAt = Date.parse(goal.created_at);
+    return Number.isFinite(createdAt) && createdAt >= sinceMs;
+  }).length;
+}
+
+function resolveSuccessorGoalAvailability(options: {
+  goals: GoalsDocument["goals"];
+  goalsByStatus: Record<GoalStatus, number>;
+  unfinishedTaskCount: number;
+  decisionPolicy: DecisionPolicyDocument;
+  nowMs?: number;
+}): { available: boolean; autoApprove: boolean; reason: string } {
+  const policy = options.decisionPolicy.auto_continue.auto_successor_goal;
+  if (!hasOnlyCompletedIdleWork(options.goalsByStatus)) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: "Successor goal generation only applies after all existing approved work is completed.",
+    };
+  }
+
+  if (options.unfinishedTaskCount > 0) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: `Successor goal generation is blocked while ${options.unfinishedTaskCount} unfinished task(s) remain in tasks.json.`,
+    };
+  }
+
+  if (!policy.enabled) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: "Auto successor goal generation is disabled in autonomy/decision-policy.json.",
+    };
+  }
+
+  if (!policy.objective?.trim()) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: "Auto successor goal generation requires a non-empty charter objective in autonomy/decision-policy.json.",
+    };
+  }
+
+  if (policy.max_consecutive_auto_successors <= 0) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: "Auto successor goal generation is disabled because max_consecutive_auto_successors is 0.",
+    };
+  }
+
+  const consecutiveAutoSuccessors = countConsecutiveAutoSuccessorGoals(options.goals);
+  if (consecutiveAutoSuccessors >= policy.max_consecutive_auto_successors) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: `Auto successor goal generation reached max_consecutive_auto_successors=${policy.max_consecutive_auto_successors}.`,
+    };
+  }
+
+  if (policy.max_successor_goals_per_day <= 0) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: "Auto successor goal generation is disabled because max_successor_goals_per_day is 0.",
+    };
+  }
+
+  const nowMs = options.nowMs ?? Date.now();
+  const createdLastDay = countAutoSuccessorGoalsCreatedSince(options.goals, nowMs - 24 * 60 * 60 * 1000);
+  if (createdLastDay >= policy.max_successor_goals_per_day) {
+    return {
+      available: false,
+      autoApprove: false,
+      reason: `Auto successor goal generation reached max_successor_goals_per_day=${policy.max_successor_goals_per_day}.`,
+    };
+  }
+
+  return {
+    available: true,
+    autoApprove: policy.auto_approve_minimal_successor,
+    reason: policy.auto_approve_minimal_successor
+      ? "Program charter allows creating and approving one minimal successor goal."
+      : "Program charter allows drafting one minimal successor goal, but auto approval is disabled.",
+  };
+}
+
 function hasPlanningOnlyWorkForCurrentGoal(options: {
   tasks: TasksDocument["tasks"];
   currentGoalId: string | null;
@@ -164,6 +296,7 @@ function hasPlanningOnlyWorkForCurrentGoal(options: {
 function resolveGoalSupplyState(options: {
   currentGoalId: string | null;
   approvedGoalAvailable: boolean;
+  successorGoalAvailable: boolean;
   goalsByStatus: Record<GoalStatus, number>;
 }): GoalSupplyState {
   if (options.currentGoalId) {
@@ -176,6 +309,10 @@ function resolveGoalSupplyState(options: {
 
   if (options.goalsByStatus.awaiting_confirmation > 0) {
     return "awaiting_confirmation";
+  }
+
+  if (options.successorGoalAvailable) {
+    return "successor_goal_available";
   }
 
   if (hasOnlyCompletedIdleWork(options.goalsByStatus)) {
@@ -197,7 +334,7 @@ function resolveNextAutomationStep(options: {
   planningOnlyWork: boolean;
 }): AutomationNextStep {
   if (!options.readyForAutomation) {
-    return options.goalSupplyState === "completed_only" || options.goalSupplyState === "empty"
+    return options.goalSupplyState === "completed_only" || options.goalSupplyState === "empty" || options.goalSupplyState === "successor_goal_available"
       ? "idle"
       : "manual_triage";
   }
@@ -211,6 +348,8 @@ function resolveNextAutomationStep(options: {
   }
 
   switch (options.goalSupplyState) {
+    case "successor_goal_available":
+      return "create_successor_goal";
     case "awaiting_confirmation":
       return "await_confirmation";
     case "completed_only":
@@ -258,6 +397,9 @@ function buildMessage(summary: StatusSummary): string {
     `verification_passed=${summary.verification_passed}`,
     `verification_pending=${summary.verification_pending}`,
     `completion_blocked_by_verification=${summary.completion_blocked_by_verification ? "yes" : "no"}`,
+    `successor_goal_available=${summary.successor_goal_available ? "yes" : "no"}`,
+    `successor_goal_auto_approve=${summary.successor_goal_auto_approve ? "yes" : "no"}`,
+    `successor_goal_reason=${formatNullableText(summary.successor_goal_reason)}`,
     `next_task=${summary.next_task_id ? `${summary.next_task_id}${summary.next_task_title ? `(${summary.next_task_title})` : ""}` : "none"}`,
     `remaining_ready=${summary.remaining_ready}`,
     `last_followup_summary=${formatNullableText(summary.last_followup_summary)}`,
@@ -269,6 +411,11 @@ function buildMessage(summary: StatusSummary): string {
     `recommended_automation_surface=${summary.recommended_automation_surface}`,
     `recommended_automation_prompt=${formatNullableText(summary.recommended_automation_prompt)}`,
     `recommended_automation_reason=${formatNullableText(summary.recommended_automation_reason)}`,
+    `decision_event=${summary.decision_event}`,
+    `decision_outcome=${summary.decision_outcome}`,
+    `decision_next_action=${summary.decision_next_action}`,
+    `decision_heartbeat=${summary.decision_heartbeat}`,
+    `decision_reason=${formatNullableText(summary.decision_reason)}`,
     `ready_for_automation=${summary.ready_for_automation ? "yes" : "no"}`,
   ].join(" ");
 }
@@ -279,16 +426,21 @@ function buildLocalAutomationReason(options: {
   actionableTasks: boolean;
   pendingPlanningWork: boolean;
   planningOnlyWork: boolean;
+  successorGoalAvailable: boolean;
+  unfinishedTaskCount: number;
   goalsByStatus: Record<GoalStatus, number>;
   nextAutomationStep: AutomationNextStep;
   verificationPending: number;
   completionBlockedByVerification: boolean;
   hasReportThread: boolean;
   currentThreadId: string | null;
+  threadBindingState: StatusSummary["thread_binding_state"];
+  threadBindingHint: string | null;
   goalPointerMismatch: boolean;
   multipleActiveGoals: boolean;
   paused: boolean;
   pauseReason: string | null;
+  sprintActive: boolean;
   cycleStatus: StatusSummary["cycle_status"];
   needsHumanReview: boolean;
   openBlockerCount: number;
@@ -301,11 +453,14 @@ function buildLocalAutomationReason(options: {
           : "Ready for execution: an approved goal is available for bounded continuation.";
       case "plan_or_rebalance":
         return "Ready for planning only: the active goal needs bounded replanning or verification closeout before the next execution loop.";
+      case "create_successor_goal":
+        return "Ready for program continuation: all approved work is complete and policy allows one minimal successor goal.";
       case "await_confirmation":
         return "Waiting at the goal boundary: the next goal is still awaiting confirmation, so automation must not execute implementation.";
       case "idle":
         return buildNoWorkReason({
           goalsByStatus: options.goalsByStatus,
+          unfinishedTaskCount: options.unfinishedTaskCount,
           completionBlockedByVerification: options.completionBlockedByVerification,
           verificationPending: options.verificationPending,
         });
@@ -335,24 +490,34 @@ function buildLocalAutomationReason(options: {
     return options.pauseReason ?? "Current goal is paused.";
   }
 
+  if (options.openBlockerCount > 0) {
+    return `There ${options.openBlockerCount === 1 ? "is" : "are"} ${options.openBlockerCount} open blocker(s).`;
+  }
+
+  if (!options.actionableTasks && !options.pendingPlanningWork && !options.successorGoalAvailable) {
+    return buildNoWorkReason({
+      goalsByStatus: options.goalsByStatus,
+      unfinishedTaskCount: options.unfinishedTaskCount,
+      completionBlockedByVerification: options.completionBlockedByVerification,
+      verificationPending: options.verificationPending,
+    });
+  }
+
+  if (!options.sprintActive) {
+    return "Sprint runner is inactive; automation may only report status until the bound thread explicitly resumes the long-running program.";
+  }
+
+  if (options.threadBindingState !== "bound_to_current") {
+    return options.threadBindingHint
+      ?? "The current thread is not the bound operator thread; local automation must not continue from this thread.";
+  }
+
   if (options.needsHumanReview) {
     return "State requires human review before the next automation run.";
   }
 
   if (options.cycleStatus !== "idle") {
     return `Current cycle status is ${options.cycleStatus}.`;
-  }
-
-  if (options.openBlockerCount > 0) {
-    return `There ${options.openBlockerCount === 1 ? "is" : "are"} ${options.openBlockerCount} open blocker(s).`;
-  }
-
-  if (!options.actionableTasks && !options.pendingPlanningWork) {
-    return buildNoWorkReason({
-      goalsByStatus: options.goalsByStatus,
-      completionBlockedByVerification: options.completionBlockedByVerification,
-      verificationPending: options.verificationPending,
-    });
   }
 
   return "Eligible work is available, but runtime checks need to pass before the next automation run.";
@@ -467,10 +632,7 @@ const NON_BLOCKING_RUNTIME_WARNING_CODES = new Set([
   "background_dirty_allowlisted",
   "managed_advisory_drift",
   "ready_for_followup_autocontinue",
-  "git_runtime_probe_deferred",
-  "background_runtime_probe_deferred",
   "codex_process_probe_deferred",
-  "operator_thread_mismatch",
 ]);
 
 function pushUniqueWarning(
@@ -678,12 +840,14 @@ export function buildStatusSummary(
     upgradeState?: string | null;
     cliInstallState?: string | null;
     threadBindingContext?: ReturnType<typeof inspectThreadBindingContext>;
+    decisionPolicy?: DecisionPolicyDocument;
   } = {},
 ): StatusSummary {
   const openBlockerCount = countOpenBlockers(blockersDoc.blockers);
   const tasksByStatus = countTaskStatuses(tasksDoc.tasks);
   const goalsByStatus = countGoalStatuses(goalsDoc.goals);
   const activeGoalCount = goalsDoc.goals.filter((goal) => goal.status === "active").length;
+  const unfinishedTaskCount = countUnfinishedTasks(tasksDoc.tasks);
   const resolvedCurrentGoalId = resolveCurrentGoalId(goalsDoc.goals, state);
   const goalPointerMismatch = Boolean(state.current_goal_id) && state.current_goal_id !== resolvedCurrentGoalId;
   const actionableTasks = hasActionableTasks(tasksDoc.tasks, resolvedCurrentGoalId);
@@ -697,6 +861,12 @@ export function buildStatusSummary(
   const verificationSummary = summarizeVerification(verificationDoc, resolvedCurrentGoalId);
   const completionBlockedByVerification = isGoalCompletionBlockedByVerification(verificationDoc, resolvedCurrentGoalId);
   const approvedGoalAvailable = hasApprovedGoalAvailable(goalsDoc.goals);
+  const successorGoal = resolveSuccessorGoalAvailability({
+    goals: goalsDoc.goals,
+    goalsByStatus,
+    unfinishedTaskCount,
+    decisionPolicy: options.decisionPolicy ?? createDefaultDecisionPolicyDocument(),
+  });
   const planningOnlyWork = hasPlanningOnlyWorkForCurrentGoal({
     tasks: tasksDoc.tasks,
     currentGoalId: resolvedCurrentGoalId,
@@ -706,6 +876,7 @@ export function buildStatusSummary(
   const goalSupplyState = resolveGoalSupplyState({
     currentGoalId: resolvedCurrentGoalId,
     approvedGoalAvailable,
+    successorGoalAvailable: successorGoal.available,
     goalsByStatus,
   });
   const closeoutPolicy = resolvedCurrentGoalId && verificationDoc?.goal_id === resolvedCurrentGoalId
@@ -717,10 +888,12 @@ export function buildStatusSummary(
     state.cycle_status === "idle" &&
     state.needs_human_review === false &&
     state.paused === false &&
+    state.sprint_active === true &&
     hasReportThread &&
+    threadBindingContext.bindingState === "bound_to_current" &&
     openBlockerCount === 0;
   const readyForExecution = readyBase && (actionableTasks || approvedGoalAvailable);
-  const readyForAutomation = readyBase && (readyForExecution || planningOnlyWork || goalsByStatus.awaiting_confirmation > 0);
+  const readyForAutomation = readyBase && (readyForExecution || planningOnlyWork || goalsByStatus.awaiting_confirmation > 0 || successorGoal.available);
   const nextAutomationStep = resolveNextAutomationStep({
     goalSupplyState,
     readyForAutomation,
@@ -776,16 +949,21 @@ export function buildStatusSummary(
     actionableTasks,
     pendingPlanningWork,
     planningOnlyWork,
+    successorGoalAvailable: successorGoal.available,
+    unfinishedTaskCount,
     goalsByStatus,
     nextAutomationStep,
     verificationPending: verificationSummary.pending,
     completionBlockedByVerification,
     hasReportThread,
     currentThreadId: threadBindingContext.currentThreadId,
+    threadBindingState: threadBindingContext.bindingState,
+    threadBindingHint: threadBindingContext.bindingHint,
     goalPointerMismatch,
     multipleActiveGoals: activeGoalCount > 1,
     paused: state.paused,
     pauseReason: state.pause_reason,
+    sprintActive: state.sprint_active,
     cycleStatus: state.cycle_status,
     needsHumanReview: state.needs_human_review,
     openBlockerCount,
@@ -868,6 +1046,9 @@ export function buildStatusSummary(
     verification_passed: verificationSummary.passed,
     verification_pending: verificationSummary.pending,
     completion_blocked_by_verification: completionBlockedByVerification,
+    successor_goal_available: successorGoal.available,
+    successor_goal_auto_approve: successorGoal.autoApprove,
+    successor_goal_reason: successorGoal.reason,
     next_task_id: nextTask?.id ?? null,
     next_task_title: nextTask?.title ?? null,
     remaining_ready: remainingReady,
@@ -879,6 +1060,12 @@ export function buildStatusSummary(
     recommended_automation_surface: recommendedAutomation.recommended_automation_surface,
     recommended_automation_reason: recommendedAutomation.recommended_automation_reason,
     recommended_automation_prompt: recommendedAutomation.recommended_automation_prompt,
+    decision_event: "none",
+    decision_outcome: "safe_backoff",
+    decision_reason: "Decision advice has not been computed yet.",
+    decision_next_action: "stop_and_report",
+    decision_heartbeat: "normal_15m",
+    decision_evidence: [],
     results_summary: {
       planner_summary: scopedResults.plannerSummary,
       worker_result: scopedResults.workerResult,
@@ -888,10 +1075,15 @@ export function buildStatusSummary(
     },
     next_automation_ready: readyForAutomation,
   };
+  const decisionAdvice = buildDecisionAdvice(summary, options.decisionPolicy);
+  const decidedSummary: StatusSummary = {
+    ...summary,
+    ...decisionAdvice,
+  };
 
   return {
-    ...summary,
-    message: buildMessage(summary),
+    ...decidedSummary,
+    message: buildMessage(decidedSummary),
   };
 }
 
@@ -899,7 +1091,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const gitRepo = await detectGitRepository(repoRoot, { allowFilesystemFallback: true });
   const controlRoot = gitRepo?.path ?? repoRoot;
   const paths = resolveRepoPaths(controlRoot);
-  const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc, verificationDoc] = await Promise.all([
+  const [tasksDoc, goalsDoc, state, blockersDoc, resultsDoc, settingsDoc, verificationDoc, decisionPolicy] = await Promise.all([
     loadTasksDocument(paths),
     loadGoalsDocument(paths),
     loadStateDocument(paths),
@@ -907,6 +1099,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     loadResultsDocument(paths),
     loadSettingsDocument(paths),
     loadVerificationDocument(paths),
+    loadDecisionPolicyDocument(paths),
   ]);
   const cliInstallState = await detectGlobalCliInstall();
   let upgradeState: string | null = null;
@@ -920,6 +1113,7 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     upgradeState,
     cliInstallState,
     threadBindingContext: inspectThreadBindingContext(state.report_thread_id),
+    decisionPolicy,
   });
   const warnings = [...(summary.warnings ?? [])];
   let readyForAutomation = summary.ready_for_automation;
@@ -928,12 +1122,36 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
   const hasReportThread = Boolean(state.report_thread_id?.trim());
   const controlSurfaceDirtyScopes: string[] = [];
 
+  try {
+    const pendingOperation = await loadPendingOperation(paths);
+    if (pendingOperation) {
+      readyForAutomation = false;
+      readyForExecution = false;
+      pushUniqueWarning(
+        warnings,
+        "pending_control_plane_operation",
+        `Pending control-plane operation ${pendingOperation.kind} (${pendingOperation.id}) must be recovered or cleared before the next automation loop.`,
+      );
+    }
+  } catch (error) {
+    readyForAutomation = false;
+    readyForExecution = false;
+    pushUniqueWarning(
+      warnings,
+      "pending_control_plane_operation_invalid",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
   if (!hasEligibleWork) {
     readyForAutomation = false;
     warnings.push({
       code: "no_actionable_work",
       message: buildNoWorkReason({
         goalsByStatus: summary.goals_by_status,
+        unfinishedTaskCount: TASK_STATUSES
+          .filter((status) => status !== "done")
+          .reduce((count, status) => count + summary.tasks_by_status[status], 0),
         completionBlockedByVerification: summary.completion_blocked_by_verification,
         verificationPending: summary.verification_pending,
       }),
@@ -1258,10 +1476,15 @@ export async function runStatusCommand(repoRoot = process.cwd()): Promise<Status
     recommended_automation_prompt: recommendedAutomation.recommended_automation_prompt,
     warnings: warnings.length > 0 ? warnings : undefined,
   };
+  const decisionAdvice = buildDecisionAdvice(result, decisionPolicy);
+  const decidedResult: StatusSummary = {
+    ...result,
+    ...decisionAdvice,
+  };
 
   return {
-    ...result,
-    message: buildMessage(result),
+    ...decidedResult,
+    message: buildMessage(decidedResult),
   };
 }
 

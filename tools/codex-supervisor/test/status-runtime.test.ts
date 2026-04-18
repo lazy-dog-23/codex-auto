@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const detectGitRepositoryMock = vi.fn();
 const getBackgroundWorktreePathMock = vi.fn();
@@ -16,6 +16,8 @@ const loadBlockersDocumentMock = vi.fn();
 const loadResultsDocumentMock = vi.fn();
 const loadSettingsDocumentMock = vi.fn();
 const loadVerificationDocumentMock = vi.fn();
+const loadDecisionPolicyDocumentMock = vi.fn();
+const loadPendingOperationMock = vi.fn();
 
 vi.mock("../src/infra/git.js", () => ({
   DEFAULT_BACKGROUND_WORKTREE_BRANCH: "codex/background",
@@ -46,6 +48,8 @@ vi.mock("../src/commands/control-plane.js", () => ({
   loadResultsDocument: loadResultsDocumentMock,
   loadSettingsDocument: loadSettingsDocumentMock,
   loadVerificationDocument: loadVerificationDocumentMock,
+  loadDecisionPolicyDocument: loadDecisionPolicyDocumentMock,
+  loadPendingOperation: loadPendingOperationMock,
 }));
 
 vi.mock("../src/commands/upgrade-managed.js", () => ({
@@ -54,6 +58,7 @@ vi.mock("../src/commands/upgrade-managed.js", () => ({
 
 describe("status runtime gates", () => {
   beforeEach(() => {
+    process.env.CODEX_THREAD_ID = "thread-123";
     vi.resetModules();
     detectGitRepositoryMock.mockReset();
     getBackgroundWorktreePathMock.mockReset();
@@ -71,6 +76,9 @@ describe("status runtime gates", () => {
     loadResultsDocumentMock.mockReset();
     loadSettingsDocumentMock.mockReset();
     loadVerificationDocumentMock.mockReset();
+    loadDecisionPolicyDocumentMock.mockReset();
+    loadPendingOperationMock.mockReset();
+    loadPendingOperationMock.mockResolvedValue(null);
     runProcessMock.mockImplementation((command: string, args: string[], options?: { cwd?: string }) => ({
       command,
       args,
@@ -104,6 +112,10 @@ describe("status runtime gates", () => {
       statusLines: [],
       reason: "no_diff",
     });
+  });
+
+  afterEach(() => {
+    delete process.env.CODEX_THREAD_ID;
   });
 
   it("blocks automation when the background worktree branch diverges", async () => {
@@ -179,7 +191,7 @@ describe("status runtime gates", () => {
       open_blocker_count: 0,
       report_thread_id: null,
       autonomy_branch: "codex/autonomy",
-      sprint_active: false,
+      sprint_active: true,
       paused: false,
       pause_reason: null,
     });
@@ -211,6 +223,7 @@ describe("status runtime gates", () => {
       },
       default_sprint_heartbeat_minutes: 15,
     });
+    loadDecisionPolicyDocumentMock.mockResolvedValue(undefined);
     inspectCycleLockMock.mockResolvedValue({
       exists: false,
       stale: false,
@@ -436,7 +449,7 @@ describe("status runtime gates", () => {
       open_blocker_count: 0,
       report_thread_id: "thread-123",
       autonomy_branch: "codex/autonomy",
-      sprint_active: false,
+      sprint_active: true,
       paused: false,
       pause_reason: null,
     });
@@ -566,7 +579,7 @@ describe("status runtime gates", () => {
       open_blocker_count: 0,
       report_thread_id: "thread-123",
       autonomy_branch: "codex/autonomy",
-      sprint_active: false,
+      sprint_active: true,
       paused: false,
       pause_reason: null,
     });
