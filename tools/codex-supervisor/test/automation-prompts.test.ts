@@ -93,14 +93,16 @@ describe("automation prompts", () => {
     expect(officialPrompt).toContain("thread_binding_state");
     expect(officialPrompt).toContain("bound_to_current");
     expect(officialPrompt).toContain("codex-autonomy status");
-    expect(officialPrompt).toContain("end-of-turn self-rescheduling burst heartbeat");
-    expect(officialPrompt).toContain("Do not spend the wake-up only changing cadence");
+    expect(officialPrompt).toContain("entry-lease plus end-of-turn self-rescheduling heartbeat");
+    expect(officialPrompt).toContain("set that same heartbeat to the safe backoff entry lease");
+    expect(officialPrompt).toContain("Do not keep a 1-minute cadence while the bounded loop is running");
+    expect(officialPrompt).toContain("release the entry lease");
     expect(officialPrompt).toContain("next_task_id");
     expect(officialPrompt).toContain("decision_outcome");
     expect(officialPrompt).toContain("codex-autonomy decide --json");
     expect(officialPrompt).toContain("decision_outcome=auto_repair_once");
     expect(officialPrompt).toContain("decision_outcome=ask_human");
-    expect(officialPrompt).toContain("Burst fast-follow means 1 minute");
+    expect(officialPrompt).toContain("Entry lease means 30 minutes while a bounded loop is running");
     expect(officialPrompt).toContain("Do not approve proposals, relax verification, or keep a 1-minute loop");
     expect(officialPrompt).toContain("next_automation_step=await_confirmation");
     expect(officialPrompt).toContain("next_automation_step=manual_triage");
@@ -150,9 +152,9 @@ describe("automation prompts", () => {
     expect(result.official_thread_automation.name).toBe("official-thread-automation");
     expect(result.external_relay_scheduler.name).toBe("external-relay-scheduler");
     expect(result.official_thread_automation.cadence).toBe(
-      "self-rescheduling: 1 minute after a clean ready task, 15 minutes normally, 30 minutes on safe backoff",
+      "self-rescheduling with 30-minute entry lease: 1 minute after a clean ready task, 15 minutes normally, 30 minutes on safe backoff",
     );
-    expect(result.official_thread_automation.whenToUse).toContain("self-rescheduling burst");
+    expect(result.official_thread_automation.whenToUse).toContain("safe entry lease");
     expect(result.external_relay_scheduler.whenNotToUse).toContain("same-thread recurring work");
     expect(result.worker.selectionRule).toContain("ready_for_execution=true");
     expect(result.planner.name).toBe("planner-cruise");

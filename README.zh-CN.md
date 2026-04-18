@@ -126,7 +126,7 @@ codex-autonomy --version
 - `task`：真正被 worker 执行的最小工作单元。
 - `cruise cadence`：稳态巡航频率，指 Planner / Worker / Reviewer 在后台按固定周期醒来检查是否有可推进项。
 - `sprint heartbeat`：冲刺 runner 的唤醒间隔，不是任务时长。它只决定多久再醒一次，不代表一轮必须跑满这么久。
-- `self-rescheduling burst heartbeat`：官方同线程 heartbeat 的快速续跑模式。每轮先查 `status` / 锁状态，不在开头只改 cadence；如果这一轮干净完成、工作树干净、没有 blocker / review_pending / needs_confirmation，且 `status` 仍显示有明确 next task，就把同一个 heartbeat 设为 1 分钟后继续。它不是常驻 1 分钟轮询，也不会创建第二条 heartbeat。
+- `entry-lease + self-rescheduling heartbeat`：官方同线程 heartbeat 的快速续跑模式。每轮先查 `status` / 锁状态；确认当前绑定线程可执行且空闲后，先把同一个 heartbeat 临时设为 30 分钟 entry lease，再开始 repo 写入或长验证；如果这一轮干净完成、工作树干净、没有 blocker / review_pending / needs_confirmation，且 `status` 仍显示有明确 next task，就把同一个 heartbeat 设为 1 分钟后继续。它不是常驻 1 分钟轮询，也不会创建第二条 heartbeat。
 - `kickoff`：goal 刚确认或需要立即推进时的立刻启动动作。kickoff 会先跑一轮，不等下一次 cadence / heartbeat。
 - `safe follow-up`：仍然属于已批准 goal 边界内的后续优化项。它会自动并入下一轮，不需要把线程当成审批门。
 
@@ -161,7 +161,7 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 - `official_thread_automation` 是官方同线程 heartbeat 主路，直接给 app 的 `automation_update(kind="heartbeat", destination="thread")` 使用。
 - `external_relay_scheduler` 是跨线程 / 外部调度 fallback，给 `Task Scheduler -> relay -> 绑定线程` 这条链路使用。
-- `official_thread_automation` 默认包含 self-rescheduling burst 策略：干净成功且仍有 ready next task 时，下一轮用 1 分钟快速续跑；不满足条件时退回正常 sprint cadence、安全退避或暂停。
+- `official_thread_automation` 默认包含 entry-lease + self-rescheduling burst 策略：开工前先把同一个 heartbeat 临时调到 30 分钟，避免 1 分钟节拍在长验证期间反复唤醒；干净成功且仍有 ready next task 时，下一轮再用 1 分钟快速续跑；不满足条件时退回正常 sprint cadence、安全退避或暂停。
 - Sprint runner 的默认工作方式仍然是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
 - `codex-autonomy status` 现在会把“可唤醒”与“可执行”拆开表达：`ready_for_automation` 代表调度层可以安全唤醒并做一轮有界下一步，`ready_for_execution` 代表这一轮可以真正进入执行闭环。
 - `goal_supply_state` / `next_automation_step` 会明确告诉 heartbeat 或 relay runner：这轮应该执行 `execute_bounded_loop`、只做 `plan_or_rebalance`、创建 `create_successor_goal`，停在 `await_confirmation`，还是直接 `idle` / `manual_triage`。

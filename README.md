@@ -114,7 +114,7 @@ If the natural-language request already means "approve and keep going" or "keep 
 
 The same rule applies to blocker decisions: if the user says things like "use blocker option 2", "narrow this goal to a checklist/manual lane", or "keep the heartbeat and continue with the narrower scope", the router and automation prompts should translate that into the repo-local unblock and bounded plan/sprint flow instead of making the user name CLI tools.
 
-Fast follow-up requests such as `快速续跑`, `任务完成后 1 分钟继续`, or "continue one minute after each clean task" should use the same official thread heartbeat, not a second scheduler. The heartbeat should use end-of-turn self-rescheduling: check status and locks first, run exactly one bounded loop, then set that same heartbeat to a 1-minute burst only when the refreshed status is still bound, clean, unblocked, execution-ready, and has a concrete next task. Otherwise it should fall back to the normal cadence, safe backoff, or pause.
+Fast follow-up requests such as `快速续跑`, `任务完成后 1 分钟继续`, or "continue one minute after each clean task" should use the same official thread heartbeat, not a second scheduler. The heartbeat should use entry-lease plus end-of-turn self-rescheduling: check status and locks first; when the bound thread is clean, ready, and idle, temporarily set that same heartbeat to a 30-minute entry lease before repo writes or long verification; run exactly one bounded loop; then set that same heartbeat to a 1-minute burst only when the refreshed status is still bound, clean, unblocked, execution-ready, and has a concrete next task. Otherwise it should fall back to the normal cadence, safe backoff, or pause.
 
 Relay completion events are treated as status callbacks, not as new goal intake. They use the fixed envelope:
 
@@ -133,7 +133,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy prepare-worktree`
 - `codex-autonomy emit-automation-prompts --json` (machine-readable prompt bundle for official thread automation and relay fallback surfaces)
 - The surface-first prompt bundle now includes `whenToUse`, `whenNotToUse`, and `selectionRule` metadata so an agent can choose the right automation surface or role without extra operator coaching.
-- The `official_thread_automation` prompt includes self-rescheduling burst semantics for bound-thread sprint work: clean completed task plus a ready next task means 1-minute fast follow-up; blockers, dirty state, confirmation waits, review pending, or thread mismatch mean normal cadence, safe backoff, or pause.
+- The `official_thread_automation` prompt includes entry-lease plus self-rescheduling burst semantics for bound-thread sprint work: ready and idle work first moves the same heartbeat to a 30-minute lease while the loop runs; clean completed task plus a ready next task then means 1-minute fast follow-up; blockers, dirty state, confirmation waits, review pending, or thread mismatch mean normal cadence, safe backoff, or pause.
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`
 - `codex-autonomy generate-proposal`
 - `codex-autonomy approve-proposal --goal-id <goalId>`

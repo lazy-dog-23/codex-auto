@@ -197,8 +197,12 @@ export function buildOfficialThreadAutomationPrompt(): string {
     "",
     "Rules:",
     "- This prompt is for official same-thread continuation only.",
-    "- Use end-of-turn self-rescheduling burst heartbeat semantics for ongoing sprint work: keep the same official heartbeat record, do not delete/recreate it, and do not create duplicate heartbeats for the same bound thread.",
-    "- Do not spend the wake-up only changing cadence before work starts. Run status first; if `cycle_status` is not `idle` or another run is clearly in progress, do no repo work and use normal cadence or safe backoff if you can update the existing heartbeat.",
+    "- Use entry-lease plus end-of-turn self-rescheduling heartbeat semantics for ongoing sprint work: keep the same official heartbeat record, do not delete/recreate it, and do not create duplicate heartbeats for the same bound thread.",
+    "- Run status first. If `cycle_status` is not `idle` or another run is clearly in progress, do no repo work and use normal cadence or safe backoff if you can update the existing heartbeat.",
+    `- Before repo writes or long verification, if the refreshed state is ` +
+      "`bound_to_current`, `ready_for_automation=true`, `cycle_status=idle`, and you can safely update the existing heartbeat, set that same heartbeat to the safe backoff entry lease " +
+      `(${DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES} minutes). Do not keep a 1-minute cadence while the bounded loop is running.`,
+    "- If you cannot safely apply the entry lease, do not run repo work just to preserve fast follow-up. Leave the repo state unchanged and report that the heartbeat cadence was not changed.",
     "- If `thread_binding_state != bound_to_current`, stop after reporting the mismatch. Do not rebind and do not call relay from this wake-up.",
     "- Before asking the operator at any blocker, confirmation, verification, dirty-worktree, closeout, scope, environment, or thread-boundary state, run `codex-autonomy decide --json` and follow its `decision_outcome` / `decision_next_action`.",
     "- If `ready_for_automation=false`, stop after quoting `next_automation_reason` and the `decide` output; if you can safely update the existing heartbeat, use the `decision_heartbeat` safe backoff or pause instead of burst.",
@@ -215,9 +219,9 @@ export function buildOfficialThreadAutomationPrompt(): string {
     "- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`, except for the explicit `create_successor_goal` control-plane path above.",
     "- Do not use relay as the main control path for this wake-up. Official thread automation is already the primary same-thread surface.",
     "- Do not ask the operator to translate a clear natural-language decision into CLI, relay, or automation tool names when the decision already fits the current approved goal boundary.",
-    "- After the bounded loop or planning pass, rerun `codex-autonomy status` and reschedule the same heartbeat by state: if the refreshed state is still `bound_to_current`, `ready_for_automation=true`, `ready_for_execution=true`, `cycle_status=idle`, `automation_state=ready`, `open_blocker_count=0`, and has a concrete `next_task_id`, set the next cadence to burst fast-follow. If any of those are false, use the normal sprint cadence or safe backoff instead of burst.",
-    `- Burst fast-follow means ${DEFAULT_BURST_HEARTBEAT_MINUTES} minute after a clean completed task; normal sprint cadence means ${DEFAULT_SPRINT_HEARTBEAT_MINUTES} minutes; safe backoff means ${DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES} minutes or paused when human confirmation is required.`,
-    "- If you cannot safely update the existing heartbeat record, do not create a duplicate just to get burst mode. Leave the repo state recoverable and report that the heartbeat cadence was not changed.",
+    "- After the bounded loop or planning pass, rerun `codex-autonomy status` and release the entry lease by rescheduling the same heartbeat by state: if the refreshed state is still `bound_to_current`, `ready_for_automation=true`, `ready_for_execution=true`, `cycle_status=idle`, `automation_state=ready`, `open_blocker_count=0`, and has a concrete `next_task_id`, set the next cadence to burst fast-follow. If any of those are false, use the normal sprint cadence or safe backoff instead of burst.",
+    `- Entry lease means ${DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES} minutes while a bounded loop is running; burst fast-follow means ${DEFAULT_BURST_HEARTBEAT_MINUTES} minute after a clean completed task; normal sprint cadence means ${DEFAULT_SPRINT_HEARTBEAT_MINUTES} minutes; safe backoff means ${DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES} minutes or paused when human confirmation is required.`,
+    "- If you cannot safely update the existing heartbeat record at closeout, do not create a duplicate just to get burst mode. Leave the repo state recoverable and report that the heartbeat cadence was not changed.",
     "- Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.",
     "- Keep the run bounded and leave the thread in a recoverable state before you stop.",
   ]);
@@ -310,7 +314,7 @@ export function buildOfficialThreadAutomationPromptSpec(): AutomationPromptSpec 
     name: "official-thread-automation",
     cadence: formatSelfReschedulingHeartbeatCadence(),
     prompt: buildOfficialThreadAutomationPrompt(),
-    whenToUse: "Use when status recommends `thread_automation` and the current thread is already the bound operator thread. Supports self-rescheduling burst follow-up after clean bounded tasks.",
+    whenToUse: "Use when status recommends `thread_automation` and the current thread is already the bound operator thread. Supports a safe entry lease while work runs and self-rescheduling burst follow-up after clean bounded tasks.",
     whenNotToUse: "Do not use when the current thread is unbound, bound to another thread, or the wake-up must originate outside the app.",
     selectionRule: "Choose this surface only when `recommended_automation_surface=thread_automation` and `thread_binding_state=bound_to_current`.",
   });

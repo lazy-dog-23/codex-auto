@@ -22,7 +22,7 @@
 - Reviewer 运行 `scripts/review.ps1` 做效果检查和结论收口，不扩大任务范围。
 - Reporter 只有异常、blocked、review_pending、commit 失败等情况立即回线程；正常成功按 heartbeat 汇总，详细运行记录留在 Inbox 和 journal。
 - Sprint runner 的 heartbeat 只是唤醒间隔，不是任务时长；每次唤醒只推进单个任务闭环，当前 goal 完成且存在下一个 approved goal 时同轮直接接续。
-- 官方 thread heartbeat 可以使用 end-of-turn self-rescheduling burst：每轮先查 `status` / 锁状态，不在开头只改 cadence；干净完成且仍有 ready next task 时再把同一个 heartbeat 设为 1 分钟快速续跑；遇到 blocker、review_pending、needs_confirmation、dirty worktree 或线程不匹配时退回安全节拍或暂停。
+- 官方 thread heartbeat 使用 entry-lease + end-of-turn self-rescheduling：每轮先查 `status` / 锁状态；确认可执行且空闲后，先把同一个 heartbeat 临时设为 30 分钟 entry lease，再开始 repo 写入或长验证；干净完成且仍有 ready next task 时再把同一个 heartbeat 设为 1 分钟快速续跑；遇到 blocker、review_pending、needs_confirmation、dirty worktree 或线程不匹配时退回安全节拍或暂停。
 - 遇到 proposal、verification、dirty worktree、closeout、环境、scope 或线程边界时，先用 `codex-autonomy decide --json` 或 `$autonomy-decision` 做统一边界裁决；只有 `decision_outcome=auto_continue` / `auto_repair_once` 才继续，`ask_human` / `reject_or_rewrite` 必须停下。
 - 已授权长期自治只允许通过 `codex-autonomy create-successor-goal --auto-approve` 创建最小 successor goal；必须先由 `status` 给出 `next_automation_step=create_successor_goal`，且 `decide --json` 给出 `decision_outcome=auto_continue`。
 - `create-successor-goal --auto-approve` 必须在绑定线程内运行；非绑定线程只允许汇报或通过 relay 让绑定线程恢复。

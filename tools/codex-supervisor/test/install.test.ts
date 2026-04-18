@@ -193,7 +193,7 @@ describe("install scaffold", () => {
     expect(readme).toContain("官方 thread automation 是同线程持续推进的首选路径");
     expect(readme).toContain("fallback bridge");
     expect(readme).toContain("确认提案并继续");
-    expect(readme).toContain("self-rescheduling burst heartbeat");
+    expect(readme).toContain("entry-lease + end-of-turn self-rescheduling heartbeat");
     expect(readme).toContain("任务完成后 1 分钟继续");
     expect(readme).toContain("codex-autonomy unblock <taskId>");
     expect(readme).toContain("codex-autonomy decide --json");

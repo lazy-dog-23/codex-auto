@@ -101,5 +101,5 @@ export function formatSelfReschedulingHeartbeatCadence(
   normalMinutes = DEFAULT_SPRINT_HEARTBEAT_MINUTES,
   safeBackoffMinutes = DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES,
 ): string {
-  return `self-rescheduling: ${burstMinutes} minute after a clean ready task, ${normalMinutes} minutes normally, ${safeBackoffMinutes} minutes on safe backoff`;
+  return `self-rescheduling with ${safeBackoffMinutes}-minute entry lease: ${burstMinutes} minute after a clean ready task, ${normalMinutes} minutes normally, ${safeBackoffMinutes} minutes on safe backoff`;
 }

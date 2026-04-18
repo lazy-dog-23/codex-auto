@@ -111,7 +111,7 @@ Map the user request to the narrowest `codex-autonomy` flow:
   - then `codex-autonomy generate-proposal`
   - if the user clearly asked to proceed immediately with language like “直接做”, “开始做”, “推进”, “修一下”, “实现这个”, or “按这个做”, treat that as the first approval signal and continue with `codex-autonomy approve-proposal --goal-id <goalId>`
   - if that immediate-proceed request also implies ongoing autonomy in the bound thread, rerun `codex-autonomy status`, then:
-    - if `recommended_automation_surface=thread_automation`, read `official_thread_automation.prompt` from `codex-autonomy emit-automation-prompts --json`, create or update the official thread heartbeat, and if the user asked for fast follow-up / 自调度 / 任务完成后 1 分钟继续, use that official prompt's self-rescheduling burst semantics instead of creating a separate scheduler path
+    - if `recommended_automation_surface=thread_automation`, read `official_thread_automation.prompt` from `codex-autonomy emit-automation-prompts --json`, create or update the official thread heartbeat, and if the user asked for fast follow-up / 自调度 / 任务完成后 1 分钟继续, use that official prompt's entry-lease plus self-rescheduling burst semantics instead of creating a separate scheduler path
     - if `next_automation_step=execute_bounded_loop`, run one bounded repo-local `$autonomy-sprint` pass immediately
     - if `recommended_automation_surface=external_relay_scheduler`, quote the bound-thread mismatch and route to the relay / external scheduler fallback instead of creating a same-thread heartbeat here
   - otherwise summarize the proposal and wait for confirmation
@@ -120,7 +120,7 @@ Map the user request to the narrowest `codex-autonomy` flow:
   - run `codex-autonomy approve-proposal --goal-id <goalId>`
   - if the user also asked to continue now, keep running, or start autonomy in place with phrases like `确认提案并继续`, `确认后自己往下做`, or `直接开始自治`, treat that as a request to keep the bound thread moving:
     - rerun `codex-autonomy status`
-    - if `recommended_automation_surface=thread_automation`, create or update the official thread heartbeat from `official_thread_automation.prompt`; if the user asked for `快速续跑`, `任务完成后 1 分钟继续`, `burst heartbeat`, or equivalent wording, treat that as a request for the same prompt's self-rescheduling burst mode
+    - if `recommended_automation_surface=thread_automation`, create or update the official thread heartbeat from `official_thread_automation.prompt`; if the user asked for `快速续跑`, `任务完成后 1 分钟继续`, `burst heartbeat`, or equivalent wording, treat that as a request for the same prompt's entry-lease plus self-rescheduling burst mode
     - if `next_automation_step=execute_bounded_loop`, run one bounded repo-local `$autonomy-sprint` pass immediately
     - if `next_automation_step=plan_or_rebalance`, do one bounded repo-local `$autonomy-plan` pass, rerun status once, and only enter `$autonomy-sprint` if execution becomes ready
   - otherwise summarize the activated goal id, current run mode, and next ready task
@@ -159,9 +159,9 @@ Map the user request to the narrowest `codex-autonomy` flow:
   - if `recommended_automation_surface=thread_automation` and the user is in the bound project thread, treat official Codex thread automation as the primary path:
     - take `official_thread_automation.prompt` from `emit-automation-prompts --json`
     - create or update a thread heartbeat with `automation_update(kind=\"heartbeat\", destination=\"thread\", ...)`
-    - preserve the self-rescheduling burst policy from the emitted prompt; do not strip it out and do not create a second heartbeat just for fast follow-up
+    - preserve the entry-lease plus self-rescheduling burst policy from the emitted prompt; do not strip it out and do not create a second heartbeat just for fast follow-up
     - if the user explicitly asked for fast follow-up / 任务完成后 1 分钟继续, set the first wake-up cadence to burst only when `ready_for_automation=true`, `ready_for_execution=true`, and a concrete `next_task_id` exists; otherwise keep the normal cadence and quote the blocking reason
-    - the running heartbeat should update the same heartbeat record after each bounded loop: clean ready next task -> burst cadence, uncertain but still runnable -> normal cadence, blocker / needs confirmation / review_pending / dirty / thread mismatch -> safe backoff or pause
+    - the running heartbeat should update the same heartbeat record before and after each bounded loop: before repo writes or long verification, set a 30-minute entry lease; after closeout, clean ready next task -> burst cadence, uncertain but still runnable -> normal cadence, blocker / needs confirmation / review_pending / dirty / thread mismatch -> safe backoff or pause
     - if the user also asked to continue now and `next_automation_step=execute_bounded_loop`, after the heartbeat is active use the repo-local `$autonomy-sprint` skill for one bounded loop only
     - if the user also asked to continue now and `next_automation_step=plan_or_rebalance`, do one bounded repo-local `$autonomy-plan` pass, rerun `codex-autonomy status` once, and only switch to `$autonomy-sprint` if the refreshed status says `ready_for_execution=true`
     - if `next_automation_step=create_successor_goal`, run `codex-autonomy decide --json`; only when `decision_outcome=auto_continue`, `decision_next_action=create_successor_goal`, `successor_goal_available=true`, and `successor_goal_auto_approve=true`, run `codex-autonomy create-successor-goal --auto-approve`, rerun `codex-autonomy status`, and run at most one bounded `$autonomy-sprint` pass for the new goal
