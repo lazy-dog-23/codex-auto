@@ -27,6 +27,7 @@ export const proposalsSchema = {
       required: ["id", "title", "priority", "depends_on", "acceptance", "file_hints"],
       properties: {
         id: { type: "string", minLength: 1 },
+        slice_id: { type: ["string", "null"], minLength: 1 },
         title: { type: "string", minLength: 1 },
         priority: { type: "string", enum: [...TASK_PRIORITIES] },
         depends_on: {
@@ -47,6 +48,26 @@ export const proposalsSchema = {
         },
       },
     },
+    proposedSlice: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "title", "objective", "acceptance", "file_hints"],
+      properties: {
+        id: { type: "string", minLength: 1 },
+        title: { type: "string", minLength: 1 },
+        objective: { type: "string", minLength: 1 },
+        acceptance: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          default: [],
+        },
+        file_hints: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          default: [],
+        },
+      },
+    },
     proposal: {
       type: "object",
       additionalProperties: false,
@@ -55,6 +76,13 @@ export const proposalsSchema = {
         goal_id: { type: "string", minLength: 1 },
         status: { type: "string", enum: [...PROPOSAL_STATUSES] },
         summary: { type: "string", minLength: 1 },
+        slices: {
+          type: "array",
+          items: {
+            $ref: "#/$defs/proposedSlice",
+          },
+          default: [],
+        },
         tasks: {
           type: "array",
           items: {

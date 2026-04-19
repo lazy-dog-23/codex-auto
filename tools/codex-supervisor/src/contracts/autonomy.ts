@@ -34,7 +34,15 @@ export const REVIEW_STATUSES = [
 
 export const TASK_SOURCES = [
   "proposal",
-  "followup"
+  "followup",
+  "quick",
+] as const;
+
+export const SLICE_STATUSES = [
+  "planned",
+  "active",
+  "completed",
+  "blocked",
 ] as const;
 
 export const CONTINUATION_DECISIONS = [
@@ -197,6 +205,7 @@ export const MANAGED_FILE_CLASSES = [
 
 export const CONTROL_PLANE_OPERATION_KINDS = [
   "create_successor_goal",
+  "quick",
 ] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -206,6 +215,7 @@ export type GoalSource = (typeof GOAL_SOURCES)[number];
 export type RunMode = (typeof RUN_MODES)[number];
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 export type TaskSource = (typeof TASK_SOURCES)[number];
+export type SliceStatus = (typeof SLICE_STATUSES)[number];
 export type ContinuationDecision = (typeof CONTINUATION_DECISIONS)[number];
 export type VerificationPolicy = (typeof VERIFICATION_POLICIES)[number];
 export type VerificationAxisStatus = (typeof VERIFICATION_AXIS_STATUSES)[number];
@@ -262,9 +272,18 @@ export interface GoalsDocument {
 
 export interface ProposedTask {
   id: string;
+  slice_id?: string | null;
   title: string;
   priority: TaskPriority;
   depends_on: string[];
+  acceptance: string[];
+  file_hints: string[];
+}
+
+export interface ProposedSlice {
+  id: string;
+  title: string;
+  objective: string;
   acceptance: string[];
   file_hints: string[];
 }
@@ -273,6 +292,7 @@ export interface GoalProposal {
   goal_id: string;
   status: ProposalStatus;
   summary: string;
+  slices?: ProposedSlice[];
   tasks: ProposedTask[];
   created_at: string;
   approved_at: string | null;
@@ -286,6 +306,7 @@ export interface ProposalsDocument {
 export interface AutonomyTask {
   id: string;
   goal_id: string;
+  slice_id?: string | null;
   title: string;
   status: TaskStatus;
   priority: TaskPriority;
@@ -304,6 +325,25 @@ export interface AutonomyTask {
 export interface TasksDocument {
   version: number;
   tasks: AutonomyTask[];
+}
+
+export interface SliceRecord {
+  id: string;
+  goal_id: string;
+  title: string;
+  objective: string;
+  status: SliceStatus;
+  acceptance: string[];
+  file_hints: string[];
+  task_ids: string[];
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface SlicesDocument {
+  version: number;
+  slices: SliceRecord[];
 }
 
 export interface CruiseCadence {
@@ -414,9 +454,10 @@ export interface AutonomyResults {
   reporter: ResultEntry;
 }
 
-export interface CreateSuccessorGoalOperationPayload {
+export interface ControlPlaneOperationPayload {
   goals: GoalsDocument;
   proposals: ProposalsDocument;
+  slices: SlicesDocument | null;
   tasks: TasksDocument | null;
   state: AutonomyState;
   verification: VerificationDocument | null;
@@ -433,6 +474,9 @@ export interface CreateSuccessorGoalOperationPayload {
   };
 }
 
+export type CreateSuccessorGoalOperationPayload = ControlPlaneOperationPayload;
+export type QuickOperationPayload = ControlPlaneOperationPayload;
+
 export interface CreateSuccessorGoalPendingOperation {
   version: number;
   id: string;
@@ -448,7 +492,22 @@ export interface CreateSuccessorGoalPendingOperation {
   payload: CreateSuccessorGoalOperationPayload;
 }
 
-export type ControlPlanePendingOperation = CreateSuccessorGoalPendingOperation;
+export interface QuickPendingOperation {
+  version: number;
+  id: string;
+  kind: "quick";
+  created_at: string;
+  updated_at: string;
+  command: "codex-autonomy quick";
+  auto_approved: true;
+  goal_id: string;
+  source_goal_id: null;
+  task_ids: string[];
+  expected_paths: string[];
+  payload: QuickOperationPayload;
+}
+
+export type ControlPlanePendingOperation = CreateSuccessorGoalPendingOperation | QuickPendingOperation;
 
 export interface AutonomyState {
   version: number;
@@ -516,6 +575,7 @@ export interface RepoPaths {
   repoMapFile: string;
   schemaDir: string;
   locksDir: string;
+  slicesFile: string;
   tasksFile: string;
   stateFile: string;
   blockersFile: string;

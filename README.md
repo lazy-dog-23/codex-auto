@@ -13,7 +13,7 @@ This repository contains the product code for that workflow: the CLI, repo-local
 - Repo-local autonomy control surface installation and upgrade
 - Target-repo project baseline creation with `TEAM_GUIDE.md` and a thin `AGENTS.override.md`
 - Thread-bound operator/reporting workflow
-- Goal / proposal / task state management
+- Goal / proposal / slice / task state management
 - Global router skill and relay manual-audit skill distribution
 - Managed `README.md` section support for installed target repos
 - Windows-first verification and worktree preparation flows
@@ -81,7 +81,7 @@ Recent validation (2026-04-16):
 
 - The real bound-thread recovery path has been exercised on a live Windows Codex App repository: `long turn -> relay_send_wait timeout -> relay_dispatch_status succeeds -> short follow-up send succeeds`.
 - In the same validation round, the bound thread completed a verify closeout and marked the active goal completed.
-- The remaining unverified layer in that session was only the system scheduler wake-up itself; the delegated environment could not register Windows `Task Scheduler` tasks and blocked the runner's extra app-server spawn with `spawn EPERM`.
+- In restricted validation environments, the remaining unverified layer can be the system scheduler wake-up itself; validate OS scheduler registration and app-server subprocess spawning separately before treating external scheduling as production-ready.
 
 Recent validation (2026-04-17):
 
@@ -134,6 +134,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy init-project --target <repo> --mode existing|new` (installs the control surface and creates `TEAM_GUIDE.md` plus `AGENTS.override.md`; preserves existing docs unless `--refresh-docs` is passed)
 - `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]` (builds a local Graphify code map without installing hooks or editing `AGENTS.md`)
 - `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]` (combines the Graphify map with docs, scripts, entrypoints, and verification hints, then writes `autonomy/context/repo-map.json`; it refreshes `TEAM_GUIDE.md` only when requested)
+- `codex-autonomy quick --target <repo> --request "<small change>" [--validate] [--track]` (lightweight lane for a small bug fix or focused change; `--track` writes one active goal, one slice, and one ready task with `source="quick"`)
 - `codex-autonomy query --target <repo> --json` (stable compact automation state for heartbeat, relay, scheduler, or UI consumers)
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`
 - `codex-autonomy rebaseline-managed --target <repo>`
@@ -199,7 +200,7 @@ Oversized files, files with NUL bytes, broken markers, or non-text files stay in
 - `.agents/skills/$autonomy-*`: repo-local autonomy skills
 - `.codex/environments/environment.toml`: shared Windows setup plus `verify`, `smoke`, and `review` actions
 - `.codex/config.toml`: repo fallback config with `approval_policy = "never"` and `sandbox_mode = "workspace-write"`
-- `autonomy/*.json`: canonical repo-local autonomy state
+- `autonomy/goals.json`, `autonomy/proposals.json`, `autonomy/slices.json`, `autonomy/tasks.json`, and the other `autonomy/*.json` files: canonical repo-local autonomy state
 - `autonomy/decision-policy.json`: repo-local decision boundary policy for auto-continue, one-shot repair, safe backoff, and human escalation
 - `autonomy/operations/pending.json`: transient recovery marker for interrupted multi-file control-plane writes
 - `autonomy/context/repo-map.json`: scan output used as a compact repo orientation map for agents and schedulers

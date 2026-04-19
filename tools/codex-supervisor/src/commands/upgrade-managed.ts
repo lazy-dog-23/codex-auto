@@ -39,6 +39,7 @@ import {
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
+  createDefaultSlicesDocument,
   createDefaultState,
   createDefaultVerificationDocument,
   formatGoalMarkdown,
@@ -50,6 +51,7 @@ import {
   proposalsSchema,
   resultsSchema,
   settingsSchema,
+  slicesSchema,
   stateSchema,
   tasksSchema,
   verificationSchema,
@@ -1223,6 +1225,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${JSON.stringify(createDefaultProposalsDocument(), null, 2)}\n`,
     },
     {
+      path: paths.slicesFile,
+      relative_path: "autonomy/slices.json",
+      template_id: "slices_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultSlicesDocument(), null, 2)}\n`,
+    },
+    {
       path: paths.stateFile,
       relative_path: "autonomy/state.json",
       template_id: "state_json",
@@ -1284,6 +1293,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "proposals_schema_json",
       kind: "json",
       content: `${JSON.stringify(proposalsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "slices.schema.json"),
+      relative_path: "autonomy/schema/slices.schema.json",
+      template_id: "slices_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(slicesSchema, null, 2)}\n`,
     },
     {
       path: path.join(paths.schemaDir, "state.schema.json"),

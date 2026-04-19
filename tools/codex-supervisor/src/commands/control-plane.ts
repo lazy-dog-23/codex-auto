@@ -16,6 +16,7 @@ import type {
   RepoPaths,
   ResultEntry,
   RunMode,
+  SlicesDocument,
   TasksDocument,
   VerificationDocument,
 } from "../contracts/autonomy.js";
@@ -55,6 +56,13 @@ export function createDefaultProposalsDocument(): ProposalsDocument {
   return {
     version: 1,
     proposals: [],
+  };
+}
+
+export function createDefaultSlicesDocument(): SlicesDocument {
+  return {
+    version: 1,
+    slices: [],
   };
 }
 
@@ -195,14 +203,23 @@ export function buildProposalFromTasks(input: {
   goalId: string;
   summary: string;
   tasks: ProposedTask[];
+  slices?: ProposalsDocument["proposals"][number]["slices"];
   now: string;
 }): ProposalsDocument["proposals"][number] {
   return {
     goal_id: input.goalId,
     status: "awaiting_confirmation",
     summary: input.summary.trim(),
+    slices: input.slices?.map((slice) => ({
+      id: slice.id,
+      title: slice.title,
+      objective: slice.objective,
+      acceptance: [...slice.acceptance],
+      file_hints: [...slice.file_hints],
+    })),
     tasks: input.tasks.map((task) => ({
       id: task.id,
+      slice_id: task.slice_id ?? null,
       title: task.title,
       priority: task.priority,
       depends_on: [...task.depends_on],
@@ -220,6 +237,10 @@ export async function loadGoalsDocument(paths: RepoPaths): Promise<GoalsDocument
 
 export async function loadProposalsDocument(paths: RepoPaths): Promise<ProposalsDocument> {
   return loadOptionalJson(paths.proposalsFile, createDefaultProposalsDocument);
+}
+
+export async function loadSlicesDocument(paths: RepoPaths): Promise<SlicesDocument> {
+  return loadOptionalJson(paths.slicesFile, createDefaultSlicesDocument);
 }
 
 export async function loadTasksDocument(paths: RepoPaths): Promise<TasksDocument> {
@@ -271,15 +292,28 @@ function validatePendingOperation(value: unknown): ControlPlanePendingOperation 
   if (operation.version !== 1) {
     throw new Error("Invalid pending control-plane operation: version must be 1.");
   }
-  if (operation.kind !== "create_successor_goal") {
-    throw new Error("Invalid pending control-plane operation: kind must be create_successor_goal.");
+  if (operation.kind !== "create_successor_goal" && operation.kind !== "quick") {
+    throw new Error("Invalid pending control-plane operation: kind must be create_successor_goal or quick.");
   }
 
-  for (const key of ["id", "created_at", "updated_at", "command", "goal_id", "source_goal_id"] as const) {
+  for (const key of ["id", "created_at", "updated_at", "command", "goal_id"] as const) {
     requireString(operation[key], `pending control-plane operation ${key}`);
   }
-  if (operation.command !== "codex-autonomy create-successor-goal") {
-    throw new Error("Invalid pending control-plane operation: command must be codex-autonomy create-successor-goal.");
+  if (operation.kind === "create_successor_goal") {
+    requireString(operation.source_goal_id, "pending control-plane operation source_goal_id");
+    if (operation.command !== "codex-autonomy create-successor-goal") {
+      throw new Error("Invalid pending control-plane operation: command must be codex-autonomy create-successor-goal.");
+    }
+  } else {
+    if (operation.source_goal_id !== null) {
+      throw new Error("Invalid pending control-plane operation: quick source_goal_id must be null.");
+    }
+    if (operation.command !== "codex-autonomy quick") {
+      throw new Error("Invalid pending control-plane operation: command must be codex-autonomy quick.");
+    }
+    if (operation.auto_approved !== true) {
+      throw new Error("Invalid pending control-plane operation: quick auto_approved must be true.");
+    }
   }
   if (typeof operation.auto_approved !== "boolean") {
     throw new Error("Invalid pending control-plane operation: auto_approved must be a boolean.");
@@ -291,9 +325,15 @@ function validatePendingOperation(value: unknown): ControlPlanePendingOperation 
   for (const key of ["goals", "proposals", "state", "results", "journal_entry"] as const) {
     requireRecord(payload[key], `pending control-plane operation payload.${key}`);
   }
-  if (operation.auto_approved) {
+  if (operation.kind === "quick" || operation.auto_approved) {
     requireRecord(payload.tasks, "pending control-plane operation payload.tasks");
     requireRecord(payload.verification, "pending control-plane operation payload.verification");
+  }
+  if (operation.kind === "quick") {
+    requireRecord(payload.slices, "pending control-plane operation payload.slices");
+  }
+  if (payload.slices !== null && payload.slices !== undefined) {
+    requireRecord(payload.slices, "pending control-plane operation payload.slices");
   }
   if (payload.active_goal_id !== null && typeof payload.active_goal_id !== "string") {
     throw new Error("Invalid pending control-plane operation: payload.active_goal_id must be a string or null.");
@@ -331,6 +371,10 @@ export async function writeGoalsDocument(paths: RepoPaths, document: GoalsDocume
 
 export async function writeProposalsDocument(paths: RepoPaths, document: ProposalsDocument): Promise<void> {
   await writeJsonAtomic(paths.proposalsFile, document);
+}
+
+export async function writeSlicesDocument(paths: RepoPaths, document: SlicesDocument): Promise<void> {
+  await writeJsonAtomic(paths.slicesFile, document);
 }
 
 export async function writeStateDocument(paths: RepoPaths, document: AutonomyState): Promise<void> {

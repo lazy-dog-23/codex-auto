@@ -13,6 +13,7 @@ import type {
   ProposalsDocument,
   ReviewStatus,
   RunMode,
+  SliceRecord,
   TasksDocument,
 } from "../contracts/autonomy.js";
 
@@ -40,6 +41,7 @@ export {
   RESULT_STATES,
   REVIEW_STATUSES,
   RUN_MODES,
+  SLICE_STATUSES,
   STALE_LOCK_AGE_MINUTES,
   TASK_PRIORITIES,
   TASK_PRIORITY_WEIGHT,
@@ -81,6 +83,7 @@ export type {
   LastResult,
   LockRecord,
   ProposedTask,
+  ProposedSlice,
   ProposalsDocument,
   RepoPaths,
   ReportSurface,
@@ -89,6 +92,9 @@ export type {
   ReviewStatus,
   RunMode,
   StatusSummary,
+  SliceRecord,
+  SlicesDocument,
+  SliceStatus,
   VerificationAxis,
   VerificationAxisStatus,
   VerificationDocument,
@@ -207,6 +213,7 @@ export interface GoalTransitionResult {
 
 export interface ProposalMaterializationResult {
   tasks: TaskRecord[];
+  slices: SliceRecord[];
   state: AutonomyState;
   goals: GoalRecord[];
   proposals: GoalProposal[];

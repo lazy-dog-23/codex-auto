@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { Command } from "commander";
 
-import type { BlockersDocument, CommandResult, TasksDocument } from "../contracts/autonomy.js";
+import type { BlockersDocument, CommandResult, SlicesDocument, TasksDocument } from "../contracts/autonomy.js";
 import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
 import { appendJournalEntry } from "../infra/journal.js";
@@ -14,6 +14,7 @@ import {
   proposalsSchema,
   resultsSchema,
   settingsSchema,
+  slicesSchema,
   stateSchema,
   tasksSchema,
   verificationSchema,
@@ -43,6 +44,7 @@ import {
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
+  createDefaultSlicesDocument,
   createDefaultState,
   createDefaultVerificationDocument,
   formatGoalMarkdown,
@@ -52,6 +54,8 @@ const DEFAULT_TASKS: TasksDocument = {
   version: 1,
   tasks: []
 };
+
+const DEFAULT_SLICES: SlicesDocument = createDefaultSlicesDocument();
 
 const DEFAULT_BLOCKERS: BlockersDocument = {
   version: 1,
@@ -90,6 +94,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const decisionSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-decision", "SKILL.md");
   const readmeFile = path.join(repoRoot, "README.md");
   const tasksSchemaFile = path.join(paths.schemaDir, "tasks.schema.json");
+  const slicesSchemaFile = path.join(paths.schemaDir, "slices.schema.json");
   const goalsSchemaFile = path.join(paths.schemaDir, "goals.schema.json");
   const proposalsSchemaFile = path.join(paths.schemaDir, "proposals.schema.json");
   const stateSchemaFile = path.join(paths.schemaDir, "state.schema.json");
@@ -159,6 +164,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
 
     const jsonFileEntries: Array<[string, unknown]> = [
       [paths.tasksFile, DEFAULT_TASKS],
+      [paths.slicesFile, DEFAULT_SLICES],
       [paths.goalsFile, createDefaultGoalsDocument()],
       [paths.proposalsFile, createDefaultProposalsDocument()],
       [paths.stateFile, createDefaultState()],
@@ -168,6 +174,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [paths.decisionPolicyFile, createDefaultDecisionPolicy()],
       [paths.blockersFile, DEFAULT_BLOCKERS],
       [tasksSchemaFile, tasksSchema],
+      [slicesSchemaFile, slicesSchema],
       [goalsSchemaFile, goalsSchema],
       [proposalsSchemaFile, proposalsSchema],
       [stateSchemaFile, stateSchema],

@@ -43,11 +43,11 @@ export function getAgentsMarkdown(): string {
     "## 线程入口",
     "",
     "- 原线程是唯一操作入口，`report_thread_id` 是所有摘要和异常回传的锚点。",
-    "- 线程内的自然语言动作固定收口为：`把 auto 装进当前项目`、`目标是……`、`确认提案`、`确认提案并继续`、`用冲刺模式推进这个目标`、`用巡航模式推进这个目标`、`汇报当前情况`、`暂停当前目标`、`继续当前目标`、`处理下一个目标`、`快速续跑`、`任务完成后 1 分钟继续`、`自动判断能不能继续`、`只有越界或高风险时问我`、`按第二条处理 blocker`、`把这个 goal 收窄为 checklist/manual lane`、`保留 heartbeat 继续推进`、`合并自治分支`。",
+    "- 线程内的自然语言动作固定收口为：`把 auto 装进当前项目`、`修一下这个报错`、`小改一下`、`目标是……`、`确认提案`、`确认提案并继续`、`用冲刺模式推进这个目标`、`用巡航模式推进这个目标`、`汇报当前情况`、`暂停当前目标`、`继续当前目标`、`处理下一个目标`、`快速续跑`、`任务完成后 1 分钟继续`、`自动判断能不能继续`、`只有越界或高风险时问我`、`按第二条处理 blocker`、`把这个 goal 收窄为 checklist/manual lane`、`保留 heartbeat 继续推进`、`合并自治分支`。",
     "- `汇报当前情况` 必须先运行 `codex-autonomy status`；只有明确要求详细结果时才运行 `codex-autonomy report`，并且以最终命令输出里的 `automation_state`、`ready_for_automation`、`ready_for_execution`、`goal_supply_state`、`next_automation_step`、`next_automation_reason`、`report_thread_id`、`current_thread_id`、`thread_binding_state`、`thread_binding_hint` 为准。若状态里出现 `git_runtime_probe_deferred` 或 `background_runtime_probe_deferred`，还必须直接运行一次 `git status --short` 再判断真实 blocker。",
     "- `继续当前目标`、`处理下一个目标`、`用冲刺模式推进这个目标` 在执行前必须先运行 `codex-autonomy status`；如果出现 `pending_control_plane_operation`，先恢复或汇报该 operation，不要开启新 loop；如果 `ready_for_automation=false`，原样汇报 `next_automation_reason` 并停止；如果 `ready_for_execution=false`，则严格按 `next_automation_step` 收口：`plan_or_rebalance` 只做一轮规划/收口，`await_confirmation` 只汇报待确认并停止，`manual_triage` 只在当前线程已经给出明确决策且该决策只是收窄范围/选择已有 blocker 方案时，才允许走 `codex-autonomy unblock <task-id>` 加一轮 bounded plan/sprint，只有 `execute_bounded_loop` 才能进入业务代码闭环。若状态里出现 `git_runtime_probe_deferred` 或 `background_runtime_probe_deferred`，还必须直接运行一次 `git status --short`，发现 unmanaged drift 就停止。",
     "- 如果 `thread_binding_state=bound_to_other`，当前线程不是 operator thread；必须明确报告 mismatch 并停止，不得静默沿用旧 `report_thread_id` 继续。",
-    "- `goal.md` 只镜像当前 active goal；真正的目标队列和批准边界以 `goals.json`、`proposals.json`、`tasks.json` 为准。",
+    "- `goal.md` 只镜像当前 active goal；真正的目标队列和批准边界以 `goals.json`、`proposals.json`、`slices.json`、`tasks.json` 为准。",
     "",
     "## Skills",
     "",
@@ -78,7 +78,7 @@ export function getAutonomyPlanSkillMarkdown(): string {
     "",
     "## Responsibilities",
     "",
-    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/proposals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, `autonomy/results.json`, and `autonomy/verification.json`.",
+    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/proposals.json`, `autonomy/slices.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, `autonomy/results.json`, and `autonomy/verification.json`.",
     "- Keep at most 5 tasks in `ready` for the current active goal.",
     "- If a goal is still `awaiting_confirmation`, update only `autonomy/proposals.json` and do not materialize tasks yet.",
     "- If the goal is `approved` or `active`, rebalance only inside that approved boundary.",
@@ -119,7 +119,7 @@ export function getAutonomyWorkSkillMarkdown(): string {
     "",
     "## Responsibilities",
     "",
-    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.",
+    "- Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/slices.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.",
     "- Select exactly one `ready` task.",
     "- Make the smallest possible change for that task.",
     "- Run `scripts/verify.ps1`.",
@@ -618,7 +618,7 @@ function Test-TaskCollection {
         Assert-True (@('queued','ready','in_progress','verify_failed','blocked','done') -contains [string]$task.status) "Invalid task status in $Path."
         Assert-True (@('P0','P1','P2','P3') -contains [string]$task.priority) "Invalid task priority in $Path."
         Assert-True (@('not_reviewed','passed','followup_required') -contains [string]$task.review_status) "Invalid review_status in $Path."
-        Assert-True (@('proposal','followup') -contains [string]$task.source) "Invalid task source in $Path."
+        Assert-True (@('proposal','followup','quick') -contains [string]$task.source) "Invalid task source in $Path."
     }
 }
 
@@ -790,6 +790,33 @@ function Test-BlockerCollection {
     }
 }
 
+function Test-SliceCollection {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-PropertyExists -Item $doc -Name 'version' -Path $Path
+    Assert-PropertyExists -Item $doc -Name 'slices' -Path $Path
+
+    foreach ($slice in @($doc.slices)) {
+        foreach ($key in @(
+            'id',
+            'goal_id',
+            'title',
+            'objective',
+            'status',
+            'acceptance',
+            'file_hints',
+            'task_ids',
+            'created_at',
+            'updated_at',
+            'completed_at'
+        )) {
+            Assert-PropertyExists -Item $slice -Name $key -Path $Path -Context 'a slice from'
+        }
+
+        Assert-True (@('planned','active','completed','blocked') -contains [string]$slice.status) "Invalid slice status in $Path."
+    }
+}
+
 function Test-DecisionPolicyDocument {
     param([Parameter(Mandatory)][string]$Path)
     $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -859,6 +886,7 @@ foreach ($requiredPath in @(
     'autonomy/tasks.json',
     'autonomy/goals.json',
     'autonomy/proposals.json',
+    'autonomy/slices.json',
     'autonomy/state.json',
     'autonomy/settings.json',
     'autonomy/results.json',
@@ -868,6 +896,7 @@ foreach ($requiredPath in @(
     'autonomy/schema/tasks.schema.json',
     'autonomy/schema/goals.schema.json',
     'autonomy/schema/proposals.schema.json',
+    'autonomy/schema/slices.schema.json',
     'autonomy/schema/state.schema.json',
     'autonomy/schema/settings.schema.json',
     'autonomy/schema/results.schema.json',
@@ -990,6 +1019,7 @@ Test-StateDocument -Path (Join-Path $repoRoot 'autonomy/state.json')
 Test-TaskCollection -Path (Join-Path $repoRoot 'autonomy/tasks.json')
 Test-GoalCollection -Path (Join-Path $repoRoot 'autonomy/goals.json')
 Test-ProposalCollection -Path (Join-Path $repoRoot 'autonomy/proposals.json')
+Test-SliceCollection -Path (Join-Path $repoRoot 'autonomy/slices.json')
 Test-SettingsDocument -Path (Join-Path $repoRoot 'autonomy/settings.json')
 Test-ResultsDocument -Path (Join-Path $repoRoot 'autonomy/results.json')
 Test-VerificationDocument -Path (Join-Path $repoRoot 'autonomy/verification.json')
@@ -1148,6 +1178,7 @@ export function getReadmeManagedSectionMarkdown(): string {
     "- `codex-autonomy init-project --target <repo> --mode existing|new`：安装控制面，并创建薄 `AGENTS.override.md` 与首版 `TEAM_GUIDE.md` 项目现状快照。",
     "- `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]`：生成本地 Graphify 代码结构快照；不会安装 hook，也不会改 `AGENTS.md`。",
     "- `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]`：Graphify 成功后生成 `autonomy/context/repo-map.json`，汇总 docs、scripts、entrypoints、verification hints；只有显式加 `--update-team-guide` 才刷新 `TEAM_GUIDE.md`。",
+    "- `codex-autonomy quick --target <repo> --request \"<小修描述>\" [--validate] [--track]`：小 bug、小改动、明确问题的快速入口；`--track` 会写入一个 active goal、一个 slice、一个 ready task，任务 `source=\"quick\"`。",
     "- `codex-autonomy query --target <repo> --json`：给 heartbeat、relay、外部调度或 UI 消费的稳定机读状态接口。",
     "- `codex-autonomy upgrade-managed --target <repo> [--apply]`：对齐受管控制面；`README.md` 只托管受限 section。",
     "- `codex-autonomy bind-thread [--report-thread-id <threadId>]`：绑定唯一 `report_thread_id`。",
@@ -1179,7 +1210,7 @@ export function getReadmeManagedSectionMarkdown(): string {
     "- `.agents/skills/$autonomy-*`：repo-local skills。",
     "- `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。",
     "- `.codex/config.toml`：repo 级默认模型与运行配置。",
-    "- `autonomy/goals.json`、`proposals.json`、`tasks.json`、`state.json`、`settings.json`、`results.json`、`blockers.json`：自治真源。",
+    "- `autonomy/goals.json`、`proposals.json`、`slices.json`、`tasks.json`、`state.json`、`settings.json`、`results.json`、`blockers.json`：自治真源。",
     "- `autonomy/context/repo-map.json`：`scan` 生成的项目结构、命令、入口和热点摘要，供 agent 快速定向；它是辅助地图，不替代源码核验。",
     "- `autonomy/decision-policy.json`：绑定线程的通用边界策略。它决定哪些边界可自动继续、哪些只能修复一次、哪些必须问人。",
     "- `autonomy/operations/pending.json`：多文件控制面写入的临时恢复标记；存在时 heartbeat 不应继续执行新的 bounded loop。",

@@ -13,7 +13,7 @@
 - repo-local 自治控制面安装与升级
 - 目标仓库项目基线创建：生成 `TEAM_GUIDE.md` 和薄层 `AGENTS.override.md`
 - 线程绑定的 operator / reporting 工作流
-- `goal / proposal / task` 状态管理
+- `goal / proposal / slice / task` 状态管理
 - 全局 router skill 与 relay manual-audit skill 分发
 - 已安装目标仓 `README.md` section 托管能力
 - Windows-first 验证与 worktree 准备流程
@@ -75,6 +75,7 @@ codex-autonomy --version
 - `codex-autonomy init-project --target <repo> --mode existing|new`：安装控制面，并创建 `TEAM_GUIDE.md` 与薄层 `AGENTS.override.md`；默认保留已有项目文档，只有显式加 `--refresh-docs` 才重新生成。
 - `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]`：生成本地 Graphify 代码结构快照；默认维护 `.graphifyignore` 的受管 block 并写入 `graphify-out/`，不会安装官方 Codex hook，也不会改 `AGENTS.md`。
 - `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]`：在 Graphify 成功后汇总 docs、scripts、entrypoints、verification hints，写入 `autonomy/context/repo-map.json`；只有显式加 `--update-team-guide` 才刷新 `TEAM_GUIDE.md`。
+- `codex-autonomy quick --target <repo> --request "<小修描述>" [--validate] [--track]`：小 bug、小改动、明确问题的快速入口；加 `--track` 后直接写入一个 active goal、一个 slice、一个 ready task，任务 `source="quick"`，不走完整 proposal 流。
 - `codex-autonomy query --target <repo> --json`：给 heartbeat、relay、外部调度或未来 UI 使用的稳定机读状态接口，字段比完整 `status` 更小。
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
 - `codex-autonomy rebaseline-managed --target <repo>`：把 advisory managed drift 重新登记为当前仓库的 repo-specific 基线，不改文件内容，只更新 `autonomy/install.json` 元数据。
@@ -117,7 +118,7 @@ codex-autonomy --version
 - `.agents/skills/$autonomy-decision`：通用边界决策 skill；遇到 blocker、verification failure、dirty worktree、closeout、scope / env / thread boundary 时，先跑 `codex-autonomy decide --json`，只有它判定需要人工时才问你。
 - `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。
 - `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `approval_policy = "never"`、`sandbox_mode = "workspace-write"`、`model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
-- `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
+- `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/slices.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
 - `autonomy/verification.json`：goal 级 closeout gate；体检、安全、健壮性类 goal 只有在 required verification axis 清零后才能真正完成。
 - `autonomy/context/repo-map.json`：`scan` 生成的项目结构、命令、入口和热点摘要，供 agent 快速定向；它是辅助地图，不替代源码核验。
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
@@ -128,10 +129,11 @@ codex-autonomy --version
 
 ## 运行模型
 
-仓库当前支持 `goal / proposal / task` 三层数据，以及 `sprint / cruise` 两种运行模式，再配合 `review / report` 两个收口动作。
+仓库当前支持 `goal / proposal / slice / task` 四层数据，以及 `sprint / cruise` 两种运行模式，再配合 `review / report` 两个收口动作。
 
 - `goal`：目标本体，先进入 `awaiting_confirmation`，确认后进入 `approved` / `active`。
 - `proposal`：Planner 对当前 goal 生成的首版任务提案。
+- `slice`：一个可演示、可验证的能力片段，用来把长期 goal 拆成更清楚的交付边界。
 - `task`：真正被 worker 执行的最小工作单元。
 - `cruise cadence`：稳态巡航频率，指 Planner / Worker / Reviewer 在后台按固定周期醒来检查是否有可推进项。
 - `sprint heartbeat`：冲刺 runner 的唤醒间隔，不是任务时长。它只决定多久再醒一次，不代表一轮必须跑满这么久。
@@ -202,7 +204,7 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 - 已在真实 Windows Codex App 绑定线程上跑通 `长回合 -> relay_send_wait 超时 -> relay_dispatch_status 收口成功 -> 后续短消息继续成功` 这条恢复链。
 - 同一轮里，绑定线程完成了一次 verify closeout，并把当前 active goal 标记为 completed。
-- 因当前受限环境无法注册 Windows `Task Scheduler` 任务，且 runner 里额外拉起 app-server 会触发 `spawn EPERM`，这次会话没有在系统调度层完成最终验收；已验证的是 relay 入口、绑定线程执行和超时恢复语义。
+- 在受限验证环境里，系统调度器唤醒本身可能仍是未完全覆盖的层；把外部调度视为生产可用前，需要单独验证 OS scheduler 注册和 app-server 子进程启动。
 
 近期验证结论（2026-04-17）：
 

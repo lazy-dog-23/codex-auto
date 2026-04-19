@@ -1,6 +1,6 @@
 import { Command } from "commander";
 
-import type { CommandResult, GoalsDocument, ProposalsDocument, TasksDocument } from "../contracts/autonomy.js";
+import type { CommandResult, GoalsDocument, ProposalsDocument, SlicesDocument, TasksDocument } from "../contracts/autonomy.js";
 import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { appendJournalEntry } from "../infra/journal.js";
 import { detectGitRepository } from "../infra/git.js";
@@ -14,6 +14,7 @@ import {
   loadGoalsDocument,
   loadProposalsDocument,
   loadResultsDocument,
+  loadSlicesDocument,
   loadStateDocument,
   loadTasksDocument,
   loadVerificationDocument,
@@ -21,6 +22,7 @@ import {
   writeGoalsDocument,
   writeProposalsDocument,
   writeResultsDocument,
+  writeSlicesDocument,
   writeStateDocument,
   writeTasksDocument,
   writeVerificationDocument,
@@ -35,6 +37,7 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
     const now = new Date().toISOString();
     const goalsDoc = await loadGoalsDocument(paths);
     const proposalsDoc = await loadProposalsDocument(paths);
+    const slicesDoc = await loadSlicesDocument(paths);
     const tasksDoc = await loadTasksDocument(paths);
     const state = await loadStateDocument(paths);
     const [resultsDoc, existingVerificationDoc] = await Promise.all([
@@ -57,6 +60,7 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
       state,
       targetGoal.id,
       now,
+      slicesDoc.slices,
     );
 
     const rebalanced = rebalanceTaskWindow(materialized.tasks, {
@@ -78,6 +82,10 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
     const updatedTasks: TasksDocument = {
       ...tasksDoc,
       tasks: rebalanced.tasks,
+    };
+    const updatedSlices: SlicesDocument = {
+      ...slicesDoc,
+      slices: materialized.slices,
     };
     const updatedGoals: GoalsDocument = {
       ...goalsDoc,
@@ -123,6 +131,7 @@ export async function runApproveProposal(goalId: string | undefined, repoRoot = 
 
     await writeGoalsDocument(paths, updatedGoals);
     await writeProposalsDocument(paths, updatedProposals);
+    await writeSlicesDocument(paths, updatedSlices);
     await writeTasksDocument(paths, updatedTasks);
     await writeStateDocument(paths, updatedState);
     await writeVerificationDocument(paths, updatedVerification);

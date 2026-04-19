@@ -16,6 +16,7 @@ import { runGenerateProposal } from "../src/commands/generate-proposal.js";
 import { registerInstallCommand } from "../src/commands/install.js";
 import { runPrepareWorktree } from "../src/commands/prepare-worktree.js";
 import { runMergeAutonomyBranch } from "../src/commands/merge-autonomy-branch.js";
+import { runQuickCommand } from "../src/commands/quick.js";
 import { runStatusCommand } from "../src/commands/status.js";
 import { runIntakeGoal } from "../src/commands/intake-goal.js";
 import { runUnblock } from "../src/commands/unblock.js";
@@ -683,17 +684,272 @@ describe("command integration contracts", () => {
 
     const result = await runApproveProposal("goal-approve", workspace);
     const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const slicesDoc = JSON.parse(await readFile(join(workspace, "autonomy", "slices.json"), "utf8"));
     const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
     const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
     const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
 
     expect(result.ok).toBe(true);
     expect(goalsDoc.goals[0]?.status).toBe("active");
+    expect(slicesDoc.slices[0]?.goal_id).toBe("goal-approve");
+    expect(slicesDoc.slices[0]?.task_ids).toEqual(["task-approve"]);
     expect(tasksDoc.tasks[0]?.goal_id).toBe("goal-approve");
+    expect(tasksDoc.tasks[0]?.slice_id).toBe("slice-goal-approve-default");
     expect(stateDoc.current_goal_id).toBe("goal-approve");
     expect(stateDoc.run_mode).toBe("sprint");
     expect(resultsDoc.last_summary_kind).toBe("normal_success");
     expect(resultsDoc.last_summary_reason).toContain("Approved proposal for goal-approve");
+  });
+
+  it("quick can preview or track one ready quick task without a proposal", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+
+    const preview = await runQuickCommand({
+      target: workspace,
+      request: "Fix docs typo in README.md",
+      validate: true,
+    }, workspace);
+    const previewTasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
+    expect(preview.ok).toBe(true);
+    expect(preview.tracked).toBe(false);
+    expect(previewTasksDoc.tasks).toHaveLength(0);
+
+    await expect(runQuickCommand({
+      target: workspace,
+      request: "Fix docs typo in README.md",
+      validate: true,
+      track: true,
+    }, workspace)).rejects.toThrow(/requires the current operator thread to be bound/i);
+
+    process.env.CODEX_THREAD_ID = "thread-quick";
+    const tracked = await runQuickCommand({
+      target: workspace,
+      request: "Fix docs typo in README.md",
+      validate: true,
+      track: true,
+    }, workspace);
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const slicesDoc = JSON.parse(await readFile(join(workspace, "autonomy", "slices.json"), "utf8"));
+    const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
+    const verificationDoc = JSON.parse(await readFile(join(workspace, "autonomy", "verification.json"), "utf8"));
+
+    expect(tracked.ok).toBe(true);
+    expect(tracked.tracked).toBe(true);
+    expect(goalsDoc.goals[0]?.id).toBe(tracked.goal_id);
+    expect(goalsDoc.goals[0]?.status).toBe("active");
+    expect(slicesDoc.slices[0]?.id).toBe(tracked.slice_id);
+    expect(slicesDoc.slices[0]?.task_ids).toEqual([tracked.task_id]);
+    expect(tasksDoc.tasks[0]?.id).toBe(tracked.task_id);
+    expect(tasksDoc.tasks[0]?.source).toBe("quick");
+    expect(tasksDoc.tasks[0]?.slice_id).toBe(tracked.slice_id);
+    expect(tasksDoc.tasks[0]?.file_hints).toEqual(["README.md"]);
+    expect(stateDoc.current_goal_id).toBe(tracked.goal_id);
+    expect(stateDoc.report_thread_id).toBe("thread-quick");
+    expect(stateDoc.sprint_active).toBe(true);
+    expect(resultsDoc.planner.task_id).toBe(tracked.task_id);
+    expect(verificationDoc.goal_id).toBe(tracked.goal_id);
+    expect(verificationDoc.axes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "quick_verify",
+        required: true,
+        status: "pending",
+        source_task_id: tracked.task_id,
+      }),
+    ]));
+  });
+
+  it("quick --track refuses to create active work from a non-bound current thread", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await runBindThreadCommand({ reportThreadId: "thread-bound" }, workspace);
+    process.env.CODEX_THREAD_ID = "thread-other";
+
+    await expect(runQuickCommand({
+      target: workspace,
+      request: "Fix docs typo in README.md",
+      track: true,
+    }, workspace)).rejects.toThrow(/thread_binding_state=bound_to_other/i);
+
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
+    expect(goalsDoc.goals).toHaveLength(0);
+    expect(tasksDoc.tasks).toHaveLength(0);
+  });
+
+  it("quick --track refuses to write while a control-plane operation is pending", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await mkdir(join(workspace, "autonomy", "operations"), { recursive: true });
+    await writeJson(join(workspace, "autonomy", "operations", "pending.json"), {
+      version: 1,
+      id: "op-pending",
+      kind: "create_successor_goal",
+      created_at: "2026-04-10T00:00:00Z",
+      updated_at: "2026-04-10T00:00:00Z",
+      command: "codex-autonomy create-successor-goal",
+      auto_approved: false,
+      goal_id: "goal-next",
+      source_goal_id: "goal-complete",
+      task_ids: [],
+      expected_paths: ["autonomy/goals.json"],
+      payload: {
+        goals: {},
+        proposals: {},
+        state: {},
+        results: {},
+        active_goal_id: null,
+        journal_entry: {},
+      },
+    });
+
+    await expect(runQuickCommand({
+      target: workspace,
+      request: "Fix docs typo in README.md",
+      track: true,
+    }, workspace)).rejects.toThrow(/pending control-plane operation op-pending/i);
+
+    const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
+    expect(tasksDoc.tasks).toHaveLength(0);
+  });
+
+  it("quick --track recovers a pending quick operation without creating duplicate active work", async () => {
+    const workspace = await makeTempWorkspace();
+    await runBootstrapCommand(workspace);
+    await mkdir(join(workspace, "autonomy", "operations"), { recursive: true });
+    process.env.CODEX_THREAD_ID = "thread-quick";
+    const resultsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "results.json"), "utf8"));
+    const quickGoal = {
+      id: "goal-quick-recover",
+      title: "Quick: Recover pending docs fix",
+      objective: "Recover the interrupted quick task.",
+      success_criteria: ["done"],
+      constraints: ["bounded"],
+      out_of_scope: ["deployment"],
+      status: "active",
+      run_mode: "sprint",
+      created_at: "2026-04-10T01:01:00Z",
+      approved_at: "2026-04-10T01:01:00Z",
+      completed_at: null,
+    };
+    const quickSlice = {
+      id: "slice-goal-quick-recover-quick",
+      goal_id: "goal-quick-recover",
+      title: "Quick implementation slice",
+      objective: "Recover the interrupted quick task.",
+      status: "active",
+      acceptance: ["done"],
+      file_hints: ["README.md"],
+      task_ids: ["quick-recover"],
+      created_at: "2026-04-10T01:01:00Z",
+      updated_at: "2026-04-10T01:01:00Z",
+      completed_at: null,
+    };
+    const quickTask = {
+      id: "quick-recover",
+      goal_id: "goal-quick-recover",
+      slice_id: "slice-goal-quick-recover-quick",
+      title: "Recover the interrupted quick task.",
+      status: "ready",
+      priority: "P1",
+      depends_on: [],
+      acceptance: ["done"],
+      file_hints: ["README.md"],
+      retry_count: 0,
+      last_error: null,
+      updated_at: "2026-04-10T01:01:00Z",
+      commit_hash: null,
+      review_status: "not_reviewed",
+      source: "quick",
+      source_task_id: null,
+    };
+
+    await writeJson(join(workspace, "autonomy", "operations", "pending.json"), {
+      version: 1,
+      id: "op-quick-recover",
+      kind: "quick",
+      created_at: "2026-04-10T01:01:00Z",
+      updated_at: "2026-04-10T01:01:00Z",
+      command: "codex-autonomy quick",
+      auto_approved: true,
+      goal_id: "goal-quick-recover",
+      source_goal_id: null,
+      task_ids: ["quick-recover"],
+      expected_paths: ["autonomy/goals.json", "autonomy/tasks.json"],
+      payload: {
+        goals: { version: 1, goals: [quickGoal] },
+        proposals: { version: 1, proposals: [] },
+        slices: { version: 1, slices: [quickSlice] },
+        tasks: { version: 1, tasks: [quickTask] },
+        state: {
+          version: 1,
+          current_goal_id: "goal-quick-recover",
+          current_task_id: null,
+          cycle_status: "idle",
+          run_mode: "sprint",
+          last_planner_run_at: "2026-04-10T01:01:00Z",
+          last_worker_run_at: null,
+          last_result: "planned",
+          consecutive_worker_failures: 0,
+          needs_human_review: false,
+          open_blocker_count: 0,
+          report_thread_id: "thread-quick",
+          autonomy_branch: "codex/autonomy",
+          sprint_active: true,
+          paused: false,
+          pause_reason: null,
+        },
+        verification: {
+          version: 1,
+          goal_id: "goal-quick-recover",
+          policy: "strong_template",
+          axes: [
+            {
+              id: "quick_verify",
+              title: "Run repository verification for the quick task",
+              required: true,
+              status: "pending",
+              evidence: [],
+              source_task_id: "quick-recover",
+              last_checked_at: null,
+              reason: "pending quick validation",
+            },
+          ],
+        },
+        results: {
+          ...resultsDoc,
+          last_summary_kind: "normal_success",
+          last_summary_reason: "Recovered quick operation op-quick-recover.",
+        },
+        active_goal_id: "goal-quick-recover",
+        journal_entry: {
+          timestamp: "2026-04-10T01:01:00Z",
+          actor: "supervisor",
+          taskId: "quick-recover",
+          result: "planned",
+          summary: "Recovered quick task",
+          verify: "pending",
+          blocker: "none",
+        },
+      },
+    });
+
+    const result = await runQuickCommand({
+      target: workspace,
+      request: "Recover the interrupted quick task.",
+      track: true,
+    }, workspace);
+    const goalsDoc = JSON.parse(await readFile(join(workspace, "autonomy", "goals.json"), "utf8"));
+    const tasksDoc = JSON.parse(await readFile(join(workspace, "autonomy", "tasks.json"), "utf8"));
+    const journalText = await readFile(join(workspace, "autonomy", "journal.md"), "utf8");
+
+    expect(result.message).toContain("Recovered pending quick operation");
+    expect(goalsDoc.goals.filter((goal: { id: string }) => goal.id === "goal-quick-recover")).toHaveLength(1);
+    expect(tasksDoc.tasks.filter((task: { id: string }) => task.id === "quick-recover")).toHaveLength(1);
+    await expect(pathExists(join(workspace, "autonomy", "operations", "pending.json"))).resolves.toBe(false);
+    expect(journalText).toContain("operation op-quick-recover");
   });
 
   it("create-successor-goal can auto-approve a minimal charter-bound successor", async () => {

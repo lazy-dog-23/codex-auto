@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "slices": [
+    {
+      "id": "slice-goal-a-default",
+      "goal_id": "goal-a",
+      "title": "Authentication smoke slice",
+      "objective": "Deliver the smallest verifiable authentication path.",
+      "status": "active",
+      "acceptance": [
+        "User can complete the authentication smoke path."
+      ],
+      "file_hints": [
+        "src/auth.ts"
+      ],
+      "task_ids": [
+        "task-a",
+        "task-b"
+      ],
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-02T00:00:00Z",
+      "completed_at": null
+    }
+  ]
+}

@@ -175,6 +175,22 @@ describe("graphify-snapshot", () => {
     expect(ignore).not.toContain("profile: full");
   });
 
+  it("removes a newly created .graphifyignore when graphify update fails", async () => {
+    const workspace = await makeWorkspace();
+
+    await expect(runGraphifySnapshotCommand(
+      { target: workspace, profile: "source-only", toolDir: "C:/tools/graphify" },
+      {
+        ...graphifyDependencies(),
+        runUpdate: async () => {
+          throw new Error("graphify exploded before outputs");
+        },
+      },
+    )).rejects.toThrow("graphify exploded before outputs");
+
+    await expect(readFile(join(workspace, ".graphifyignore"), "utf8")).rejects.toThrow();
+  });
+
   it("fails and rolls back when graphify omits required outputs", async () => {
     const workspace = await makeWorkspace();
 

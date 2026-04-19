@@ -7,6 +7,7 @@ import type {
   AutonomyState,
   CommandResult,
   ControlPlanePendingOperation,
+  CreateSuccessorGoalPendingOperation,
   DecisionPolicyDocument,
   GoalRecord,
   GoalsDocument,
@@ -14,6 +15,7 @@ import type {
   RepoPaths,
   RunMode,
   StatusSummary,
+  SlicesDocument,
   TasksDocument,
   VerificationDocument,
 } from "../contracts/autonomy.js";
@@ -38,6 +40,7 @@ import {
   loadPendingOperation,
   loadProposalsDocument,
   loadResultsDocument,
+  loadSlicesDocument,
   loadStateDocument,
   loadTasksDocument,
   loadVerificationDocument,
@@ -45,6 +48,7 @@ import {
   writeGoalsDocument,
   writeProposalsDocument,
   writeResultsDocument,
+  writeSlicesDocument,
   writeStateDocument,
   writeTasksDocument,
   writeVerificationDocument,
@@ -101,6 +105,7 @@ export async function runCreateSuccessorGoal(
       goalsDoc,
       proposalsDoc,
       tasksDoc,
+      slicesDoc,
       state,
       blockersDoc,
       resultsDoc,
@@ -110,6 +115,7 @@ export async function runCreateSuccessorGoal(
       loadGoalsDocument(paths),
       loadProposalsDocument(paths),
       loadTasksDocument(paths),
+      loadSlicesDocument(paths),
       loadStateDocument(paths),
       loadBlockersDocument(paths),
       loadResultsDocument(paths),
@@ -151,6 +157,7 @@ export async function runCreateSuccessorGoal(
     const proposal = buildProposalFromTasks({
       goalId: successorGoal.id,
       summary: proposalPlan.summary,
+      slices: proposalPlan.slices,
       tasks: proposalPlan.tasks,
       now,
     });
@@ -210,6 +217,7 @@ export async function runCreateSuccessorGoal(
         payload: {
           goals: updatedGoals,
           proposals: updatedProposals,
+          slices: null,
           tasks: null,
           state: updatedState,
           verification: null,
@@ -253,6 +261,7 @@ export async function runCreateSuccessorGoal(
       state,
       successorGoal.id,
       now,
+      slicesDoc.slices,
     );
     const rebalanced = rebalanceTaskWindow(materialized.tasks, {
       currentGoalId: materialized.state.current_goal_id,
@@ -260,6 +269,10 @@ export async function runCreateSuccessorGoal(
     const updatedTasks: TasksDocument = {
       ...tasksDoc,
       tasks: rebalanced.tasks,
+    };
+    const updatedSlices: SlicesDocument = {
+      ...slicesDoc,
+      slices: materialized.slices,
     };
     const updatedGoals: GoalsDocument = {
       ...goalsDoc,
@@ -324,6 +337,7 @@ export async function runCreateSuccessorGoal(
       expectedPaths: [
         "autonomy/goals.json",
         "autonomy/proposals.json",
+        "autonomy/slices.json",
         "autonomy/tasks.json",
         "autonomy/state.json",
         "autonomy/verification.json",
@@ -334,6 +348,7 @@ export async function runCreateSuccessorGoal(
       payload: {
         goals: updatedGoals,
         proposals: updatedProposals,
+        slices: updatedSlices,
         tasks: updatedTasks,
         state: updatedState,
         verification: updatedVerification,
@@ -346,6 +361,7 @@ export async function runCreateSuccessorGoal(
     await writePendingOperation(paths, operation);
     await writeGoalsDocument(paths, updatedGoals);
     await writeProposalsDocument(paths, updatedProposals);
+    await writeSlicesDocument(paths, updatedSlices);
     await writeTasksDocument(paths, updatedTasks);
     await writeStateDocument(paths, updatedState);
     await writeVerificationDocument(paths, updatedVerification);
@@ -467,10 +483,13 @@ function buildPendingCreateSuccessorOperation(input: {
 
 async function recoverCreateSuccessorOperation(
   paths: RepoPaths,
-  operation: ControlPlanePendingOperation,
+  operation: CreateSuccessorGoalPendingOperation,
 ): Promise<CreateSuccessorGoalResult> {
   await writeGoalsDocument(paths, operation.payload.goals);
   await writeProposalsDocument(paths, operation.payload.proposals);
+  if (operation.payload.slices) {
+    await writeSlicesDocument(paths, operation.payload.slices);
+  }
   if (operation.payload.tasks) {
     await writeTasksDocument(paths, operation.payload.tasks);
   }

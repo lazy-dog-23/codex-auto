@@ -17,6 +17,7 @@ import { registerIntakeGoalCommand } from "./commands/intake-goal.js";
 import { registerMergeAutonomyBranchCommand } from "./commands/merge-autonomy-branch.js";
 import { registerPauseCommand } from "./commands/pause.js";
 import { registerPrepareWorktreeCommand } from "./commands/prepare-worktree.js";
+import { registerQuickCommand } from "./commands/quick.js";
 import { registerQueryCommand } from "./commands/query.js";
 import { registerReportCommand } from "./commands/report.js";
 import { registerResumeCommand } from "./commands/resume.js";
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
   registerUpgradeManagedCommand(program);
   registerRebaselineManagedCommand(program);
   registerEmitAutomationPromptsCommand(program);
+  registerQuickCommand(program);
   registerUnblockCommand(program);
 
   try {
