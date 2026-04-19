@@ -142,6 +142,35 @@ describe("init-project", () => {
     expect(teamGuide).not.toContain("codex-autonomy install --target <repo>");
   });
 
+  it("keeps README summaries ending in a colon from becoming dangling fragments", async () => {
+    const workspace = await makeTempGitRepo();
+    await writeFile(
+      join(workspace, "README.md"),
+      [
+        "# BiliMusic2",
+        "",
+        "一个以 FastAPI + Vue 3 为核心的 Bilibili / YouTube 音乐播放与管理项目，包含：",
+        "",
+        "- 后端 API、鉴权、播放流、缓存与 AI Assistant",
+        "- 前端播放器、搜索、歌单、历史记录与共享 B 站登录面板",
+        "- 面向当前仓库的测试、体检和自治控制面",
+        "",
+        "## 快速入口",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runInitProjectCommand(
+      { target: workspace, mode: "existing" },
+      installDependenciesFor(workspace),
+    );
+
+    expect(result.ok).toBe(true);
+    const teamGuide = await readFile(join(workspace, "TEAM_GUIDE.md"), "utf8");
+    expect(teamGuide).toContain("Current summary: 一个以 FastAPI + Vue 3 为核心的 Bilibili / YouTube 音乐播放与管理项目，包含：后端 API、鉴权、播放流、缓存与 AI Assistant; 前端播放器、搜索、歌单、历史记录与共享 B 站登录面板; 面向当前仓库的测试、体检和自治控制面");
+    expect(teamGuide).not.toContain("Current summary: 一个以 FastAPI + Vue 3 为核心的 Bilibili / YouTube 音乐播放与管理项目，包含：\n");
+  });
+
   it("rejects unknown init modes", async () => {
     const workspace = await makeTempGitRepo();
 

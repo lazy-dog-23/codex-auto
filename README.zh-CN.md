@@ -69,10 +69,11 @@ codex-autonomy --version
 
 - 标准路径：`codex-autonomy <command>`。
 - 可先用 `codex-autonomy --version` 确认当前机器级 CLI 版本；全局 router skill 也会把它作为“是否需要先刷新本机产品版本”的判断信号之一。
-- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“初始化这个项目”“给当前项目做基线”“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“确认提案并继续”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“快速续跑”“任务完成后 1 分钟继续”“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install/init-project -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
+- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“初始化这个项目”“给当前项目做基线”“生成项目结构图”“跑 graphify 快照”“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“确认提案并继续”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“快速续跑”“任务完成后 1 分钟继续”“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install/init-project -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
 - relay completion event 现在带固定 envelope：`[Codex Relay Callback]`、`Event-Type: codex.relay.dispatch.completed.v1`，以及 `BEGIN_CODEX_RELAY_CALLBACK_JSON` / `END_CODEX_RELAY_CALLBACK_JSON` 之间的机读 JSON。router / operator 要把它当成状态回传，而不是新的 goal intake。
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
 - `codex-autonomy init-project --target <repo> --mode existing|new`：安装控制面，并创建 `TEAM_GUIDE.md` 与薄层 `AGENTS.override.md`；默认保留已有项目文档，只有显式加 `--refresh-docs` 才重新生成。
+- `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]`：生成本地 Graphify 代码结构快照；默认维护 `.graphifyignore` 的受管 block 并写入 `graphify-out/`，不会安装官方 Codex hook，也不会改 `AGENTS.md`。
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
 - `codex-autonomy rebaseline-managed --target <repo>`：把 advisory managed drift 重新登记为当前仓库的 repo-specific 基线，不改文件内容，只更新 `autonomy/install.json` 元数据。
 - 目标仓 `README.md` 现在只按 section 托管：只更新 `<!-- codex-autonomy:managed:start -->` 到 `<!-- codex-autonomy:managed:end -->` 之间的内容；默认要求整文件 `<= 24 KiB`、托管 section `<= 8 KiB`。README 超限、含 NUL、marker 损坏或不是常规文本文件时，只给 advisory warning，不自动覆盖，也不会被 `rebaseline-managed` 当成新基线。

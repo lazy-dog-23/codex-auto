@@ -10,6 +10,7 @@ import { registerDecideCommand } from "./commands/decide.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerEmitAutomationPromptsCommand } from "./commands/emit-automation-prompts.js";
 import { registerGenerateProposalCommand } from "./commands/generate-proposal.js";
+import { registerGraphifySnapshotCommand } from "./commands/graphify-snapshot.js";
 import { registerInitProjectCommand } from "./commands/init-project.js";
 import { registerInstallCommand } from "./commands/install.js";
 import { registerIntakeGoalCommand } from "./commands/intake-goal.js";
@@ -40,6 +41,7 @@ async function main(): Promise<void> {
   registerDecideCommand(program);
   registerDoctorCommand(program);
   registerStatusCommand(program);
+  registerGraphifySnapshotCommand(program);
   registerInitProjectCommand(program);
   registerIntakeGoalCommand(program);
   registerGenerateProposalCommand(program);

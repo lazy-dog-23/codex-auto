@@ -130,6 +130,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 
 - `codex-autonomy install --target <repo>`
 - `codex-autonomy init-project --target <repo> --mode existing|new` (installs the control surface and creates `TEAM_GUIDE.md` plus `AGENTS.override.md`; preserves existing docs unless `--refresh-docs` is passed)
+- `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]` (builds a local Graphify code map without installing hooks or editing `AGENTS.md`)
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`
 - `codex-autonomy rebaseline-managed --target <repo>`
 - `codex-autonomy bind-thread [--report-thread-id <threadId>]`

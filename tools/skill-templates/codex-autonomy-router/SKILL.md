@@ -1,6 +1,6 @@
 ---
 name: codex-autonomy-router
-description: Detect whether the current local repository already uses codex-autonomy, install it automatically when a user asks in natural language to use auto/autonomy in the current project, and route follow-up requests into codex-autonomy init-project, install, upgrade, intake, proposal confirmation, blocker resolution, decision-boundary classification, sprint/cruise continuation, report, status, pause, resume, review, and merge flows. Use for requests like “初始化这个项目”, “给当前项目做基线”, “创建项目现状文档”, “把 auto 装进当前项目”, “升级当前项目里的 auto”, “刷新当前项目里的 auto”, “让这个项目进入自治”, “目标是……”, “确认提案”, “确认提案并继续”, “用冲刺模式推进这个目标”, “用巡航模式推进这个目标”, “继续当前目标”, “快速续跑”, “任务完成后 1 分钟继续”, “自动判断能不能继续”, “只有越界或高风险时问我”, “按第二条处理 blocker”, “把这个 goal 收窄为 checklist/manual lane”, “保留 heartbeat 继续推进”, “按长期目标继续生成下一步”, “已授权长期自治”, “汇报当前情况”, “暂停当前目标”, “处理下一个目标”, or “合并自治分支”. Also use when an installed repo may need to pick up the latest codex-autonomy control-surface version before continuing.
+description: Detect whether the current local repository already uses codex-autonomy, install it automatically when a user asks in natural language to use auto/autonomy in the current project, and route follow-up requests into codex-autonomy init-project, graphify-snapshot, install, upgrade, intake, proposal confirmation, blocker resolution, decision-boundary classification, sprint/cruise continuation, report, status, pause, resume, review, and merge flows. Use for requests like “初始化这个项目”, “给当前项目做基线”, “创建项目现状文档”, “生成项目结构图”, “跑 graphify 快照”, “把 auto 装进当前项目”, “升级当前项目里的 auto”, “刷新当前项目里的 auto”, “让这个项目进入自治”, “目标是……”, “确认提案”, “确认提案并继续”, “用冲刺模式推进这个目标”, “用巡航模式推进这个目标”, “继续当前目标”, “快速续跑”, “任务完成后 1 分钟继续”, “自动判断能不能继续”, “只有越界或高风险时问我”, “按第二条处理 blocker”, “把这个 goal 收窄为 checklist/manual lane”, “保留 heartbeat 继续推进”, “按长期目标继续生成下一步”, “已授权长期自治”, “汇报当前情况”, “暂停当前目标”, “处理下一个目标”, or “合并自治分支”. Also use when an installed repo may need to pick up the latest codex-autonomy control-surface version before continuing.
 ---
 
 # Codex Autonomy Router
@@ -106,6 +106,11 @@ Map the user request to the narrowest `codex-autonomy` flow:
   - for genuinely new/empty repositories, run `codex-autonomy init-project --target . --mode new`
   - if the user explicitly asks to regenerate existing project docs, add `--refresh-docs`; otherwise preserve existing `TEAM_GUIDE.md` and `AGENTS.override.md`
   - summarize created, refreshed, and skipped paths, then quote the next setup/doctor/worktree steps from the command result
+- project graph snapshot:
+  - use this path for `生成项目结构图`、`跑 graphify 快照`、`项目知识图谱`、`架构图谱`
+  - run `codex-autonomy graphify-snapshot --target . --profile source-only`
+  - do not run `graphify codex install`; the default route intentionally avoids Graphify hooks and does not edit `AGENTS.md`
+  - summarize `graphify-out/GRAPH_REPORT.md`, top god nodes, graph size, and whether `.graphifyignore` was created, updated, preserved, or skipped
 - product refresh / upgrade:
   - use this path for `升级当前项目里的 auto`、`刷新当前项目里的 auto`、`更新这个项目的自治控制面`
   - run the ensure flow above, then `codex-autonomy upgrade-managed --target . --apply --json`

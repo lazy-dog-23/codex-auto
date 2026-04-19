@@ -415,8 +415,75 @@ async function readReadmeSummary(repoRoot: string): Promise<{ title: string | nu
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("<!--"));
   const title = lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim() ?? null;
-  const summary = lines.find((line) => !line.startsWith("#") && !line.startsWith("[") && !line.startsWith("!")) ?? null;
+  const summaryIndex = lines.findIndex((line) => isReadmeSummaryCandidate(line));
+  const summary = summaryIndex >= 0 ? buildReadmeSummary(lines, summaryIndex) : null;
   return { title, summary };
+}
+
+function isReadmeSummaryCandidate(line: string): boolean {
+  return !line.startsWith("#") && !line.startsWith("[") && !line.startsWith("!");
+}
+
+function buildReadmeSummary(lines: string[], summaryIndex: number): string | null {
+  const rawFirstLine = lines[summaryIndex];
+  if (rawFirstLine === undefined) {
+    return null;
+  }
+
+  const firstLine = stripReadmeBullet(rawFirstLine);
+  if (firstLine.length === 0) {
+    return null;
+  }
+
+  if (!/[:：]\s*$/.test(firstLine)) {
+    return normalizeReadmeSummary(firstLine);
+  }
+
+  const bullets: string[] = [];
+  for (const line of lines.slice(summaryIndex + 1)) {
+    if (line.startsWith("#")) {
+      break;
+    }
+
+    const bullet = stripReadmeBullet(line);
+    if (bullet === line) {
+      if (bullets.length > 0) {
+        break;
+      }
+      continue;
+    }
+
+    if (bullet.length > 0) {
+      bullets.push(bullet);
+    }
+
+    if (bullets.length >= 3) {
+      break;
+    }
+  }
+
+  if (bullets.length === 0) {
+    return normalizeReadmeSummary(firstLine.replace(/[:：]\s*$/, "."));
+  }
+
+  return normalizeReadmeSummary(`${firstLine}${bullets.join("; ")}`);
+}
+
+function stripReadmeBullet(line: string): string {
+  return line.replace(/^[-*+]\s+/, "").trim();
+}
+
+function normalizeReadmeSummary(value: string): string | null {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  if (normalized.length <= 280) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 277).replace(/[\s,;，；、:：]+$/, "")}...`;
 }
 
 function buildTeamGuideMarkdown(options: {
