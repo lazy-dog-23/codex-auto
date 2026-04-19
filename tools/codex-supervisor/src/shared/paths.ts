@@ -45,6 +45,8 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
 
 const AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS = [
   ...MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.filter((relativePath) => relativePath !== "README.md"),
+  "graphify-out",
+  "autonomy/context",
   "AGENTS.override.md",
   "TEAM_GUIDE.md",
 ] as const;
@@ -70,7 +72,9 @@ const STATIC_TEMPLATE_RELATIVE_PATHS = [
 ] as const;
 
 const RUNTIME_STATE_RELATIVE_PATHS = [
+  "graphify-out",
   "autonomy/goal.md",
+  "autonomy/context",
   "autonomy/journal.md",
   "autonomy/install.json",
   "autonomy/verification.json",
@@ -94,6 +98,7 @@ const NORMALIZED_RUNTIME_STATE_RELATIVE_PATHS = new Set(
 export function resolveRepoPaths(repoRoot = process.cwd()): RepoPaths {
   const resolvedRoot = path.resolve(repoRoot);
   const autonomyDir = path.join(resolvedRoot, "autonomy");
+  const contextDir = path.join(autonomyDir, "context");
   const codexDir = path.join(resolvedRoot, ".codex");
   const scriptsDir = path.join(resolvedRoot, "scripts");
   const cliDir = path.join(resolvedRoot, "tools", "codex-supervisor");
@@ -102,6 +107,8 @@ export function resolveRepoPaths(repoRoot = process.cwd()): RepoPaths {
     repoRoot: resolvedRoot,
     readmeFile: path.join(resolvedRoot, "README.md"),
     autonomyDir,
+    contextDir,
+    repoMapFile: path.join(contextDir, "repo-map.json"),
     schemaDir: path.join(autonomyDir, "schema"),
     locksDir: path.join(autonomyDir, "locks"),
     tasksFile: path.join(autonomyDir, "tasks.json"),
@@ -169,7 +176,9 @@ export function getManagedFileClass(pathValue: string): ManagedFileClass {
     return "static_template";
   }
 
-  if (NORMALIZED_RUNTIME_STATE_RELATIVE_PATHS.has(normalized)) {
+  if ([...NORMALIZED_RUNTIME_STATE_RELATIVE_PATHS].some((runtimePath) =>
+    normalized === runtimePath || normalized.startsWith(`${runtimePath}/`),
+  )) {
     return "runtime_state";
   }
 

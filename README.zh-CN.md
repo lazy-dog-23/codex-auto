@@ -74,6 +74,8 @@ codex-autonomy --version
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
 - `codex-autonomy init-project --target <repo> --mode existing|new`：安装控制面，并创建 `TEAM_GUIDE.md` 与薄层 `AGENTS.override.md`；默认保留已有项目文档，只有显式加 `--refresh-docs` 才重新生成。
 - `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]`：生成本地 Graphify 代码结构快照；默认维护 `.graphifyignore` 的受管 block 并写入 `graphify-out/`，不会安装官方 Codex hook，也不会改 `AGENTS.md`。
+- `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]`：在 Graphify 成功后汇总 docs、scripts、entrypoints、verification hints，写入 `autonomy/context/repo-map.json`；只有显式加 `--update-team-guide` 才刷新 `TEAM_GUIDE.md`。
+- `codex-autonomy query --target <repo> --json`：给 heartbeat、relay、外部调度或未来 UI 使用的稳定机读状态接口，字段比完整 `status` 更小。
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
 - `codex-autonomy rebaseline-managed --target <repo>`：把 advisory managed drift 重新登记为当前仓库的 repo-specific 基线，不改文件内容，只更新 `autonomy/install.json` 元数据。
 - 目标仓 `README.md` 现在只按 section 托管：只更新 `<!-- codex-autonomy:managed:start -->` 到 `<!-- codex-autonomy:managed:end -->` 之间的内容；默认要求整文件 `<= 24 KiB`、托管 section `<= 8 KiB`。README 超限、含 NUL、marker 损坏或不是常规文本文件时，只给 advisory warning，不自动覆盖，也不会被 `rebaseline-managed` 当成新基线。
@@ -91,6 +93,7 @@ codex-autonomy --version
 - `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。当 diff 可提交时，它还会自动执行受控 closeout commit，并立刻对齐 background worktree。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
+- `codex-autonomy query --target <repo> --json`：只输出自动化消费者需要的稳定状态子集，适合工具、router、heartbeat、relay 先做下一步判断。
 - `codex-autonomy decide --json`：把当前边界分类为可继续、可修复一次、安全退避、需要问人或拒绝重写，并输出下一步动作和 heartbeat 建议。
 - `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
 - `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路、外部 relay scheduler fallback，以及 Planner / Worker / Reviewer / Reporter / Sprint runner 的机读 prompt bundle。
@@ -116,6 +119,7 @@ codex-autonomy --version
 - `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `approval_policy = "never"`、`sandbox_mode = "workspace-write"`、`model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
 - `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
 - `autonomy/verification.json`：goal 级 closeout gate；体检、安全、健壮性类 goal 只有在 required verification axis 清零后才能真正完成。
+- `autonomy/context/repo-map.json`：`scan` 生成的项目结构、命令、入口和热点摘要，供 agent 快速定向；它是辅助地图，不替代源码核验。
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
 - `autonomy/decision-policy.json`：repo 级边界策略，定义哪些路径和场景可以自动继续、哪些验证失败可重试一次、哪些必须问人，以及 1 分钟 burst / 15 分钟正常 / 30 分钟安全退避的默认语义。
 - `autonomy/journal.md`：每次 run 只追加一条记录。

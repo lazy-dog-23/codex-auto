@@ -512,6 +512,8 @@ export interface RepoPaths {
   repoRoot: string;
   readmeFile: string;
   autonomyDir: string;
+  contextDir: string;
+  repoMapFile: string;
   schemaDir: string;
   locksDir: string;
   tasksFile: string;

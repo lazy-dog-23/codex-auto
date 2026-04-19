@@ -185,6 +185,8 @@ describe("command integration contracts", () => {
 
     expect(readme).toContain("codex-autonomy install --target <repo>");
     expect(readme).toContain("codex-autonomy bind-thread --report-thread-id <thread-id>");
+    expect(readme).toContain("codex-autonomy scan --target <repo>");
+    expect(readme).toContain("codex-autonomy query --target <repo> --json");
     expect(readme).toContain("codex-autonomy approve-proposal --goal-id <goalId>");
     expect(readme).toContain("codex-autonomy create-successor-goal --auto-approve");
     expect(readme).toContain("codex-autonomy rebaseline-managed --target <repo>");
