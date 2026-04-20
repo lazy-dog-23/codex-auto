@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { registerApproveProposalCommand } from "./commands/approve-proposal.js";
 import { registerBootstrapCommand } from "./commands/bootstrap.js";
 import { registerBindThreadCommand } from "./commands/bind-thread.js";
+import { registerCompressDocsCommand } from "./commands/compress-docs.js";
 import { registerCreateSuccessorGoalCommand } from "./commands/create-successor-goal.js";
 import { registerDecideCommand } from "./commands/decide.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
@@ -46,6 +47,7 @@ async function main(): Promise<void> {
   registerStatusCommand(program);
   registerQueryCommand(program);
   registerGraphifySnapshotCommand(program);
+  registerCompressDocsCommand(program);
   registerScanCommand(program);
   registerInitProjectCommand(program);
   registerIntakeGoalCommand(program);

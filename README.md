@@ -12,6 +12,7 @@ This repository contains the product code for that workflow: the CLI, repo-local
 
 - Repo-local autonomy control surface installation and upgrade
 - Target-repo project baseline creation with `TEAM_GUIDE.md` and a thin `AGENTS.override.md`
+- Safe project context compression with `compress-docs`
 - Thread-bound operator/reporting workflow
 - Goal / proposal / slice / task state management
 - Global router skill and relay manual-audit skill distribution
@@ -98,6 +99,8 @@ After `scripts/install-global.ps1` finishes, a new Codex thread can drive instal
 - `给当前项目做基线`
 - `生成项目结构图`
 - `跑 graphify 快照`
+- `压缩项目说明`
+- `精简 TEAM_GUIDE`
 - `升级当前项目里的 auto`
 - `目标是……`
 - `确认提案`
@@ -134,6 +137,7 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy init-project --target <repo> --mode existing|new` (installs the control surface and creates `TEAM_GUIDE.md` plus `AGENTS.override.md`; preserves existing docs unless `--refresh-docs` is passed)
 - `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]` (builds a local Graphify code map without installing hooks or editing `AGENTS.md`)
 - `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]` (combines the Graphify map with docs, scripts, entrypoints, and verification hints, then writes `autonomy/context/repo-map.json`; it refreshes `TEAM_GUIDE.md` only when requested)
+- `codex-autonomy compress-docs --target <repo> --check` / `--write` (compresses `TEAM_GUIDE.md`, `AGENTS.override.md`, and `autonomy/context/*.md` only; `--check` previews without writing, `--write` applies safe compression, and oversized `TEAM_GUIDE.md` files get a 12 KiB budget warning)
 - `codex-autonomy quick --target <repo> --request "<small change>" [--validate] [--track]` (lightweight lane for a small bug fix or focused change; `--track` writes one active goal, one slice, and one ready task with `source="quick"`)
 - `codex-autonomy query --target <repo> --json` (stable compact automation state for heartbeat, relay, scheduler, or UI consumers)
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`
