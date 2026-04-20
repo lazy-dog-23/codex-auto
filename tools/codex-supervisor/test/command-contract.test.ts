@@ -993,13 +993,18 @@ describe("command integration contracts", () => {
     await expect(runCreateSuccessorGoal({ autoApprove: true }, workspace)).rejects.toThrow(/thread_binding_state=bound_without_current_thread/i);
   });
 
-  it("create-successor-goal auto-approve rejects when the sprint runner is inactive", async () => {
+  it("create-successor-goal auto-approve can resume a completed long-running program when the sprint runner is inactive", async () => {
     const workspace = await makeTempWorkspace();
-    await runBootstrapCommand(workspace);
+    await prepareGitAutomationWorkspace(workspace);
     await seedCompletedOnlySuccessorState(workspace, { sprintActive: false });
     process.env.CODEX_THREAD_ID = "thread-123";
 
-    await expect(runCreateSuccessorGoal({ autoApprove: true }, workspace)).rejects.toThrow(/ready_for_automation=false/i);
+    const result = await runCreateSuccessorGoal({ autoApprove: true }, workspace);
+    const stateDoc = JSON.parse(await readFile(join(workspace, "autonomy", "state.json"), "utf8"));
+
+    expect(result.goal_id).toMatch(/^goal-/);
+    expect(stateDoc.current_goal_id).toBe(result.goal_id);
+    expect(stateDoc.sprint_active).toBe(true);
   });
 
   it("status and doctor block while a control-plane operation is pending", async () => {

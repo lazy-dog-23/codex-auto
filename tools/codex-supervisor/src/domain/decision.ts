@@ -174,7 +174,7 @@ export function buildDecisionAdvice(
       event: "successor_goal_boundary",
       outcome: canAutoApprove ? "auto_continue" : "ask_human",
       reason: canAutoApprove
-        ? "The long-running program charter allows one minimal successor goal after completed approved work."
+        ? "The long-running program charter allows one minimal successor goal for this completed boundary."
         : "A successor goal would be needed, but this boundary is not approved for automatic successor creation.",
       nextAction: canAutoApprove ? "create_successor_goal" : "pause_or_ask",
       heartbeat: canAutoApprove ? "burst_1m" : "pause",

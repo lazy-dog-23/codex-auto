@@ -265,8 +265,8 @@ function resolveSuccessorGoalAvailability(options: {
     available: true,
     autoApprove: policy.auto_approve_minimal_successor,
     reason: policy.auto_approve_minimal_successor
-      ? "Program charter allows creating and approving one minimal successor goal."
-      : "Program charter allows drafting one minimal successor goal, but auto approval is disabled.",
+      ? "Program charter allows creating and approving one minimal successor goal for this completed boundary."
+      : "Program charter allows drafting one minimal successor goal for this completed boundary, but auto approval is disabled.",
   };
 }
 
@@ -454,7 +454,7 @@ function buildLocalAutomationReason(options: {
       case "plan_or_rebalance":
         return "Ready for planning only: the active goal needs bounded replanning or verification closeout before the next execution loop.";
       case "create_successor_goal":
-        return "Ready for program continuation: all approved work is complete and policy allows one minimal successor goal.";
+        return "Ready for program continuation: all approved work is complete and policy allows one minimal successor goal for this completed boundary.";
       case "await_confirmation":
         return "Waiting at the goal boundary: the next goal is still awaiting confirmation, so automation must not execute implementation.";
       case "idle":
@@ -882,18 +882,21 @@ export function buildStatusSummary(
   const closeoutPolicy = resolvedCurrentGoalId && verificationDoc?.goal_id === resolvedCurrentGoalId
     ? verificationDoc.policy
     : null;
-  const readyBase =
+  const safeAutomationBase =
     activeGoalCount <= 1 &&
     goalPointerMismatch === false &&
     state.cycle_status === "idle" &&
     state.needs_human_review === false &&
     state.paused === false &&
-    state.sprint_active === true &&
     hasReportThread &&
     threadBindingContext.bindingState === "bound_to_current" &&
     openBlockerCount === 0;
+  const readyBase = safeAutomationBase && state.sprint_active === true;
+  const successorBoundaryReady = safeAutomationBase && successorGoal.available;
   const readyForExecution = readyBase && (actionableTasks || approvedGoalAvailable);
-  const readyForAutomation = readyBase && (readyForExecution || planningOnlyWork || goalsByStatus.awaiting_confirmation > 0 || successorGoal.available);
+  const readyForAutomation =
+    (readyBase && (readyForExecution || planningOnlyWork || goalsByStatus.awaiting_confirmation > 0))
+    || successorBoundaryReady;
   const nextAutomationStep = resolveNextAutomationStep({
     goalSupplyState,
     readyForAutomation,

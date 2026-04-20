@@ -89,7 +89,7 @@ codex-autonomy --version
 - `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。
 - `codex-autonomy approve-proposal --goal-id <goalId>`：把提案物化为任务并激活该 goal。
 - 如果自然语言已经表达“确认后继续”“直接开始自治”“以后自己往下做”，router 在 `approve-proposal` 之后会立刻重跑 `status`，在绑定线程里创建或刷新官方 heartbeat，并在可执行时 kickoff 一轮 bounded sprint，而不是停在“已批准”这一步等你再补命令。
-- `codex-autonomy create-successor-goal --auto-approve`：只在 `autonomy/decision-policy.json` 明确启用长期 charter 且允许自动批准时使用；它会在所有已批准工作完成后创建并批准一个最小 successor goal。
+- `codex-autonomy create-successor-goal --auto-approve`：只在 `autonomy/decision-policy.json` 明确启用长期 charter 且允许自动批准时使用；它会在每个干净完成边界创建并批准一个最小 successor goal，策略配额负责防止失控。
 - `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。
 - `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。当 diff 可提交时，它还会自动执行受控 closeout commit，并立刻对齐 background worktree。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
@@ -177,7 +177,7 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 - `codex-autonomy status` 现在会把“可唤醒”与“可执行”拆开表达：`ready_for_automation` 代表调度层可以安全唤醒并做一轮有界下一步，`ready_for_execution` 代表这一轮可以真正进入执行闭环。
 - `goal_supply_state` / `next_automation_step` 会明确告诉 heartbeat 或 relay runner：这轮应该执行 `execute_bounded_loop`、只做 `plan_or_rebalance`、创建 `create_successor_goal`，停在 `await_confirmation`，还是直接 `idle` / `manual_triage`。
 - `decision_event` / `decision_outcome` / `decision_next_action` / `decision_heartbeat` 是通用边界判定结果。绑定线程或 heartbeat 在把问题抛给你之前，应该先运行 `codex-autonomy decide --json`；只有结果是 `ask_human` 或 `reject_or_rewrite` 时才停止并问你，其余安全场景按建议继续、修复一次或退避。
-- `create_successor_goal` 默认关闭。只有 repo 在 `autonomy/decision-policy.json` 写入明确长期 charter，并开启 `auto_successor_goal.enabled` / `auto_approve_minimal_successor` 后，绑定线程才可以在 `completed_only` 后自动创建并批准一个最小 successor goal；CLI 写入口也会强制复核绑定线程和 `status` / `decide` gate。
+- `create_successor_goal` 默认关闭。只有 repo 在 `autonomy/decision-policy.json` 写入明确长期 charter，并开启 `auto_successor_goal.enabled` / `auto_approve_minimal_successor` 后，绑定线程才可以在每个干净完成边界自动创建并批准一个最小 successor goal；策略里的连续次数和每日次数仍作为安全节流，CLI 写入口也会强制复核绑定线程和 `status` / `decide` gate。
 - 如果多文件控制面写入被中断，`autonomy/operations/pending.json` 会阻止下一轮 heartbeat 继续推进，直到 `codex-autonomy status` / `doctor` 明确暴露，或重新运行原命令完成恢复。
 
 关于模型字段要注意一件事：

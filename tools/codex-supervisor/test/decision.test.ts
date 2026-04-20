@@ -127,10 +127,10 @@ describe("decision advice", () => {
       remaining_ready: 0,
       goal_supply_state: "successor_goal_available",
       next_automation_step: "create_successor_goal",
-      next_automation_reason: "Ready for program continuation: all approved work is complete and policy allows one minimal successor goal.",
+      next_automation_reason: "Ready for program continuation: all approved work is complete and policy allows one minimal successor goal for this completed boundary.",
       successor_goal_available: true,
       successor_goal_auto_approve: false,
-      successor_goal_reason: "Program charter allows drafting one minimal successor goal, but auto approval is disabled.",
+      successor_goal_reason: "Program charter allows drafting one minimal successor goal for this completed boundary, but auto approval is disabled.",
     }));
 
     expect(advice.decision_event).toBe("successor_goal_boundary");
