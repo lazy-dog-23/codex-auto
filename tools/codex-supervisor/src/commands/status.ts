@@ -631,6 +631,7 @@ const NON_BLOCKING_RUNTIME_WARNING_CODES = new Set([
   "control_surface_dirty_only",
   "background_dirty_allowlisted",
   "managed_advisory_drift",
+  "completed_current_goal_id_stale",
   "ready_for_followup_autocontinue",
   "codex_process_probe_deferred",
 ]);
@@ -849,7 +850,16 @@ export function buildStatusSummary(
   const activeGoalCount = goalsDoc.goals.filter((goal) => goal.status === "active").length;
   const unfinishedTaskCount = countUnfinishedTasks(tasksDoc.tasks);
   const resolvedCurrentGoalId = resolveCurrentGoalId(goalsDoc.goals, state);
+  const pointedCurrentGoal = state.current_goal_id
+    ? goalsDoc.goals.find((goal) => goal.id === state.current_goal_id) ?? null
+    : null;
   const goalPointerMismatch = Boolean(state.current_goal_id) && state.current_goal_id !== resolvedCurrentGoalId;
+  const completedCloseoutPointer =
+    Boolean(pointedCurrentGoal)
+    && pointedCurrentGoal?.status === "completed"
+    && activeGoalCount === 0
+    && unfinishedTaskCount === 0;
+  const unsafeGoalPointerMismatch = goalPointerMismatch && !completedCloseoutPointer;
   const actionableTasks = hasActionableTasks(tasksDoc.tasks, resolvedCurrentGoalId);
   const pendingPlanningWork = hasPlanningWork(goalsDoc.goals);
   const hasReportThread = Boolean(state.report_thread_id?.trim());
@@ -884,7 +894,7 @@ export function buildStatusSummary(
     : null;
   const safeAutomationBase =
     activeGoalCount <= 1 &&
-    goalPointerMismatch === false &&
+    unsafeGoalPointerMismatch === false &&
     state.cycle_status === "idle" &&
     state.needs_human_review === false &&
     state.paused === false &&
@@ -932,8 +942,10 @@ export function buildStatusSummary(
       ...(state.current_goal_id && goalsDoc.goals.some((goal) => goal.id === state.current_goal_id && goal.status !== "active")
         ? [
             {
-              code: "inactive_current_goal_id",
-              message: `state.json points to ${state.current_goal_id}, but that goal is not active in goals.json.`,
+              code: completedCloseoutPointer ? "completed_current_goal_id_stale" : "inactive_current_goal_id",
+              message: completedCloseoutPointer
+                ? `state.json still points to completed goal ${state.current_goal_id}; treating this as a closed boundary and allowing successor evaluation.`
+                : `state.json points to ${state.current_goal_id}, but that goal is not active in goals.json.`,
             },
           ]
         : []),
@@ -962,7 +974,7 @@ export function buildStatusSummary(
     currentThreadId: threadBindingContext.currentThreadId,
     threadBindingState: threadBindingContext.bindingState,
     threadBindingHint: threadBindingContext.bindingHint,
-    goalPointerMismatch,
+    goalPointerMismatch: unsafeGoalPointerMismatch,
     multipleActiveGoals: activeGoalCount > 1,
     paused: state.paused,
     pauseReason: state.pause_reason,
@@ -985,7 +997,7 @@ export function buildStatusSummary(
     completionBlockedByVerification,
     openBlockerCount,
     multipleActiveGoals: activeGoalCount > 1,
-    goalPointerMismatch,
+    goalPointerMismatch: unsafeGoalPointerMismatch,
     actionableTasks,
     pendingPlanningWork,
     goalsByStatus,

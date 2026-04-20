@@ -811,6 +811,96 @@ describe("status command", () => {
     expect(summary.decision_next_action).toBe("create_successor_goal");
   });
 
+  it("treats a stale completed current goal pointer as a recoverable successor boundary", () => {
+    const policy: DecisionPolicyDocument = {
+      ...createDefaultDecisionPolicyDocument(),
+      auto_continue: {
+        ...createDefaultDecisionPolicyDocument().auto_continue,
+        auto_successor_goal: {
+          ...createDefaultDecisionPolicyDocument().auto_continue.auto_successor_goal,
+          enabled: true,
+          auto_approve_minimal_successor: true,
+          objective: "Keep improving the repository through small verified slices.",
+        },
+      },
+    };
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-done",
+            title: "Completed Goal",
+            objective: "Finished work",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "completed",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: "goal-done",
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: false,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-done", task_id: null, summary: "done", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-done", task_id: null, summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-done", task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-done/task): Done", review_status: null },
+        reporter: { status: "sent", goal_id: "goal-done", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+        decisionPolicy: policy,
+      },
+    );
+
+    expect(summary.current_goal_id).toBeNull();
+    expect(summary.warnings?.map((warning) => warning.code)).toContain("completed_current_goal_id_stale");
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.ready_for_execution).toBe(false);
+    expect(summary.automation_state).toBe("ready");
+    expect(summary.goal_supply_state).toBe("successor_goal_available");
+    expect(summary.next_automation_step).toBe("create_successor_goal");
+    expect(summary.decision_outcome).toBe("auto_continue");
+    expect(summary.decision_next_action).toBe("create_successor_goal");
+  });
+
   it("keeps successor goal creation blocked when the operator explicitly paused automation", () => {
     const policy: DecisionPolicyDocument = {
       ...createDefaultDecisionPolicyDocument(),
