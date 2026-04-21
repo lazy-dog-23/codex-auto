@@ -29,6 +29,7 @@ import {
   getAutonomyReviewSkillMarkdown,
   getAutonomySprintSkillMarkdown,
   getAutonomyWorkSkillMarkdown,
+  getCodexAutonomyLauncherScriptTemplate,
   getConfigTomlTemplate,
   getDefaultJournalMarkdown,
   getEnvironmentTomlTemplate,
@@ -108,6 +109,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const repoDirectories = [
     paths.scriptsDir,
     paths.codexDir,
+    path.join(paths.codexDir, "tools"),
     path.dirname(paths.environmentFile),
     path.dirname(planSkillFile),
     path.dirname(workSkillFile),
@@ -150,6 +152,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
       [paths.configFile, getConfigTomlTemplate() + "\n"],
       [paths.setupScript, getSetupWindowsScriptTemplate()],
+      [paths.autonomyCliScript, getCodexAutonomyLauncherScriptTemplate()],
       [paths.verifyScript, getVerifyScriptTemplate()],
       [paths.smokeScript, getSmokeScriptTemplate()],
       [paths.reviewScript, getReviewScriptTemplate()],

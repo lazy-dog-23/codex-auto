@@ -147,7 +147,8 @@ Relay completion events are treated as status callbacks, not as new goal intake.
 - `codex-autonomy prepare-worktree`
 - `codex-autonomy emit-automation-prompts --json` (machine-readable prompt bundle for official thread automation and relay fallback surfaces)
 - The surface-first prompt bundle now includes `whenToUse`, `whenNotToUse`, and `selectionRule` metadata so an agent can choose the right automation surface or role without extra operator coaching.
-- The `official_thread_automation` prompt includes entry-lease plus self-rescheduling burst semantics for bound-thread sprint work: ready and idle work first moves the same heartbeat to a 30-minute lease while the loop runs; clean completed task plus a ready next task then means 1-minute fast follow-up; blockers, dirty state, confirmation waits, review pending, or thread mismatch mean normal cadence, safe backoff, or pause.
+- The `official_thread_automation` prompt includes entry-lease plus self-rescheduling burst semantics for bound-thread sprint work: ready and idle work first moves the same heartbeat to a 30-minute lease while the loop runs; clean completed task plus a ready next task then means one 1-minute fast follow-up; blockers, dirty state, confirmation waits, review pending, or thread mismatch mean normal cadence, safe backoff, or pause. Treat the 1-minute burst as short-lived acceleration, not as a resident cadence across multiple projects.
+- Generated repos include `scripts/codex-autonomy.ps1`, a repo-local launcher that first uses `.codex/tools/codex-autonomy` or an in-repo `tools/codex-supervisor` build before falling back to the global npm shim. Run `scripts/setup.windows.ps1` once after install or upgrade so workspace-write thread heartbeats do not depend on `%APPDATA%\npm` being visible inside the sandbox.
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`
 - `codex-autonomy generate-proposal`
 - `codex-autonomy approve-proposal --goal-id <goalId>`
@@ -208,6 +209,7 @@ Oversized files, files with NUL bytes, broken markers, or non-text files stay in
 - `autonomy/decision-policy.json`: repo-local decision boundary policy for auto-continue, one-shot repair, safe backoff, and human escalation
 - `autonomy/operations/pending.json`: transient recovery marker for interrupted multi-file control-plane writes
 - `autonomy/context/repo-map.json`: scan output used as a compact repo orientation map for agents and schedulers
+- `scripts/codex-autonomy.ps1`: repo-local CLI launcher for heartbeat/sandbox-safe command execution
 - `scripts/verify.ps1`: worker acceptance gate
 - `scripts/review.ps1`: baseline effect-review gate consumed by `codex-autonomy review`
 - `tools/codex-supervisor`: TypeScript CLI implementation

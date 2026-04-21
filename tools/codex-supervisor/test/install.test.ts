@@ -93,6 +93,9 @@ describe("install scaffold", () => {
     );
     expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("Review checks passed.");
     expect(await readFile(join(workspace, "scripts", "review.ps1"), "utf8")).toContain("review.local.ps1");
+    expect(await readFile(join(workspace, "scripts", "codex-autonomy.ps1"), "utf8")).toContain(
+      ".codex/tools/codex-autonomy/dist/cli.js",
+    );
     expect(await readFile(join(workspace, "scripts", "verify.ps1"), "utf8")).toContain("Install verify passed.");
     expect(await readFile(join(workspace, ".agents", "skills", "$autonomy-intake", "SKILL.md"), "utf8")).toContain(
       "autonomy-intake",

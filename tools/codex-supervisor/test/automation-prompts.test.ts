@@ -87,6 +87,7 @@ describe("automation prompts", () => {
     expect(officialPrompt).toContain("official Codex thread automation wake-up");
     expect(officialPrompt).toContain("Choose this surface when `recommended_automation_surface=thread_automation`");
     expect(officialPrompt).toContain("Do not use this surface when the wake-up must come from outside the app");
+    expect(officialPrompt).toContain("scripts/codex-autonomy.ps1");
     expect(officialPrompt).toContain("ready_for_execution");
     expect(officialPrompt).toContain("goal_supply_state");
     expect(officialPrompt).toContain("next_automation_step");
@@ -94,9 +95,11 @@ describe("automation prompts", () => {
     expect(officialPrompt).toContain("bound_to_current");
     expect(officialPrompt).toContain("codex-autonomy status");
     expect(officialPrompt).toContain("entry-lease plus end-of-turn self-rescheduling heartbeat");
+    expect(officialPrompt).toContain("short-lived single-thread acceleration");
     expect(officialPrompt).toContain("set that same heartbeat to the safe backoff entry lease");
     expect(officialPrompt).toContain("Do not keep a 1-minute cadence while the bounded loop is running");
     expect(officialPrompt).toContain("release the entry lease");
+    expect(officialPrompt).toContain("for the next wake-up only");
     expect(officialPrompt).toContain("next_task_id");
     expect(officialPrompt).toContain("decision_outcome");
     expect(officialPrompt).toContain("codex-autonomy decide --json");
@@ -118,6 +121,7 @@ describe("automation prompts", () => {
     expect(relayPrompt).toContain("external scheduler wake-up through the relay fallback path");
     expect(relayPrompt).toContain("Choose this surface when `recommended_automation_surface=external_relay_scheduler`");
     expect(relayPrompt).toContain("Do not use this surface as the default for same-thread recurring work");
+    expect(relayPrompt).toContain("scripts/codex-autonomy.ps1");
     expect(relayPrompt).toContain("scripts/verify.ps1");
     expect(relayPrompt).toContain("codex-autonomy review");
     expect(relayPrompt).toContain("ready_for_execution");

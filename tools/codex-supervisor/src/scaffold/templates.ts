@@ -12,14 +12,15 @@ export function getAgentsMarkdown(): string {
     "## 硬规则",
     "",
     "1. 一次只处理一个任务，禁止并行拿多个任务。",
-    "2. `scripts/verify.ps1` 是 worker 的唯一验收门。",
-    "3. 只改必要源文件和 `autonomy/*`，不要扩散到无关区域。",
-    "4. 遇到歧义、冲突、缺失上下文时，先写 blocker，再停止。",
-    "5. 手工 `commit`、`push`、`deploy` 统统禁止；自动提交只允许自治流程在 `codex/autonomy` 分支上执行。",
-    "6. 所有写入 `autonomy/*` 的动作，先拿 `autonomy/locks/cycle.lock`。",
-    "7. `autonomy/*` 下的 JSON 必须原子写入，时间统一用 UTC ISO 8601，路径统一用 repo-relative forward-slash。",
-    "8. 若存在 `autonomy/operations/pending.json`，先恢复或汇报该 pending operation，禁止开启新的 bounded loop。",
-    "9. 由于 repo 默认 `approval_policy=never`，禁止 destructive 或高影响操作：不得执行 force push、history rewrite、批量删除、越界写入、凭据变更、部署、外部系统副作用；需要这类动作时必须先写 blocker 并停止。",
+    "2. 自动化和 heartbeat 中运行 CLI 时，优先用 repo-local 入口 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/codex-autonomy.ps1 ...`；全局 `codex-autonomy` 只作人工 fallback。",
+    "3. `scripts/verify.ps1` 是 worker 的唯一验收门。",
+    "4. 只改必要源文件和 `autonomy/*`，不要扩散到无关区域。",
+    "5. 遇到歧义、冲突、缺失上下文时，先写 blocker，再停止。",
+    "6. 手工 `commit`、`push`、`deploy` 统统禁止；自动提交只允许自治流程在 `codex/autonomy` 分支上执行。",
+    "7. 所有写入 `autonomy/*` 的动作，先拿 `autonomy/locks/cycle.lock`。",
+    "8. `autonomy/*` 下的 JSON 必须原子写入，时间统一用 UTC ISO 8601，路径统一用 repo-relative forward-slash。",
+    "9. 若存在 `autonomy/operations/pending.json`，先恢复或汇报该 pending operation，禁止开启新的 bounded loop。",
+    "10. 由于 repo 默认 `approval_policy=never`，禁止 destructive 或高影响操作：不得执行 force push、history rewrite、批量删除、越界写入、凭据变更、部署、外部系统副作用；需要这类动作时必须先写 blocker 并停止。",
     "",
     "## 运行约定",
     "",
@@ -30,7 +31,7 @@ export function getAgentsMarkdown(): string {
     "- Reviewer 运行 `codex-autonomy review` 做效果检查、受控 closeout commit 与 background worktree 对齐，不扩大任务范围。",
     "- Reporter 只有异常、blocked、review_pending、commit 失败等情况立即回线程；正常成功按 heartbeat 汇总，详细运行记录留在 Inbox 和 journal。",
     "- Sprint runner 的 heartbeat 只是唤醒间隔，不是任务时长；每次唤醒只推进单个任务闭环，当前 goal 完成且存在下一个 approved goal 时同轮直接接续。",
-    "- 官方 thread heartbeat 使用 entry-lease + end-of-turn self-rescheduling：每轮先查 `status` / 锁状态；确认可执行且空闲后，先把同一个 heartbeat 临时设为 30 分钟 entry lease，再开始 repo 写入或长验证；干净完成且仍有 ready next task 时再把同一个 heartbeat 设为 1 分钟快速续跑；遇到 blocker、review_pending、needs_confirmation、dirty worktree 或线程不匹配时退回安全节拍或暂停。",
+    "- 官方 thread heartbeat 使用 entry-lease + end-of-turn self-rescheduling：每轮先查 `status` / 锁状态；确认可执行且空闲后，先把同一个 heartbeat 临时设为 30 分钟 entry lease，再开始 repo 写入或长验证；干净完成且仍有 ready next task 时再把同一个 heartbeat 设为 1 分钟快速续跑；1 分钟 burst 只允许作为短促 fast-follow，不作为多项目常驻节拍；遇到 blocker、review_pending、needs_confirmation、dirty worktree 或线程不匹配时退回安全节拍或暂停。",
     "- 遇到 proposal、verification、dirty worktree、closeout、环境、scope 或线程边界时，先用 `codex-autonomy decide --json` 或 `$autonomy-decision` 做统一边界裁决；只有 `decision_outcome=auto_continue` / `auto_repair_once` 才继续，`ask_human` / `reject_or_rewrite` 必须停下。",
     "- `sprint_active=false` 或 `paused=true` 时只做状态检查和汇报，不做新的 plan/work/review 推进。",
     "- Sprint runner 遇到 blocker、review_pending 或无任务时停下。",
@@ -44,6 +45,7 @@ export function getAgentsMarkdown(): string {
     "",
     "- 原线程是唯一操作入口，`report_thread_id` 是所有摘要和异常回传的锚点。",
     "- 线程内的自然语言动作固定收口为：`把 auto 装进当前项目`、`修一下这个报错`、`小改一下`、`目标是……`、`确认提案`、`确认提案并继续`、`用冲刺模式推进这个目标`、`用巡航模式推进这个目标`、`汇报当前情况`、`暂停当前目标`、`继续当前目标`、`处理下一个目标`、`快速续跑`、`任务完成后 1 分钟继续`、`自动判断能不能继续`、`只有越界或高风险时问我`、`按第二条处理 blocker`、`把这个 goal 收窄为 checklist/manual lane`、`保留 heartbeat 继续推进`、`合并自治分支`。",
+    "- 下文写作 `codex-autonomy ...` 的地方，在自动化线程内都表示优先通过 `scripts/codex-autonomy.ps1` 调用同名命令。",
     "- `汇报当前情况` 必须先运行 `codex-autonomy status`；只有明确要求详细结果时才运行 `codex-autonomy report`，并且以最终命令输出里的 `automation_state`、`ready_for_automation`、`ready_for_execution`、`goal_supply_state`、`next_automation_step`、`next_automation_reason`、`report_thread_id`、`current_thread_id`、`thread_binding_state`、`thread_binding_hint` 为准。若状态里出现 `git_runtime_probe_deferred` 或 `background_runtime_probe_deferred`，还必须直接运行一次 `git status --short` 再判断真实 blocker。",
     "- `继续当前目标`、`处理下一个目标`、`用冲刺模式推进这个目标` 在执行前必须先运行 `codex-autonomy status`；如果出现 `pending_control_plane_operation`，先恢复或汇报该 operation，不要开启新 loop；如果 `ready_for_automation=false`，原样汇报 `next_automation_reason` 并停止；如果 `ready_for_execution=false`，则严格按 `next_automation_step` 收口：`plan_or_rebalance` 只做一轮规划/收口，`await_confirmation` 只汇报待确认并停止，`manual_triage` 只在当前线程已经给出明确决策且该决策只是收窄范围/选择已有 blocker 方案时，才允许走 `codex-autonomy unblock <task-id>` 加一轮 bounded plan/sprint，只有 `execute_bounded_loop` 才能进入业务代码闭环。若状态里出现 `git_runtime_probe_deferred` 或 `background_runtime_probe_deferred`，还必须直接运行一次 `git status --short`，发现 unmanaged drift 就停止。",
     "- 如果 `thread_binding_state=bound_to_other`，当前线程不是 operator thread；必须明确报告 mismatch 并停止，不得静默沿用旧 `report_thread_id` 继续。",
@@ -62,6 +64,7 @@ export function getAgentsMarkdown(): string {
     "## Shared Environment",
     "",
     "- `.codex/environments/environment.toml` 由 repo 共享，包含 Windows setup script，以及 `verify`、`smoke` 和 `review` 三个 actions。",
+    "- `scripts/setup.windows.ps1` 会尽力准备 `.codex/tools/codex-autonomy` 本地 CLI 缓存，避免 `workspace-write` heartbeat 只能访问全局 npm shim。",
   ].join("\n");
 }
 
@@ -878,6 +881,7 @@ foreach ($requiredPath in @(
     '.codex/environments/environment.toml',
     '.codex/config.toml',
     'scripts/setup.windows.ps1',
+    'scripts/codex-autonomy.ps1',
     'scripts/verify.ps1',
     'scripts/smoke.ps1',
     'scripts/review.ps1',
@@ -911,6 +915,7 @@ foreach ($requiredPath in @(
 Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
     '一次只处理一个任务',
     'scripts/verify.ps1',
+    'scripts/codex-autonomy.ps1',
     'scripts/review.ps1',
     'autonomy/\*',
     'cycle\.lock',
@@ -1128,8 +1133,78 @@ function Add-GitSafeDirectory {
     }
 }
 
+function Install-RepoLocalCodexAutonomy {
+    $targetDir = Join-Path $repoRoot '.codex/tools/codex-autonomy'
+    $targetCli = Join-Path $targetDir 'dist/cli.js'
+    if (Test-Path -LiteralPath $targetCli) {
+        return
+    }
+
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Warning 'node is unavailable; repo-local codex-autonomy launcher will fall back to the global CLI if the sandbox allows it.'
+        return
+    }
+
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning 'npm is unavailable; cannot prepare repo-local codex-autonomy runtime.'
+        return
+    }
+
+    $sourceCandidates = @()
+    if (Test-Path -LiteralPath (Join-Path $cliDir 'dist/cli.js')) {
+        $sourceCandidates += $cliDir
+    }
+
+    try {
+        $npmRoot = (& npm root -g 2>$null).Trim()
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($npmRoot)) {
+            $globalPackage = Join-Path $npmRoot 'codex-autonomy'
+            if (Test-Path -LiteralPath (Join-Path $globalPackage 'dist/cli.js')) {
+                $sourceCandidates += $globalPackage
+            }
+        }
+    } catch {
+        Write-Warning "Could not inspect global npm root: $($_.Exception.Message)"
+    }
+
+    $source = $sourceCandidates | Select-Object -First 1
+    if (-not $source) {
+        Write-Warning 'No built codex-autonomy runtime was found. Run scripts/install-global.ps1 from the codex-auto repo, then rerun setup.'
+        return
+    }
+
+    Ensure-Directory -Path $targetDir
+    foreach ($item in @('dist', 'package.json', 'package-lock.json')) {
+        $sourcePath = Join-Path $source $item
+        if (Test-Path -LiteralPath $sourcePath) {
+            Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $targetDir $item) -Recurse -Force
+        }
+    }
+
+    Push-Location $targetDir
+    try {
+        if (-not (Test-Path -LiteralPath (Join-Path $targetDir 'node_modules'))) {
+            & npm install --omit=dev --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm install --omit=dev failed with exit code $LASTEXITCODE."
+            }
+        }
+    } catch {
+        $sourceNodeModules = Join-Path $source 'node_modules'
+        if ((-not (Test-Path -LiteralPath (Join-Path $targetDir 'node_modules'))) -and (Test-Path -LiteralPath $sourceNodeModules)) {
+            Write-Warning "npm could not prepare production dependencies; copying the source node_modules fallback. Reason: $($_.Exception.Message)"
+            Copy-Item -LiteralPath $sourceNodeModules -Destination (Join-Path $targetDir 'node_modules') -Recurse -Force
+        } else {
+            Write-Warning "Could not prepare repo-local codex-autonomy runtime: $($_.Exception.Message)"
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 Ensure-Directory -Path (Join-Path $repoRoot 'autonomy/locks')
 Ensure-Directory -Path (Join-Path $repoRoot '.codex/environments')
+Ensure-Directory -Path (Join-Path $repoRoot '.codex/tools')
 
 if (Test-Path -LiteralPath (Join-Path $repoRoot '.git')) {
     Add-GitSafeDirectory -Path $repoRoot
@@ -1164,7 +1239,53 @@ if (Test-Path -LiteralPath (Join-Path $cliDir 'package.json')) {
     }
 }
 
+Install-RepoLocalCodexAutonomy
+
 Write-Host 'setup.windows.ps1 completed successfully.'
+`;
+}
+
+export function getCodexAutonomyLauncherScriptTemplate(): string {
+  return String.raw`[CmdletBinding()]
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]] $Arguments
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function Invoke-NodeCli {
+    param([Parameter(Mandatory)][string]$CliPath)
+
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        throw 'node is required to run the repo-local codex-autonomy CLI.'
+    }
+
+    & node $CliPath @Arguments
+    exit $LASTEXITCODE
+}
+
+$localCandidates = @(
+    (Join-Path $repoRoot '.codex/tools/codex-autonomy/dist/cli.js'),
+    (Join-Path $repoRoot 'tools/codex-supervisor/dist/cli.js')
+)
+
+foreach ($candidate in $localCandidates) {
+    if (Test-Path -LiteralPath $candidate) {
+        Invoke-NodeCli -CliPath $candidate
+    }
+}
+
+$globalCommand = Get-Command codex-autonomy -ErrorAction SilentlyContinue
+if ($globalCommand) {
+    & $globalCommand.Source @Arguments
+    exit $LASTEXITCODE
+}
+
+throw 'codex-autonomy is unavailable. Run scripts/setup.windows.ps1 from the repo root, or install codex-auto globally and rerun setup.'
 `;
 }
 
@@ -1177,32 +1298,34 @@ export function getReadmeManagedSectionMarkdown(): string {
     "- `codex-autonomy install --target <repo>`：安装 repo-local 控制面，不覆盖现有文件。",
     "- `codex-autonomy init-project --target <repo> --mode existing|new`：安装控制面，并创建薄 `AGENTS.override.md` 与首版 `TEAM_GUIDE.md` 项目现状快照。",
     "- `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]`：生成本地 Graphify 代码结构快照；不会安装 hook，也不会改 `AGENTS.md`。",
-    "- `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]`：Graphify 成功后生成 `autonomy/context/repo-map.json`，汇总 docs、scripts、entrypoints、verification hints；只有显式加 `--update-team-guide` 才刷新 `TEAM_GUIDE.md`。",
-    "- `codex-autonomy quick --target <repo> --request \"<小修描述>\" [--validate] [--track]`：小 bug、小改动、明确问题的快速入口；`--track` 会写入一个 active goal、一个 slice、一个 ready task，任务 `source=\"quick\"`。",
+    "- `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]`：生成 `autonomy/context/repo-map.json`；只有显式加 `--update-team-guide` 才刷新 `TEAM_GUIDE.md`。",
+    "- `codex-autonomy quick --target <repo> --request \"<小修描述>\" [--validate] [--track]`：小改快速入口；`--track` 写入一个 active goal / slice / ready task。",
     "- `codex-autonomy query --target <repo> --json`：给 heartbeat、relay、外部调度或 UI 消费的稳定机读状态接口。",
     "- `codex-autonomy upgrade-managed --target <repo> [--apply]`：对齐受管控制面；`README.md` 只托管受限 section。",
     "- `codex-autonomy bind-thread [--report-thread-id <threadId>]`：绑定唯一 `report_thread_id`。",
     "- `codex-autonomy doctor`：检查运行时、schema、Git、Codex 进程与控制面健康。",
     "- `codex-autonomy prepare-worktree`：准备 background worktree；只在 Git 仓库内进入可运行 automation 态。",
+    "- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup.windows.ps1`：准备本地运行面，并尽力缓存 `.codex/tools/codex-autonomy`，让 `workspace-write` heartbeat 不依赖全局 npm shim。",
+    "- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/codex-autonomy.ps1 <command>`：自动化线程优先使用的 repo-local CLI 入口；全局 `codex-autonomy` 只作人工 fallback。",
     "- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`：唯一正式验收门。",
     "",
     "### 日常命令入口",
     "",
     "- 标准路径：`codex-autonomy <command>`。",
-    "- 机器级自然语言入口支持“把 auto 装进当前项目”“生成项目结构图”“跑 graphify 快照”“目标是……”“确认提案”“确认提案并继续”“用冲刺模式推进这个目标”“继续当前目标”“快速续跑”“任务完成后 1 分钟继续”“自动判断能不能继续”“只有越界或高风险时问我”“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”“汇报当前情况”等表达；router 会先做 install/upgrade/bind，再继续目标流。",
+    "- 机器级自然语言入口支持安装、结构图、quick、goal intake、确认提案并继续、继续目标、任务完成后 1 分钟继续、自动判断、收窄 blocker、保留 heartbeat、汇报当前情况等表达；router 会先做 install/upgrade/bind，再继续目标流。",
     "- 官方同线程持续推进主路：在已绑定的项目线程内，用 `codex-autonomy emit-automation-prompts --json` 取 `official_thread_automation.prompt`，并先阅读同一条记录里的 `whenToUse` / `whenNotToUse` / `selectionRule`，再交给 Codex thread automation heartbeat。",
-    "- 快速续跑不是常驻 1 分钟轮询，而是 entry-lease + end-of-turn self-rescheduling heartbeat：每轮先查 `status` / 锁状态；确认可执行且空闲后，先把同一个官方 heartbeat 临时设为 30 分钟 entry lease，再开始 repo 写入或长验证；当前轮干净结束且 `status` 仍显示可执行 next task 时，把同一个官方 heartbeat 设为 1 分钟后继续；否则退回正常节拍、安全退避或暂停。",
+    "- 快速续跑不是常驻 1 分钟轮询，而是 entry-lease + end-of-turn self-rescheduling heartbeat：开工前把同一个 heartbeat 临时设为 30 分钟；干净结束且仍有 next task 时只设一次 1 分钟 fast-follow；否则退回正常节拍、安全退避或暂停。不要让多个项目长期同时保持 1 分钟 heartbeat。",
     "- 外部 `Task Scheduler -> relay -> 绑定线程` 属于 fallback bridge，不是默认主路。",
     "- `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise>`：把自然语言目标转成待确认 goal。",
     "- `codex-autonomy approve-proposal --goal-id <goalId>`：确认提案并物化任务；如果自然语言已经表达“确认后继续/直接开始自治”，router 要继续创建或刷新官方 heartbeat，并在同线程里立刻 kickoff 一轮 bounded sprint。",
-    "- `codex-autonomy create-successor-goal --auto-approve`：只在 `autonomy/decision-policy.json` 明确启用长期 charter 且允许自动批准时使用；它会在每个干净完成边界创建并批准一个最小 successor goal，并在 CLI 写入口强制复核绑定线程和 `status` / `decide` gate。",
+    "- `codex-autonomy create-successor-goal --auto-approve`：仅在长期 charter 明确授权时创建并批准一个最小 successor goal；CLI 会强制复核绑定线程和 `status` / `decide` gate。",
     "- `codex-autonomy unblock <taskId>`：当用户已经在自然语言里明确选择某个 blocker 方案，且该方案只会收窄 scope 或选择已有选项时，用它关闭 blocker 并把任务恢复到 `queued/ready`，然后继续 bounded plan/sprint。",
-    "- `codex-autonomy decide --json`：通用边界裁决入口。遇到 proposal、verification、dirty worktree、closeout、环境、scope、线程 mismatch 等问题时，先输出 `decision_event` / `decision_outcome` / `decision_next_action`，再决定继续、修复一次、退避或问人。",
+    "- `codex-autonomy decide --json`：proposal、verification、dirty worktree、closeout、环境、scope、线程 mismatch 等边界的统一裁决入口。",
     "- `codex-autonomy status` / `report` / `review`：查看状态、结果与 review gate；`review` 会在可提交时自动完成受控 closeout commit 并立刻对齐 background worktree。",
     "- `codex-autonomy query --target <repo> --json`：只输出自动化消费者需要的稳定状态子集，适合工具、router、heartbeat、relay 先做下一步判断。",
-    "- `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路与 relay fallback 所需的机读 prompt bundle，并附带 `whenToUse` / `whenNotToUse` / `selectionRule`，让 agent 自行判断该选哪条 surface 或 role。",
-    "- `codex-autonomy status` 会把调度可唤醒态和执行可进入态拆开表达：`ready_for_automation` 负责“是否该唤醒”，`ready_for_execution` 负责“是否该进执行闭环”，并通过 `goal_supply_state` / `next_automation_step` 指明这轮该执行、规划、创建 `create_successor_goal`、等待确认还是停机。",
-    "- `create_successor_goal` 默认关闭。只有 repo 在 `autonomy/decision-policy.json` 写入明确长期 charter，并开启 `auto_successor_goal.enabled` / `auto_approve_minimal_successor` 后，绑定线程才可以在每个干净完成边界自动创建并批准一个最小 successor goal；策略里的连续次数和每日次数仍作为安全节流。如果中断留下 `autonomy/operations/pending.json`，下一轮必须先恢复或清理 pending operation。",
+    "- `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路与 relay fallback 的机读 prompt bundle。",
+    "- `codex-autonomy status` 会拆开 `ready_for_automation` 与 `ready_for_execution`，并通过 `goal_supply_state` / `next_automation_step` 指明执行、规划、创建 successor、等待确认或停机。",
+    "- `create_successor_goal` 默认关闭；只有 `autonomy/decision-policy.json` 明确长期授权后才可自动创建一个最小 successor goal。若留下 `autonomy/operations/pending.json`，下一轮必须先恢复或清理。",
     "",
     "### 控制面文件入口",
     "",

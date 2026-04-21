@@ -599,6 +599,7 @@ export interface RepoPaths {
   verifyScript: string;
   smokeScript: string;
   reviewScript: string;
+  autonomyCliScript: string;
   cliDir: string;
   cliPackageFile: string;
 }

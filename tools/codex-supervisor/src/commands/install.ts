@@ -38,6 +38,7 @@ import {
   getAutonomyReviewSkillMarkdown,
   getAutonomySprintSkillMarkdown,
   getAutonomyWorkSkillMarkdown,
+  getCodexAutonomyLauncherScriptTemplate,
   getConfigTomlTemplate,
   getEnvironmentTomlTemplate,
   getInstallVerifyScriptTemplate,
@@ -912,6 +913,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "setup_windows_ps1",
       kind: "text",
       content: getSetupWindowsScriptTemplate(),
+    },
+    {
+      path: paths.autonomyCliScript,
+      relative_path: "scripts/codex-autonomy.ps1",
+      template_id: "codex_autonomy_ps1",
+      kind: "text",
+      content: getCodexAutonomyLauncherScriptTemplate(),
     },
     {
       path: paths.verifyScript,

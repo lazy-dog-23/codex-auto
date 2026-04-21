@@ -171,6 +171,7 @@ export function buildOfficialThreadAutomationPrompt(): string {
     "This is an official Codex thread automation wake-up for the current bound operator thread.",
     "Choose this surface when `recommended_automation_surface=thread_automation` and the current thread is already `bound_to_current`.",
     "Do not use this surface when the wake-up must come from outside the app or the current thread is not the bound thread; use the external relay scheduler surface instead.",
+    "When this prompt says `codex-autonomy ...`, prefer the repo-local launcher from the repo root: `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/codex-autonomy.ps1 ...`. Use the global `codex-autonomy` command only as an interactive fallback when the launcher is absent.",
     "",
     "Run `codex-autonomy status` first and quote these fields in your reply before deciding whether to continue:",
     "- `ready_for_automation`",
@@ -198,6 +199,7 @@ export function buildOfficialThreadAutomationPrompt(): string {
     "Rules:",
     "- This prompt is for official same-thread continuation only.",
     "- Use entry-lease plus end-of-turn self-rescheduling heartbeat semantics for ongoing sprint work: keep the same official heartbeat record, do not delete/recreate it, and do not create duplicate heartbeats for the same bound thread.",
+    "- Treat burst fast-follow as a short-lived single-thread acceleration, not as a multi-project resident cadence. A 1-minute heartbeat should exist only after a clean bounded task when a concrete next task is immediately ready.",
     "- Run status first. If `cycle_status` is not `idle` or another run is clearly in progress, do no repo work and use normal cadence or safe backoff if you can update the existing heartbeat.",
     `- Before repo writes or long verification, if the refreshed state is ` +
       "`bound_to_current`, `ready_for_automation=true`, `cycle_status=idle`, and you can safely update the existing heartbeat, set that same heartbeat to the safe backoff entry lease " +
@@ -219,7 +221,7 @@ export function buildOfficialThreadAutomationPrompt(): string {
     "- Do not create a new thread, do not intake a new goal, do not approve a proposal, and do not change `report_thread_id`, except for the explicit `create_successor_goal` control-plane path above.",
     "- Do not use relay as the main control path for this wake-up. Official thread automation is already the primary same-thread surface.",
     "- Do not ask the operator to translate a clear natural-language decision into CLI, relay, or automation tool names when the decision already fits the current approved goal boundary.",
-    "- After the bounded loop or planning pass, rerun `codex-autonomy status` and release the entry lease by rescheduling the same heartbeat by state: if the refreshed state is still `bound_to_current`, `ready_for_automation=true`, `ready_for_execution=true`, `cycle_status=idle`, `automation_state=ready`, `open_blocker_count=0`, and has a concrete `next_task_id`, set the next cadence to burst fast-follow. If any of those are false, use the normal sprint cadence or safe backoff instead of burst.",
+    "- After the bounded loop or planning pass, rerun `codex-autonomy status` and release the entry lease by rescheduling the same heartbeat by state: if the refreshed state is still `bound_to_current`, `ready_for_automation=true`, `ready_for_execution=true`, `cycle_status=idle`, `automation_state=ready`, `open_blocker_count=0`, and has a concrete `next_task_id`, set the next cadence to burst fast-follow for the next wake-up only. After that next wake-up, repeat the same gate and fall back to normal cadence unless another clean short task is immediately ready.",
     `- Entry lease means ${DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES} minutes while a bounded loop is running; burst fast-follow means ${DEFAULT_BURST_HEARTBEAT_MINUTES} minute after a clean completed task; normal sprint cadence means ${DEFAULT_SPRINT_HEARTBEAT_MINUTES} minutes; safe backoff means ${DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES} minutes or paused when human confirmation is required.`,
     "- If you cannot safely update the existing heartbeat record at closeout, do not create a duplicate just to get burst mode. Leave the repo state recoverable and report that the heartbeat cadence was not changed.",
     "- Use the in-app browser for unauthenticated local/public page verification by default. Only use a current/live browser bridge when the flow genuinely depends on login state.",
@@ -232,6 +234,7 @@ export function buildExternalRelaySchedulerPrompt(): string {
     "This is an external scheduler wake-up through the relay fallback path.",
     "Choose this surface when `recommended_automation_surface=external_relay_scheduler` or the wake-up must start outside the bound operator thread.",
     "Do not use this surface as the default for same-thread recurring work that can stay on the bound project thread.",
+    "When this prompt says `codex-autonomy ...`, prefer the repo-local launcher from the repo root: `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/codex-autonomy.ps1 ...`. Use the global `codex-autonomy` command only as an interactive fallback when the launcher is absent.",
     "",
     "Relay is only the bridge for delivery and recovery here. The goal is still to continue the bound operator thread with one bounded loop.",
     "",

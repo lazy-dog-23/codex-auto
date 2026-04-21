@@ -16,6 +16,7 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
   ".codex/config.toml",
   ".codex/environments/environment.toml",
   "scripts/setup.windows.ps1",
+  "scripts/codex-autonomy.ps1",
   "scripts/verify.ps1",
   "scripts/smoke.ps1",
   "scripts/review.ps1",
@@ -47,6 +48,7 @@ const MANAGED_CONTROL_SURFACE_RELATIVE_PATHS = [
 
 const AUTONOMY_RUNTIME_ALLOWLIST_RELATIVE_PATHS = [
   ...MANAGED_CONTROL_SURFACE_RELATIVE_PATHS.filter((relativePath) => relativePath !== "README.md"),
+  ".codex/tools",
   "graphify-out",
   "autonomy/context",
   "AGENTS.override.md",
@@ -139,6 +141,7 @@ export function resolveRepoPaths(repoRoot = process.cwd()): RepoPaths {
     verifyScript: path.join(scriptsDir, "verify.ps1"),
     smokeScript: path.join(scriptsDir, "smoke.ps1"),
     reviewScript: path.join(scriptsDir, "review.ps1"),
+    autonomyCliScript: path.join(scriptsDir, "codex-autonomy.ps1"),
     cliDir,
     cliPackageFile: path.join(cliDir, "package.json")
   };

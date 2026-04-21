@@ -126,6 +126,7 @@ codex-autonomy --version
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
 - `autonomy/decision-policy.json`：repo 级边界策略，定义哪些路径和场景可以自动继续、哪些验证失败可重试一次、哪些必须问人，以及 1 分钟 burst / 15 分钟正常 / 30 分钟安全退避的默认语义。
 - `autonomy/journal.md`：每次 run 只追加一条记录。
+- `scripts/codex-autonomy.ps1`：repo-local CLI 入口。自动化和 heartbeat 优先通过它运行 `codex-autonomy ...`，避免 `workspace-write` sandbox 只能访问全局 npm shim 时失败。
 - `scripts/verify.ps1`：唯一验收门。
 - `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；通常通过 `codex-autonomy review` 调用。项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
 
@@ -174,7 +175,8 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 - `official_thread_automation` 是官方同线程 heartbeat 主路，直接给 app 的 `automation_update(kind="heartbeat", destination="thread")` 使用。
 - `external_relay_scheduler` 是跨线程 / 外部调度 fallback，给 `Task Scheduler -> relay -> 绑定线程` 这条链路使用。
-- `official_thread_automation` 默认包含 entry-lease + self-rescheduling burst 策略：开工前先把同一个 heartbeat 临时调到 30 分钟，避免 1 分钟节拍在长验证期间反复唤醒；干净成功且仍有 ready next task 时，下一轮再用 1 分钟快速续跑；不满足条件时退回正常 sprint cadence、安全退避或暂停。
+- `official_thread_automation` 默认包含 entry-lease + self-rescheduling burst 策略：开工前先把同一个 heartbeat 临时调到 30 分钟，避免 1 分钟节拍在长验证期间反复唤醒；干净成功且仍有 ready next task 时，下一轮再用 1 分钟快速续跑；不满足条件时退回正常 sprint cadence、安全退避或暂停。1 分钟 burst 只作为短促 fast-follow，不作为多个项目的长期常驻节拍。
+- 安装或升级后的目标仓应该先跑一次 `scripts/setup.windows.ps1`，它会尽力准备 `.codex/tools/codex-autonomy` 本地 CLI 缓存；这样官方 thread heartbeat 在 `workspace-write` 下也能优先走仓库内入口。
 - Sprint runner 的默认工作方式仍然是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
 - `codex-autonomy status` 现在会把“可唤醒”与“可执行”拆开表达：`ready_for_automation` 代表调度层可以安全唤醒并做一轮有界下一步，`ready_for_execution` 代表这一轮可以真正进入执行闭环。
 - `goal_supply_state` / `next_automation_step` 会明确告诉 heartbeat 或 relay runner：这轮应该执行 `execute_bounded_loop`、只做 `plan_or_rebalance`、创建 `create_successor_goal`，停在 `await_confirmation`，还是直接 `idle` / `manual_triage`。

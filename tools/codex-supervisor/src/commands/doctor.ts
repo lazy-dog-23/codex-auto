@@ -89,6 +89,7 @@ const REQUIRED_PATHS: Array<{ path: string; kind: 'file' | 'directory'; required
   { path: '.codex/environments/environment.toml', kind: 'file', required: true },
   { path: '.codex/config.toml', kind: 'file', required: true },
   { path: 'scripts/setup.windows.ps1', kind: 'file', required: true },
+  { path: 'scripts/codex-autonomy.ps1', kind: 'file', required: true },
   { path: 'scripts/verify.ps1', kind: 'file', required: true },
   { path: 'scripts/smoke.ps1', kind: 'file', required: true },
   { path: 'scripts/review.ps1', kind: 'file', required: true },
