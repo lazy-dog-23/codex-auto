@@ -12,8 +12,9 @@ Use this skill when you are executing a single ready task in a dedicated worktre
 - Read `autonomy/goal.md`, `autonomy/goals.json`, `autonomy/tasks.json`, `autonomy/state.json`, `autonomy/blockers.json`, and `autonomy/results.json`.
 - Select exactly one `ready` task.
 - Make the smallest possible change for that task.
-- Run `scripts/verify.ps1` and then `scripts/review.ps1`.
-- If verify and review pass and there is a diff, commit only on `codex/autonomy` with the autonomy commit format.
+- Run `scripts/verify.ps1`.
+- Then run `codex-autonomy review` as the closeout gate. It runs `scripts/review.ps1`, attempts the controlled autonomy closeout commit on `codex/autonomy`, and aligns the background worktree when the diff is eligible.
+- If `codex-autonomy review` reports a commit or background-worktree failure, stop and surface that failure instead of falling back to a manual commit.
 - Acquire `autonomy/locks/cycle.lock` before writing `autonomy/*`.
 - Write `autonomy/*.json` via atomic temp-file then rename semantics.
 - Update task status, review status, result summary, and append one journal entry.

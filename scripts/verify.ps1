@@ -245,6 +245,13 @@ function Test-GoalCollection {
 
         Assert-True (@('draft','awaiting_confirmation','approved','active','completed','blocked','cancelled') -contains [string]$goal.status) "Invalid goal status in $Path."
         Assert-True (@('sprint','cruise') -contains [string]$goal.run_mode) "Invalid goal run_mode in $Path."
+        if (Get-Member -InputObject $goal -Name 'source' -MemberType NoteProperty) {
+            Assert-True (@('manual','intake','auto_successor') -contains [string]$goal.source) "Invalid goal source in $Path."
+            if ([string]$goal.source -eq 'auto_successor') {
+                Assert-PropertyExists -Item $goal -Name 'source_goal_id' -Path $Path -Context 'an auto successor goal from'
+                Assert-True (-not [string]::IsNullOrWhiteSpace([string]$goal.source_goal_id)) "Auto successor goals in $Path must record source_goal_id."
+            }
+        }
     }
 }
 
@@ -387,6 +394,63 @@ function Test-BlockerCollection {
     }
 }
 
+function Test-DecisionPolicyDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($key in @('version','auto_continue','ask_human','heartbeat')) {
+        Assert-PropertyExists -Item $doc -Name $key -Path $Path
+    }
+    foreach ($key in @('docs_only_changes','approved_goal_followups','recoverable_closeout_paths','verification_retry','auto_successor_goal')) {
+        Assert-PropertyExists -Item $doc.auto_continue -Name $key -Path $Path -Context 'auto_continue from'
+    }
+    Assert-PropertyExists -Item $doc.auto_continue.verification_retry -Name 'max_retry_per_task' -Path $Path -Context 'verification_retry from'
+    Assert-PropertyExists -Item $doc.auto_continue.verification_retry -Name 'allowed_failure_kinds' -Path $Path -Context 'verification_retry from'
+    foreach ($key in @('enabled','auto_approve_minimal_successor','default_run_mode','max_consecutive_auto_successors','max_successor_goals_per_day','objective','success_criteria','constraints','out_of_scope','allowed_lanes','forbidden_lanes')) {
+        Assert-PropertyExists -Item $doc.auto_continue.auto_successor_goal -Name $key -Path $Path -Context 'auto_successor_goal from'
+    }
+    foreach ($key in @('ready_next_task','recoverable_or_slow_verify','blocked_or_confirmation')) {
+        Assert-PropertyExists -Item $doc.heartbeat -Name $key -Path $Path -Context 'heartbeat from'
+    }
+}
+
+function Test-PendingOperationDocument {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($key in @(
+        'version',
+        'id',
+        'kind',
+        'created_at',
+        'updated_at',
+        'command',
+        'auto_approved',
+        'goal_id',
+        'source_goal_id',
+        'task_ids',
+        'expected_paths',
+        'payload'
+    )) {
+        Assert-PropertyExists -Item $doc -Name $key -Path $Path
+    }
+
+    Assert-True ($doc.version -eq 1) "Invalid pending operation version in $Path."
+    Assert-True ([string]$doc.kind -eq 'create_successor_goal') "Invalid pending operation kind in $Path."
+    Assert-True ([string]$doc.command -eq 'codex-autonomy create-successor-goal') "Invalid pending operation command in $Path."
+    Assert-True ($doc.auto_approved -is [bool]) "pending operation auto_approved must be boolean in $Path."
+
+    foreach ($key in @('goals','proposals','state','results','journal_entry')) {
+        Assert-PropertyExists -Item $doc.payload -Name $key -Path $Path -Context 'pending operation payload from'
+    }
+    if ($doc.auto_approved) {
+        Assert-PropertyExists -Item $doc.payload -Name 'tasks' -Path $Path -Context 'auto-approved pending operation payload from'
+        Assert-PropertyExists -Item $doc.payload -Name 'verification' -Path $Path -Context 'auto-approved pending operation payload from'
+    }
+}
+
 function Invoke-CliHarness {
     $cliDir = Join-Path $repoRoot 'tools/codex-supervisor'
     $packageJson = Join-Path $cliDir 'package.json'
@@ -425,6 +489,7 @@ foreach ($requiredPath in @(
     '.agents/skills/$autonomy-review/SKILL.md',
     '.agents/skills/$autonomy-report/SKILL.md',
     '.agents/skills/$autonomy-sprint/SKILL.md',
+    '.agents/skills/$autonomy-decision/SKILL.md',
     '.codex/environments/environment.toml',
     '.codex/config.toml',
     'scripts/setup.windows.ps1',
@@ -440,6 +505,7 @@ foreach ($requiredPath in @(
     'autonomy/settings.json',
     'autonomy/results.json',
     'autonomy/verification.json',
+    'autonomy/decision-policy.json',
     'autonomy/blockers.json',
     'autonomy/schema/tasks.schema.json',
     'autonomy/schema/goals.schema.json',
@@ -449,6 +515,7 @@ foreach ($requiredPath in @(
     'autonomy/schema/results.schema.json',
     'autonomy/schema/blockers.schema.json',
     'autonomy/schema/verification.schema.json',
+    'autonomy/schema/decision-policy.schema.json',
     'autonomy/locks'
 )) {
     Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $requiredPath)) "Missing required path: $requiredPath"
@@ -464,7 +531,8 @@ Test-RequiredText -Path (Join-Path $repoRoot 'AGENTS.md') -Patterns @(
     'repo-relative forward-slash',
     'codex/autonomy',
     'Reporter 只有异常',
-    'Sprint runner 的 heartbeat 只是唤醒间隔'
+    'Sprint runner 的 heartbeat 只是唤醒间隔',
+    'codex-autonomy decide --json'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-plan/SKILL.md') -Patterns @(
@@ -508,6 +576,13 @@ Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-sprint/SK
     '(?m)^name:\s*autonomy-sprint',
     'short, bounded execution loops',
     'wake-up interval'
+)
+
+Test-RequiredText -Path (Join-Path $repoRoot '.agents/skills/$autonomy-decision/SKILL.md') -Patterns @(
+    '(?m)^---',
+    '(?m)^name:\s*autonomy-decision',
+    'codex-autonomy decide --json',
+    'decision_outcome'
 )
 
 Test-RequiredText -Path (Join-Path $repoRoot 'autonomy/goal.md') -Patterns @(
@@ -559,7 +634,9 @@ Test-ProposalCollection -Path (Join-Path $repoRoot 'autonomy/proposals.json')
 Test-SettingsDocument -Path (Join-Path $repoRoot 'autonomy/settings.json')
 Test-ResultsDocument -Path (Join-Path $repoRoot 'autonomy/results.json')
 Test-VerificationDocument -Path (Join-Path $repoRoot 'autonomy/verification.json')
+Test-DecisionPolicyDocument -Path (Join-Path $repoRoot 'autonomy/decision-policy.json')
 Test-BlockerCollection -Path (Join-Path $repoRoot 'autonomy/blockers.json')
+Test-PendingOperationDocument -Path (Join-Path $repoRoot 'autonomy/operations/pending.json')
 
 Invoke-CliHarness
 

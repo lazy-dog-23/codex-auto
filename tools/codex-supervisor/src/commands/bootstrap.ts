@@ -3,16 +3,18 @@ import path from "node:path";
 
 import { Command } from "commander";
 
-import type { BlockersDocument, CommandResult, TasksDocument } from "../contracts/autonomy.js";
+import type { BlockersDocument, CommandResult, SlicesDocument, TasksDocument } from "../contracts/autonomy.js";
 import { acquireCycleLock, releaseCycleLock } from "../infra/lock.js";
 import { writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
 import { appendJournalEntry } from "../infra/journal.js";
 import {
   blockersSchema,
+  decisionPolicySchema,
   goalsSchema,
   proposalsSchema,
   resultsSchema,
   settingsSchema,
+  slicesSchema,
   stateSchema,
   tasksSchema,
   verificationSchema,
@@ -20,12 +22,14 @@ import {
 import { resolveRepoPaths } from "../shared/paths.js";
 import {
   getAgentsMarkdown,
+  getAutonomyDecisionSkillMarkdown,
   getAutonomyIntakeSkillMarkdown,
   getAutonomyPlanSkillMarkdown,
   getAutonomyReportSkillMarkdown,
   getAutonomyReviewSkillMarkdown,
   getAutonomySprintSkillMarkdown,
   getAutonomyWorkSkillMarkdown,
+  getCodexAutonomyLauncherScriptTemplate,
   getConfigTomlTemplate,
   getDefaultJournalMarkdown,
   getEnvironmentTomlTemplate,
@@ -37,9 +41,11 @@ import {
 } from "../scaffold/templates.js";
 import {
   createDefaultGoalsDocument,
+  createDefaultDecisionPolicy,
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
+  createDefaultSlicesDocument,
   createDefaultState,
   createDefaultVerificationDocument,
   formatGoalMarkdown,
@@ -49,6 +55,8 @@ const DEFAULT_TASKS: TasksDocument = {
   version: 1,
   tasks: []
 };
+
+const DEFAULT_SLICES: SlicesDocument = createDefaultSlicesDocument();
 
 const DEFAULT_BLOCKERS: BlockersDocument = {
   version: 1,
@@ -84,8 +92,10 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const reviewSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-review", "SKILL.md");
   const reportSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-report", "SKILL.md");
   const sprintSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-sprint", "SKILL.md");
+  const decisionSkillFile = path.join(repoRoot, ".agents", "skills", "$autonomy-decision", "SKILL.md");
   const readmeFile = path.join(repoRoot, "README.md");
   const tasksSchemaFile = path.join(paths.schemaDir, "tasks.schema.json");
+  const slicesSchemaFile = path.join(paths.schemaDir, "slices.schema.json");
   const goalsSchemaFile = path.join(paths.schemaDir, "goals.schema.json");
   const proposalsSchemaFile = path.join(paths.schemaDir, "proposals.schema.json");
   const stateSchemaFile = path.join(paths.schemaDir, "state.schema.json");
@@ -93,11 +103,13 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
   const resultsSchemaFile = path.join(paths.schemaDir, "results.schema.json");
   const blockersSchemaFile = path.join(paths.schemaDir, "blockers.schema.json");
   const verificationSchemaFile = path.join(paths.schemaDir, "verification.schema.json");
+  const decisionPolicySchemaFile = path.join(paths.schemaDir, "decision-policy.schema.json");
   const cycleLockKeepFile = path.join(paths.locksDir, ".gitkeep");
 
   const repoDirectories = [
     paths.scriptsDir,
     paths.codexDir,
+    path.join(paths.codexDir, "tools"),
     path.dirname(paths.environmentFile),
     path.dirname(planSkillFile),
     path.dirname(workSkillFile),
@@ -105,6 +117,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
     path.dirname(reviewSkillFile),
     path.dirname(reportSkillFile),
     path.dirname(sprintSkillFile),
+    path.dirname(decisionSkillFile),
   ];
 
   for (const directory of repoDirectories) {
@@ -133,11 +146,13 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [reviewSkillFile, getAutonomyReviewSkillMarkdown() + "\n"],
       [reportSkillFile, getAutonomyReportSkillMarkdown() + "\n"],
       [sprintSkillFile, getAutonomySprintSkillMarkdown() + "\n"],
+      [decisionSkillFile, getAutonomyDecisionSkillMarkdown() + "\n"],
       [paths.goalFile, formatGoalMarkdown(null) + "\n"],
       [paths.journalFile, getDefaultJournalMarkdown() + "\n"],
       [paths.environmentFile, getEnvironmentTomlTemplate() + "\n"],
       [paths.configFile, getConfigTomlTemplate() + "\n"],
       [paths.setupScript, getSetupWindowsScriptTemplate()],
+      [paths.autonomyCliScript, getCodexAutonomyLauncherScriptTemplate()],
       [paths.verifyScript, getVerifyScriptTemplate()],
       [paths.smokeScript, getSmokeScriptTemplate()],
       [paths.reviewScript, getReviewScriptTemplate()],
@@ -152,14 +167,17 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
 
     const jsonFileEntries: Array<[string, unknown]> = [
       [paths.tasksFile, DEFAULT_TASKS],
+      [paths.slicesFile, DEFAULT_SLICES],
       [paths.goalsFile, createDefaultGoalsDocument()],
       [paths.proposalsFile, createDefaultProposalsDocument()],
       [paths.stateFile, createDefaultState()],
       [paths.settingsFile, createDefaultSettingsDocument()],
       [paths.resultsFile, createDefaultResultsDocument()],
       [paths.verificationFile, createDefaultVerificationDocument()],
+      [paths.decisionPolicyFile, createDefaultDecisionPolicy()],
       [paths.blockersFile, DEFAULT_BLOCKERS],
       [tasksSchemaFile, tasksSchema],
+      [slicesSchemaFile, slicesSchema],
       [goalsSchemaFile, goalsSchema],
       [proposalsSchemaFile, proposalsSchema],
       [stateSchemaFile, stateSchema],
@@ -167,6 +185,7 @@ export async function runBootstrapCommand(repoRoot = process.cwd()): Promise<Com
       [resultsSchemaFile, resultsSchema],
       [blockersSchemaFile, blockersSchema],
       [verificationSchemaFile, verificationSchema],
+      [decisionPolicySchemaFile, decisionPolicySchema],
     ];
 
     for (const [filePath, value] of jsonFileEntries) {

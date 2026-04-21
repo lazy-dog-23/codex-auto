@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
 
-import type { GoalRecord, ProposedTask } from "../contracts/autonomy.js";
+import type { GoalRecord, ProposedSlice, ProposedTask } from "../contracts/autonomy.js";
 import { loadJsonFile, pathExists, readTextFile } from "../infra/fs.js";
 
 const IGNORED_DIRECTORIES = new Set([
@@ -117,6 +117,7 @@ export interface RepoAwareProposalSignals {
 
 export interface RepoAwareFallbackProposal {
   summary: string;
+  slices: ProposedSlice[];
   tasks: ProposedTask[];
   signals: RepoAwareProposalSignals;
 }
@@ -148,10 +149,12 @@ export async function buildRepoAwareFallbackProposal(goal: GoalRecord, repoRoot:
   const taskBlueprints = signals.goal_style === "system_audit"
     ? buildSystemAuditBlueprints(goal, signals)
     : buildGenericBlueprints(goal, signals);
-  const tasks = finalizeBlueprints(goal, taskBlueprints);
+  const slices = buildProposalSlices(goal, taskBlueprints);
+  const tasks = finalizeBlueprints(goal, taskBlueprints, slices[0]?.id ?? buildDefaultSliceId(goal.id));
 
   return {
     summary: buildRepoAwareSummary(goal, signals, tasks.length),
+    slices,
     tasks,
     signals,
   };
@@ -703,14 +706,37 @@ function buildVerificationPlan(signals: RepoAwareProposalSignals): {
   };
 }
 
+function buildProposalSlices(goal: GoalRecord, blueprints: Array<{
+  key: string;
+  title: string;
+  acceptance: string[];
+  fileHints: string[];
+}>): ProposedSlice[] {
+  const fileHints = dedupeStrings(blueprints.flatMap((blueprint) => blueprint.fileHints)).slice(0, 8);
+  return [
+    {
+      id: buildDefaultSliceId(goal.id),
+      title: `First verifiable slice for ${goal.title}`,
+      objective: `Deliver the smallest demonstrable slice of ${goal.objective}`,
+      acceptance: dedupeStrings([
+        "Complete the proposed tasks in order.",
+        "Keep the change bounded to the approved goal.",
+        "Close out with the repo verification gate.",
+      ]),
+      file_hints: fileHints,
+    },
+  ];
+}
+
 function finalizeBlueprints(goal: GoalRecord, blueprints: Array<{
   key: string;
   title: string;
   acceptance: string[];
   fileHints: string[];
-}>): ProposedTask[] {
+}>, fallbackSliceId: string): ProposedTask[] {
   return blueprints.slice(0, 5).map((blueprint, index) => ({
     id: buildProposalTaskId(goal.id, blueprint.key),
+    slice_id: fallbackSliceId,
     title: blueprint.title,
     priority: index === 0 ? "P0" : index === 1 ? "P1" : "P2",
     depends_on: index === 0 ? [] : [buildProposalTaskId(goal.id, blueprints[index - 1]?.key ?? blueprint.key)],
@@ -973,6 +999,10 @@ function dedupeStrings(items: string[]): string[] {
 
 function buildProposalTaskId(goalId: string, key: string): string {
   return `proposal-${slugify(goalId)}-${key}`;
+}
+
+function buildDefaultSliceId(goalId: string): string {
+  return `slice-${slugify(goalId)}-default`;
 }
 
 function slugify(value: string): string {

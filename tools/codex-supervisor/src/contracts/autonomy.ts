@@ -19,6 +19,11 @@ export const GOAL_STATUSES = [
   "cancelled"
 ] as const;
 
+export const GOAL_SOURCES = [
+  "manual",
+  "auto_successor",
+] as const;
+
 export const RUN_MODES = ["sprint", "cruise"] as const;
 
 export const REVIEW_STATUSES = [
@@ -29,7 +34,15 @@ export const REVIEW_STATUSES = [
 
 export const TASK_SOURCES = [
   "proposal",
-  "followup"
+  "followup",
+  "quick",
+] as const;
+
+export const SLICE_STATUSES = [
+  "planned",
+  "active",
+  "completed",
+  "blocked",
 ] as const;
 
 export const CONTINUATION_DECISIONS = [
@@ -111,18 +124,98 @@ export const THREAD_BINDING_STATES = [
   "unbound_current_unavailable",
 ] as const;
 
+export const RECOMMENDED_AUTOMATION_SURFACES = [
+  "thread_automation",
+  "external_relay_scheduler",
+  "manual_only",
+] as const;
+
+export const RECOMMENDED_AUTOMATION_PROMPTS = [
+  "official_thread_automation",
+  "external_relay_scheduler",
+] as const;
+
+export const GOAL_SUPPLY_STATES = [
+  "active_goal",
+  "approved_goal_available",
+  "awaiting_confirmation",
+  "successor_goal_available",
+  "completed_only",
+  "empty",
+  "manual_triage",
+] as const;
+
+export const AUTOMATION_NEXT_STEPS = [
+  "execute_bounded_loop",
+  "plan_or_rebalance",
+  "create_successor_goal",
+  "await_confirmation",
+  "idle",
+  "manual_triage",
+] as const;
+
+export const DECISION_EVENTS = [
+  "none",
+  "proposal_boundary",
+  "successor_goal_boundary",
+  "verification_failure",
+  "recoverable_closeout",
+  "dirty_worktree",
+  "scope_change",
+  "dependency_or_env",
+  "security_or_secret",
+  "release_or_git",
+  "external_service",
+  "unknown_context",
+] as const;
+
+export const DECISION_OUTCOMES = [
+  "auto_continue",
+  "auto_repair_once",
+  "safe_backoff",
+  "ask_human",
+  "reject_or_rewrite",
+] as const;
+
+export const DECISION_NEXT_ACTIONS = [
+  "continue_bounded_loop",
+  "run_verify_then_review",
+  "retry_verification_once",
+  "run_bounded_plan",
+  "create_successor_goal",
+  "pause_or_ask",
+  "stop_and_report",
+  "resolve_thread_binding",
+  "prepare_worktree",
+  "manual_triage",
+] as const;
+
+export const DECISION_HEARTBEATS = [
+  "burst_1m",
+  "normal_15m",
+  "safe_backoff_30m",
+  "pause",
+] as const;
+
 export const MANAGED_FILE_CLASSES = [
   "static_template",
   "repo_customized",
   "runtime_state",
 ] as const;
 
+export const CONTROL_PLANE_OPERATION_KINDS = [
+  "create_successor_goal",
+  "quick",
+] as const;
+
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
+export type GoalSource = (typeof GOAL_SOURCES)[number];
 export type RunMode = (typeof RUN_MODES)[number];
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 export type TaskSource = (typeof TASK_SOURCES)[number];
+export type SliceStatus = (typeof SLICE_STATUSES)[number];
 export type ContinuationDecision = (typeof CONTINUATION_DECISIONS)[number];
 export type VerificationPolicy = (typeof VERIFICATION_POLICIES)[number];
 export type VerificationAxisStatus = (typeof VERIFICATION_AXIS_STATUSES)[number];
@@ -140,6 +233,15 @@ export type AutoContinueState = (typeof AUTO_CONTINUE_STATES)[number];
 export type AutomationState = (typeof AUTOMATION_STATES)[number];
 export type ManagedFileClass = (typeof MANAGED_FILE_CLASSES)[number];
 export type ThreadBindingState = (typeof THREAD_BINDING_STATES)[number];
+export type RecommendedAutomationSurface = (typeof RECOMMENDED_AUTOMATION_SURFACES)[number];
+export type RecommendedAutomationPrompt = (typeof RECOMMENDED_AUTOMATION_PROMPTS)[number];
+export type GoalSupplyState = (typeof GOAL_SUPPLY_STATES)[number];
+export type AutomationNextStep = (typeof AUTOMATION_NEXT_STEPS)[number];
+export type DecisionEvent = (typeof DECISION_EVENTS)[number];
+export type DecisionOutcome = (typeof DECISION_OUTCOMES)[number];
+export type DecisionNextAction = (typeof DECISION_NEXT_ACTIONS)[number];
+export type DecisionHeartbeat = (typeof DECISION_HEARTBEATS)[number];
+export type ControlPlaneOperationKind = (typeof CONTROL_PLANE_OPERATION_KINDS)[number];
 
 export interface GoalTransitionSnapshot {
   from_goal_id: string;
@@ -159,6 +261,8 @@ export interface GoalRecord {
   created_at: string;
   approved_at: string | null;
   completed_at: string | null;
+  source?: GoalSource;
+  source_goal_id?: string | null;
 }
 
 export interface GoalsDocument {
@@ -168,9 +272,18 @@ export interface GoalsDocument {
 
 export interface ProposedTask {
   id: string;
+  slice_id?: string | null;
   title: string;
   priority: TaskPriority;
   depends_on: string[];
+  acceptance: string[];
+  file_hints: string[];
+}
+
+export interface ProposedSlice {
+  id: string;
+  title: string;
+  objective: string;
   acceptance: string[];
   file_hints: string[];
 }
@@ -179,6 +292,7 @@ export interface GoalProposal {
   goal_id: string;
   status: ProposalStatus;
   summary: string;
+  slices?: ProposedSlice[];
   tasks: ProposedTask[];
   created_at: string;
   approved_at: string | null;
@@ -192,6 +306,7 @@ export interface ProposalsDocument {
 export interface AutonomyTask {
   id: string;
   goal_id: string;
+  slice_id?: string | null;
   title: string;
   status: TaskStatus;
   priority: TaskPriority;
@@ -210,6 +325,25 @@ export interface AutonomyTask {
 export interface TasksDocument {
   version: number;
   tasks: AutonomyTask[];
+}
+
+export interface SliceRecord {
+  id: string;
+  goal_id: string;
+  title: string;
+  objective: string;
+  status: SliceStatus;
+  acceptance: string[];
+  file_hints: string[];
+  task_ids: string[];
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface SlicesDocument {
+  version: number;
+  slices: SliceRecord[];
 }
 
 export interface CruiseCadence {
@@ -249,6 +383,47 @@ export interface VerificationDocument {
   axes: VerificationAxis[];
 }
 
+export interface DecisionPolicyDocument {
+  version: number;
+  auto_continue: {
+    docs_only_changes: boolean;
+    approved_goal_followups: boolean;
+    recoverable_closeout_paths: string[];
+    verification_retry: {
+      max_retry_per_task: number;
+      allowed_failure_kinds: string[];
+    };
+    auto_successor_goal: {
+      enabled: boolean;
+      auto_approve_minimal_successor: boolean;
+      default_run_mode: RunMode;
+      max_consecutive_auto_successors: number;
+      max_successor_goals_per_day: number;
+      objective: string | null;
+      success_criteria: string[];
+      constraints: string[];
+      out_of_scope: string[];
+      allowed_lanes: string[];
+      forbidden_lanes: string[];
+    };
+  };
+  ask_human: DecisionEvent[];
+  heartbeat: {
+    ready_next_task: string;
+    recoverable_or_slow_verify: string;
+    blocked_or_confirmation: string;
+  };
+}
+
+export interface DecisionAdvice {
+  decision_event: DecisionEvent;
+  decision_outcome: DecisionOutcome;
+  decision_reason: string;
+  decision_next_action: DecisionNextAction;
+  decision_heartbeat: DecisionHeartbeat;
+  decision_evidence: string[];
+}
+
 export interface ResultEntry {
   status: ResultState;
   goal_id: string | null;
@@ -278,6 +453,61 @@ export interface AutonomyResults {
   commit: ResultEntry;
   reporter: ResultEntry;
 }
+
+export interface ControlPlaneOperationPayload {
+  goals: GoalsDocument;
+  proposals: ProposalsDocument;
+  slices: SlicesDocument | null;
+  tasks: TasksDocument | null;
+  state: AutonomyState;
+  verification: VerificationDocument | null;
+  results: AutonomyResults;
+  active_goal_id: string | null;
+  journal_entry: {
+    timestamp: string;
+    actor: string;
+    taskId: string;
+    result: string;
+    summary: string;
+    verify: string;
+    blocker: string;
+  };
+}
+
+export type CreateSuccessorGoalOperationPayload = ControlPlaneOperationPayload;
+export type QuickOperationPayload = ControlPlaneOperationPayload;
+
+export interface CreateSuccessorGoalPendingOperation {
+  version: number;
+  id: string;
+  kind: "create_successor_goal";
+  created_at: string;
+  updated_at: string;
+  command: "codex-autonomy create-successor-goal";
+  auto_approved: boolean;
+  goal_id: string;
+  source_goal_id: string;
+  task_ids: string[];
+  expected_paths: string[];
+  payload: CreateSuccessorGoalOperationPayload;
+}
+
+export interface QuickPendingOperation {
+  version: number;
+  id: string;
+  kind: "quick";
+  created_at: string;
+  updated_at: string;
+  command: "codex-autonomy quick";
+  auto_approved: true;
+  goal_id: string;
+  source_goal_id: null;
+  task_ids: string[];
+  expected_paths: string[];
+  payload: QuickOperationPayload;
+}
+
+export type ControlPlanePendingOperation = CreateSuccessorGoalPendingOperation | QuickPendingOperation;
 
 export interface AutonomyState {
   version: number;
@@ -341,8 +571,11 @@ export interface RepoPaths {
   repoRoot: string;
   readmeFile: string;
   autonomyDir: string;
+  contextDir: string;
+  repoMapFile: string;
   schemaDir: string;
   locksDir: string;
+  slicesFile: string;
   tasksFile: string;
   stateFile: string;
   blockersFile: string;
@@ -352,6 +585,8 @@ export interface RepoPaths {
   resultsFile: string;
   installFile: string;
   verificationFile: string;
+  decisionPolicyFile: string;
+  pendingOperationFile: string;
   journalFile: string;
   goalFile: string;
   cycleLockFile: string;
@@ -364,6 +599,7 @@ export interface RepoPaths {
   verifyScript: string;
   smokeScript: string;
   reviewScript: string;
+  autonomyCliScript: string;
   cliDir: string;
   cliPackageFile: string;
 }
@@ -424,6 +660,9 @@ export interface StatusSummary extends CommandResult {
   has_recorded_run: boolean;
   results_scope_note: string | null;
   next_automation_reason: string | null;
+  recommended_automation_surface: RecommendedAutomationSurface;
+  recommended_automation_reason: string | null;
+  recommended_automation_prompt: RecommendedAutomationPrompt | null;
   automation_state: AutomationState;
   auto_continue_state: AutoContinueState;
   continuation_reason: string | null;
@@ -432,6 +671,9 @@ export interface StatusSummary extends CommandResult {
   verification_passed: number;
   verification_pending: number;
   completion_blocked_by_verification: boolean;
+  successor_goal_available: boolean;
+  successor_goal_auto_approve: boolean;
+  successor_goal_reason: string | null;
   next_task_id: string | null;
   next_task_title: string | null;
   remaining_ready: number;
@@ -440,6 +682,15 @@ export interface StatusSummary extends CommandResult {
   upgrade_blocking: boolean;
   upgrade_hint: string | null;
   cli_install_state: string | null;
+  goal_supply_state: GoalSupplyState;
+  next_automation_step: AutomationNextStep;
+  ready_for_execution: boolean;
+  decision_event: DecisionEvent;
+  decision_outcome: DecisionOutcome;
+  decision_reason: string;
+  decision_next_action: DecisionNextAction;
+  decision_heartbeat: DecisionHeartbeat;
+  decision_evidence: string[];
   results_summary: {
     planner_summary: string | null;
     worker_result: string | null;
@@ -454,9 +705,14 @@ export interface AutomationPromptSpec {
   name: string;
   cadence: string;
   prompt: string;
+  whenToUse?: string;
+  whenNotToUse?: string;
+  selectionRule?: string;
 }
 
 export interface AutomationPromptsResult extends CommandResult {
+  official_thread_automation: AutomationPromptSpec;
+  external_relay_scheduler: AutomationPromptSpec;
   planner: AutomationPromptSpec;
   worker: AutomationPromptSpec;
   reviewer: AutomationPromptSpec;
@@ -476,6 +732,8 @@ export const READY_WINDOW_LIMIT = 5;
 export const DEFAULT_BACKGROUND_BRANCH = "codex/background";
 export const DEFAULT_AUTONOMY_BRANCH = "codex/autonomy";
 export const DEFAULT_SPRINT_HEARTBEAT_MINUTES = 15;
+export const DEFAULT_BURST_HEARTBEAT_MINUTES = 1;
+export const DEFAULT_SAFE_BACKOFF_HEARTBEAT_MINUTES = 30;
 export const DEFAULT_CRUISE_CADENCE: CruiseCadence = {
   planner_hours: 6,
   worker_hours: 2,

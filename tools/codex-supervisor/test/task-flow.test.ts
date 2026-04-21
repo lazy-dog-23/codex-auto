@@ -199,7 +199,10 @@ describe("task flow", () => {
 
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0]?.goal_id).toBe("goal-a");
+    expect(result.tasks[0]?.slice_id).toBe("slice-goal-a-default");
     expect(result.tasks[0]?.status).toBe("queued");
+    expect(result.slices).toHaveLength(1);
+    expect(result.slices[0]?.task_ids).toEqual(["task-1"]);
     expect(result.goals[0]?.status).toBe("active");
     expect(result.state.current_goal_id).toBe("goal-a");
   });

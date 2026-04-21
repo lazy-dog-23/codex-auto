@@ -19,22 +19,26 @@ import {
 } from "../shared/thread-context.js";
 import {
   blockersSchema,
+  decisionPolicySchema,
   goalsSchema,
   proposalsSchema,
   resultsSchema,
   settingsSchema,
+  slicesSchema,
   stateSchema,
   tasksSchema,
   verificationSchema,
 } from "../schemas/index.js";
 import {
   getAgentsMarkdown,
+  getAutonomyDecisionSkillMarkdown,
   getAutonomyIntakeSkillMarkdown,
   getAutonomyPlanSkillMarkdown,
   getAutonomyReportSkillMarkdown,
   getAutonomyReviewSkillMarkdown,
   getAutonomySprintSkillMarkdown,
   getAutonomyWorkSkillMarkdown,
+  getCodexAutonomyLauncherScriptTemplate,
   getConfigTomlTemplate,
   getEnvironmentTomlTemplate,
   getInstallVerifyScriptTemplate,
@@ -47,10 +51,12 @@ import {
 } from "../scaffold/templates.js";
 import {
   createDefaultInstallDocument,
+  createDefaultDecisionPolicy,
   createDefaultGoalsDocument,
   createDefaultProposalsDocument,
   createDefaultResultsDocument,
   createDefaultSettingsDocument,
+  createDefaultSlicesDocument,
   createDefaultState,
   createDefaultVerificationDocument,
   formatGoalMarkdown,
@@ -66,6 +72,7 @@ import type {
   GoalsDocument,
   ProposalsDocument,
   RunMode,
+  SlicesDocument,
   TasksDocument,
 } from "../contracts/autonomy.js";
 import {
@@ -87,6 +94,8 @@ const DEFAULT_TASKS: TasksDocument = {
   version: 1,
   tasks: [],
 };
+
+const DEFAULT_SLICES: SlicesDocument = createDefaultSlicesDocument();
 
 const DEFAULT_BLOCKERS: BlockersDocument = {
   version: 1,
@@ -878,6 +887,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${getAutonomySprintSkillMarkdown()}\n`,
     },
     {
+      path: path.join(paths.repoRoot, ".agents", "skills", "$autonomy-decision", "SKILL.md"),
+      relative_path: ".agents/skills/$autonomy-decision/SKILL.md",
+      template_id: "autonomy_decision_skill_markdown",
+      kind: "text",
+      content: `${getAutonomyDecisionSkillMarkdown()}\n`,
+    },
+    {
       path: paths.environmentFile,
       relative_path: ".codex/environments/environment.toml",
       template_id: "environment_toml",
@@ -897,6 +913,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "setup_windows_ps1",
       kind: "text",
       content: getSetupWindowsScriptTemplate(),
+    },
+    {
+      path: paths.autonomyCliScript,
+      relative_path: "scripts/codex-autonomy.ps1",
+      template_id: "codex_autonomy_ps1",
+      kind: "text",
+      content: getCodexAutonomyLauncherScriptTemplate(),
     },
     {
       path: paths.verifyScript,
@@ -955,6 +978,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${JSON.stringify(createDefaultProposalsDocument(), null, 2)}\n`,
     },
     {
+      path: paths.slicesFile,
+      relative_path: "autonomy/slices.json",
+      template_id: "slices_json",
+      kind: "json",
+      content: `${JSON.stringify(DEFAULT_SLICES, null, 2)}\n`,
+    },
+    {
       path: paths.stateFile,
       relative_path: "autonomy/state.json",
       template_id: "state_json",
@@ -983,6 +1013,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       content: `${JSON.stringify(createDefaultVerificationDocument(), null, 2)}\n`,
     },
     {
+      path: paths.decisionPolicyFile,
+      relative_path: "autonomy/decision-policy.json",
+      template_id: "decision_policy_json",
+      kind: "json",
+      content: `${JSON.stringify(createDefaultDecisionPolicy(), null, 2)}\n`,
+    },
+    {
       path: paths.blockersFile,
       relative_path: "autonomy/blockers.json",
       template_id: "blockers_json",
@@ -1009,6 +1046,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "proposals_schema_json",
       kind: "json",
       content: `${JSON.stringify(proposalsSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "slices.schema.json"),
+      relative_path: "autonomy/schema/slices.schema.json",
+      template_id: "slices_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(slicesSchema, null, 2)}\n`,
     },
     {
       path: path.join(paths.schemaDir, "state.schema.json"),
@@ -1044,6 +1088,13 @@ function buildManagedControlSurfaceSpecs(paths: ReturnType<typeof resolveRepoPat
       template_id: "verification_schema_json",
       kind: "json",
       content: `${JSON.stringify(verificationSchema, null, 2)}\n`,
+    },
+    {
+      path: path.join(paths.schemaDir, "decision-policy.schema.json"),
+      relative_path: "autonomy/schema/decision-policy.schema.json",
+      template_id: "decision_policy_schema_json",
+      kind: "json",
+      content: `${JSON.stringify(decisionPolicySchema, null, 2)}\n`,
     },
   ];
 
@@ -1141,6 +1192,8 @@ async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRe
     fallbackGoalId: state.current_goal_id ?? tasks.tasks[0]?.goal_id ?? goals.goals[0]?.id ?? LEGACY_GOAL_ID,
     now,
   });
+  const rawSlices = await loadExistingJson(paths.slicesFile, () => DEFAULT_SLICES);
+  const slices = normalizeSlicesDocument(rawSlices, { now });
   goalsNormalization = normalizeGoalsDocument(goals, {
     referencedGoalIds: [
       ...tasks.tasks.map((task) => task.goal_id),
@@ -1209,6 +1262,7 @@ async function normalizeInstalledControlPlane(paths: ReturnType<typeof resolveRe
     writeNormalizedJsonIfChanged(paths.settingsFile, rawSettings, settings),
     writeNormalizedJsonIfChanged(paths.resultsFile, rawResults, results),
     writeNormalizedJsonIfChanged(paths.goalsFile, rawGoals, goals),
+    writeNormalizedJsonIfChanged(paths.slicesFile, rawSlices, slices),
     writeNormalizedJsonIfChanged(paths.tasksFile, rawTasks, protectedTasks),
     writeNormalizedJsonIfChanged(paths.proposalsFile, rawProposals, proposals),
     writeNormalizedJsonIfChanged(paths.blockersFile, rawBlockers, blockers),
@@ -1252,6 +1306,7 @@ async function migrateGeneratedSchemaFiles(paths: ReturnType<typeof resolveRepoP
     { filePath: path.join(paths.schemaDir, "tasks.schema.json"), current: tasksSchema },
     { filePath: path.join(paths.schemaDir, "goals.schema.json"), current: goalsSchema },
     { filePath: path.join(paths.schemaDir, "proposals.schema.json"), current: proposalsSchema },
+    { filePath: path.join(paths.schemaDir, "slices.schema.json"), current: slicesSchema },
     { filePath: path.join(paths.schemaDir, "state.schema.json"), current: stateSchema },
     { filePath: path.join(paths.schemaDir, "settings.schema.json"), current: settingsSchema },
     {
@@ -1260,6 +1315,7 @@ async function migrateGeneratedSchemaFiles(paths: ReturnType<typeof resolveRepoP
       legacyVariants: [LEGACY_RESULTS_SCHEMA],
     },
     { filePath: path.join(paths.schemaDir, "blockers.schema.json"), current: blockersSchema },
+    { filePath: path.join(paths.schemaDir, "decision-policy.schema.json"), current: decisionPolicySchema },
   ];
   const writes = await Promise.all(
     generatedSchemas.map((schema) => maybeMigrateGeneratedJsonFile(schema.filePath, schema.current, schema.legacyVariants ?? [])),
@@ -1470,6 +1526,15 @@ function normalizeProposalsDocument(
   };
 }
 
+function normalizeSlicesDocument(document: unknown, options: { now: string }): SlicesDocument {
+  const input = isPlainObject(document) ? document : {};
+  const slices = Array.isArray(input.slices) ? input.slices : [];
+  return {
+    version: 1,
+    slices: slices.map((slice, index) => normalizeSliceRecord(slice, { index, now: options.now })),
+  };
+}
+
 function normalizeBlockersDocument(document: unknown, options: { now: string }): BlockersDocument {
   const input = isPlainObject(document) ? document : {};
   const blockers = Array.isArray(input.blockers) ? input.blockers : [];
@@ -1502,8 +1567,9 @@ function normalizeTaskRecord(
     updated_at: normalizeTimestamp(input.updated_at, options.now),
     commit_hash: readOptionalString(input.commit_hash),
     review_status: isOneOf(input.review_status, ["not_reviewed", "passed", "followup_required"]) ? input.review_status : "not_reviewed",
-    source: isOneOf(input.source, ["proposal", "followup"]) ? input.source : "proposal",
+    source: isOneOf(input.source, ["proposal", "followup", "quick"]) ? input.source : "proposal",
     source_task_id: readOptionalString(input.source_task_id),
+    slice_id: readOptionalString(input.slice_id),
   };
 }
 
@@ -1552,6 +1618,9 @@ function normalizeProposalRecord(
     goal_id: readNonEmptyString(input.goal_id, options.fallbackGoalId),
     status: isOneOf(input.status, ["awaiting_confirmation", "approved", "superseded", "cancelled"]) ? input.status : "awaiting_confirmation",
     summary: readNonEmptyString(input.summary, `Imported legacy proposal ${options.index + 1}.`),
+    slices: Array.isArray(input.slices)
+      ? input.slices.map((slice, sliceIndex) => normalizeProposedSlice(slice, sliceIndex))
+      : undefined,
     tasks: Array.isArray(input.tasks)
       ? input.tasks.map((task, taskIndex) => normalizeProposedTask(task, taskIndex))
       : [],
@@ -1565,11 +1634,48 @@ function normalizeProposedTask(task: unknown, index: number): ProposalsDocument[
   const title = readNonEmptyString(input.title, `Imported proposed task ${index + 1}`);
   return {
     id: readNonEmptyString(input.id, `proposal-task-${index + 1}`),
+    slice_id: readOptionalString(input.slice_id),
     title,
     priority: isOneOf(input.priority, ["P0", "P1", "P2", "P3"]) ? input.priority : "P1",
     depends_on: readStringArray(input.depends_on),
     acceptance: defaultIfEmpty(readStringArray(input.acceptance), [title]),
     file_hints: readStringArray(input.file_hints),
+  };
+}
+
+function normalizeProposedSlice(slice: unknown, index: number): NonNullable<ProposalsDocument["proposals"][number]["slices"]>[number] {
+  const input = isPlainObject(slice) ? slice : {};
+  const title = readNonEmptyString(input.title, `Imported proposed slice ${index + 1}`);
+  return {
+    id: readNonEmptyString(input.id, `proposal-slice-${index + 1}`),
+    title,
+    objective: readNonEmptyString(input.objective, title),
+    acceptance: readStringArray(input.acceptance),
+    file_hints: readStringArray(input.file_hints),
+  };
+}
+
+function normalizeSliceRecord(
+  slice: unknown,
+  options: {
+    index: number;
+    now: string;
+  },
+): SlicesDocument["slices"][number] {
+  const input = isPlainObject(slice) ? slice : {};
+  const title = readNonEmptyString(input.title, `Imported slice ${options.index + 1}`);
+  return {
+    id: readNonEmptyString(input.id, `slice-legacy-${options.index + 1}`),
+    goal_id: readNonEmptyString(input.goal_id, LEGACY_GOAL_ID),
+    title,
+    objective: readNonEmptyString(input.objective, title),
+    status: isOneOf(input.status, ["planned", "active", "completed", "blocked"]) ? input.status : "planned",
+    acceptance: readStringArray(input.acceptance),
+    file_hints: readStringArray(input.file_hints),
+    task_ids: readStringArray(input.task_ids),
+    created_at: normalizeTimestamp(input.created_at, options.now),
+    updated_at: normalizeTimestamp(input.updated_at, options.now),
+    completed_at: normalizeOptionalTimestamp(input.completed_at),
   };
 }
 
@@ -1839,6 +1945,7 @@ async function hasBackgroundWorktreePrerequisites(
     paths.tasksFile,
     paths.goalsFile,
     paths.proposalsFile,
+    paths.slicesFile,
     paths.stateFile,
     paths.settingsFile,
     paths.resultsFile,
@@ -1847,6 +1954,7 @@ async function hasBackgroundWorktreePrerequisites(
     path.join(paths.schemaDir, "tasks.schema.json"),
     path.join(paths.schemaDir, "goals.schema.json"),
     path.join(paths.schemaDir, "proposals.schema.json"),
+    path.join(paths.schemaDir, "slices.schema.json"),
     path.join(paths.schemaDir, "state.schema.json"),
     path.join(paths.schemaDir, "settings.schema.json"),
     path.join(paths.schemaDir, "results.schema.json"),
@@ -1894,6 +2002,16 @@ function buildInstallMessage(
 
 function buildNextAutomationSuggestions(isGitRepo: boolean): Array<{ name: string; purpose: string }> {
   const suggestions = [
+    {
+      name: "official-thread-automation",
+      purpose: isGitRepo
+        ? "Primary same-thread bounded-loop continuation through official Codex thread automations on the bound operator thread."
+        : "Primary same-thread continuation once the repo becomes automation-ready and the bound operator thread can host a Codex thread automation.",
+    },
+    {
+      name: "external-relay-scheduler",
+      purpose: "Fallback bridge for cross-thread or external scheduler wake-ups when the current thread is not the bound operator thread.",
+    },
     {
       name: "planner-cruise",
       purpose: "Maintain the ready window and proposal state for the active goal.",

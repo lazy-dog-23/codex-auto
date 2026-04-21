@@ -163,6 +163,59 @@ describe("upgrade-managed", () => {
     expect(updatedInstall.managed_files.find((item) => item.path === "autonomy/settings.json")?.management_class).toBe("repo_customized");
   });
 
+  it("adds newly introduced managed files that are absent from older metadata", async () => {
+    const workspace = await makeTempGitRepo();
+
+    const installResult = await runInstallCommand(
+      { target: workspace },
+      {
+        detectGitTopLevel: async () => workspace,
+        detectCodexProcess: async () => true,
+      },
+    );
+    expect(installResult.ok).toBe(true);
+
+    const installMetadataPath = join(workspace, "autonomy", "install.json");
+    const installMetadata = JSON.parse(await readFile(installMetadataPath, "utf8")) as {
+      product_version: string;
+      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string; management_class: string }>;
+    };
+    const newManagedPaths = [
+      ".agents/skills/$autonomy-decision/SKILL.md",
+      "autonomy/decision-policy.json",
+      "autonomy/schema/decision-policy.schema.json",
+    ];
+
+    installMetadata.product_version = "0.0.9";
+    installMetadata.managed_files = installMetadata.managed_files.filter((item) => !newManagedPaths.includes(item.path));
+    await writeFile(installMetadataPath, `${JSON.stringify(installMetadata, null, 2)}\n`, "utf8");
+    for (const relativePath of newManagedPaths) {
+      await rm(join(workspace, ...relativePath.split("/")), { force: true });
+    }
+
+    const planResult = await runUpgradeManagedCommand({ target: workspace });
+    expect(planResult.ok).toBe(true);
+    for (const relativePath of newManagedPaths) {
+      const entry = planResult.plan.find((item) => item.relative_path === relativePath);
+      expect(entry?.status).toBe("safe_replace");
+      expect(entry?.action).toBe("replace");
+    }
+
+    const applyResult = await runUpgradeManagedCommand({ target: workspace, apply: true });
+    expect(applyResult.ok).toBe(true);
+    expect(applyResult.summary.applied_paths).toEqual(expect.arrayContaining(newManagedPaths));
+
+    const updatedInstall = JSON.parse(await readFile(installMetadataPath, "utf8")) as {
+      managed_files: Array<{ path: string; template_id: string; installed_hash: string; last_reconciled_product_version: string; management_class: string }>;
+    };
+    for (const relativePath of newManagedPaths) {
+      await expect(readFile(join(workspace, ...relativePath.split("/")), "utf8")).resolves.toContain(
+        relativePath.endsWith(".json") ? '"version"' : "name:",
+      );
+      expect(updatedInstall.managed_files.find((item) => item.path === relativePath)?.last_reconciled_product_version).toBe("0.1.0");
+    }
+  });
+
   it("treats repo-customized and runtime-state drift as advisory when static templates still match", async () => {
     const workspace = await makeTempGitRepo();
 

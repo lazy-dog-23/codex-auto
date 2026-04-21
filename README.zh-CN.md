@@ -11,8 +11,10 @@
 ## 本仓库提供什么
 
 - repo-local 自治控制面安装与升级
+- 目标仓库项目基线创建：生成 `TEAM_GUIDE.md` 和薄层 `AGENTS.override.md`
+- 项目上下文文档安全压缩：`compress-docs`
 - 线程绑定的 operator / reporting 工作流
-- `goal / proposal / task` 状态管理
+- `goal / proposal / slice / task` 状态管理
 - 全局 router skill 与 relay manual-audit skill 分发
 - 已安装目标仓 `README.md` section 托管能力
 - Windows-first 验证与 worktree 准备流程
@@ -68,9 +70,15 @@ codex-autonomy --version
 
 - 标准路径：`codex-autonomy <command>`。
 - 可先用 `codex-autonomy --version` 确认当前机器级 CLI 版本；全局 router skill 也会把它作为“是否需要先刷新本机产品版本”的判断信号之一。
-- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
+- 机器级自然语言入口：安装完 `scripts/install-global.ps1` 后，新项目线程可以直接说“初始化这个项目”“给当前项目做基线”“生成项目结构图”“跑 graphify 快照”“压缩项目说明”“精简 TEAM_GUIDE”“把 auto 装进当前项目”“升级当前项目里的 auto”“刷新当前项目里的 auto”“目标是……”“确认提案”“确认提案并继续”“用冲刺模式推进这个目标”“用巡航模式推进这个目标”“继续当前目标”“快速续跑”“任务完成后 1 分钟继续”“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”“汇报当前情况”等自然语言；全局 `codex-autonomy-router` skill 会先检查是否已安装控制面，必要时自动执行 `install/init-project -> setup -> doctor -> prepare-worktree`，已安装项目则先尝试 `upgrade-managed --apply` 对齐到当前本地产品版本。当前线程身份可用时，router 会在首次接入时自动调用 `codex-autonomy bind-thread` 绑定当前 operator thread；如果当前线程和已绑定的 `report_thread_id` 不一致，router 会阻断并要求显式 rebind，而不会静默沿用旧绑定继续执行。
 - relay completion event 现在带固定 envelope：`[Codex Relay Callback]`、`Event-Type: codex.relay.dispatch.completed.v1`，以及 `BEGIN_CODEX_RELAY_CALLBACK_JSON` / `END_CODEX_RELAY_CALLBACK_JSON` 之间的机读 JSON。router / operator 要把它当成状态回传，而不是新的 goal intake。
 - `codex-autonomy install --target <repo>`：把控制面安装到目标仓库，不覆盖已有文件。
+- `codex-autonomy init-project --target <repo> --mode existing|new`：安装控制面，并创建 `TEAM_GUIDE.md` 与薄层 `AGENTS.override.md`；默认保留已有项目文档，只有显式加 `--refresh-docs` 才重新生成。
+- `codex-autonomy graphify-snapshot --target <repo> [--profile source-only|full]`：生成本地 Graphify 代码结构快照；默认维护 `.graphifyignore` 的受管 block 并写入 `graphify-out/`，不会安装官方 Codex hook，也不会改 `AGENTS.md`。
+- `codex-autonomy scan --target <repo> [--profile source-only|full] [--update-team-guide]`：在 Graphify 成功后汇总 docs、scripts、entrypoints、verification hints，写入 `autonomy/context/repo-map.json`；只有显式加 `--update-team-guide` 才刷新 `TEAM_GUIDE.md`。
+- `codex-autonomy compress-docs --target <repo> --check` / `--write`：只压缩 `TEAM_GUIDE.md`、`AGENTS.override.md` 和 `autonomy/context/*.md`；默认 `--check` 只预览统计，`--write` 才写入；`TEAM_GUIDE.md` 压缩后仍超过 12 KiB 会明确提示需要人工精简。
+- `codex-autonomy quick --target <repo> --request "<小修描述>" [--validate] [--track]`：小 bug、小改动、明确问题的快速入口；加 `--track` 后直接写入一个 active goal、一个 slice、一个 ready task，任务 `source="quick"`，不走完整 proposal 流。
+- `codex-autonomy query --target <repo> --json`：给 heartbeat、relay、外部调度或未来 UI 使用的稳定机读状态接口，字段比完整 `status` 更小。
 - `codex-autonomy upgrade-managed --target <repo> [--apply]`：生成或应用受管控制面的引导式升级计划。
 - `codex-autonomy rebaseline-managed --target <repo>`：把 advisory managed drift 重新登记为当前仓库的 repo-specific 基线，不改文件内容，只更新 `autonomy/install.json` 元数据。
 - 目标仓 `README.md` 现在只按 section 托管：只更新 `<!-- codex-autonomy:managed:start -->` 到 `<!-- codex-autonomy:managed:end -->` 之间的内容；默认要求整文件 `<= 24 KiB`、托管 section `<= 8 KiB`。README 超限、含 NUL、marker 损坏或不是常规文本文件时，只给 advisory warning，不自动覆盖，也不会被 `rebaseline-managed` 当成新基线。
@@ -82,12 +90,18 @@ codex-autonomy --version
 - `codex-autonomy intake-goal --title <title> --objective <objective> --run-mode <sprint|cruise> [--report-thread-id <threadId>]`：把自然语言目标规范化为待确认 goal。仓库第一次绑定原线程时必须提供 `--report-thread-id`；后续沿用已绑定线程时可以省略。
 - `codex-autonomy generate-proposal [--goal-id <goalId>]`：为最早的可生成 `awaiting_confirmation` goal 生成本地保守 proposal fallback，不物化 `tasks.json`，也不会覆盖已有待确认 proposal。
 - `codex-autonomy approve-proposal --goal-id <goalId>`：把提案物化为任务并激活该 goal。
+- 如果自然语言已经表达“确认后继续”“直接开始自治”“以后自己往下做”，router 在 `approve-proposal` 之后会立刻重跑 `status`，在绑定线程里创建或刷新官方 heartbeat，并在可执行时 kickoff 一轮 bounded sprint，而不是停在“已批准”这一步等你再补命令。
+- `codex-autonomy create-successor-goal --auto-approve`：只在 `autonomy/decision-policy.json` 明确启用长期 charter 且允许自动批准时使用；它会在每个干净完成边界创建并批准一个最小 successor goal，策略配额负责防止失控。
 - `codex-autonomy set-run-mode <goal-id> <sprint|cruise>`：切换目标运行模式。
-- `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。
+- `codex-autonomy review`：执行 review gate；基础检查会跑 `smoke`、控制面一致性检查，以及可选的 `scripts/review.local.ps1`。当 diff 可提交时，它还会自动执行受控 closeout commit，并立刻对齐 background worktree。
 - `codex-autonomy report`：输出当前 goal、任务、verify/review/commit 的摘要。
 - `codex-autonomy status`：汇总 goal、任务、blockers、上次结果、是否适合下一轮 automation。
+- `codex-autonomy query --target <repo> --json`：只输出自动化消费者需要的稳定状态子集，适合工具、router、heartbeat、relay 先做下一步判断。
+- `codex-autonomy decide --json`：把当前边界分类为可继续、可修复一次、安全退避、需要问人或拒绝重写，并输出下一步动作和 heartbeat 建议。
 - `codex-autonomy prepare-worktree`：创建或校验专用 background worktree；如果只有 allowlisted control-surface drift，会先同步或重对齐后继续，dirty 超出受管范围时才拒绝继续。
-- `codex-autonomy emit-automation-prompts`：输出 Planner / Worker / Reviewer / Reporter / Sprint runner 五类 prompt 与建议 cadence。
+- `codex-autonomy emit-automation-prompts --json`：输出官方 thread automation 主路、外部 relay scheduler fallback，以及 Planner / Worker / Reviewer / Reporter / Sprint runner 的机读 prompt bundle。
+- 这份 surface-first prompt bundle 现在还会带上 `whenToUse`、`whenNotToUse`、`selectionRule`，让 agent 能直接判断该用哪条 surface / role，而不是再等用户口头分派。
+- 对 blocker 决策也是同一个原则：如果你在绑定线程里直接说“按第二条处理 blocker”“把这个 goal 收窄为 checklist/manual lane”“保留 heartbeat 继续推进”，router / automation prompt 应该自己把它翻译成 `unblock + bounded plan/sprint`，而不是反过来要求你手动指定 CLI 或工具名。
 - `codex-autonomy pause` / `resume`：暂停或恢复自治循环。
 - `codex-autonomy unblock <task-id>`：关闭对应 blocker，并按依赖与 ready 窗口策略恢复任务到 `ready` 或 `queued`。
 - `codex-autonomy merge-autonomy-branch`：在 review 通过且无 blocker 时，把 `codex/autonomy` fast-forward 合并回当前干净分支。
@@ -100,25 +114,33 @@ codex-autonomy --version
 ## Repo 控制面
 
 - `AGENTS.md`：硬规则与运行约定。
+- `AGENTS.override.md`：`init-project` 创建的目标仓薄覆盖层，只放稳定人工规则。
+- `TEAM_GUIDE.md`：`init-project` 创建的目标仓当前现状快照，不当 changelog 使用。
 - `.agents/skills/$autonomy-plan`、`$autonomy-work`、`$autonomy-intake`、`$autonomy-review`、`$autonomy-report`、`$autonomy-sprint`：repo skills。
+- `.agents/skills/$autonomy-decision`：通用边界决策 skill；遇到 blocker、verification failure、dirty worktree、closeout、scope / env / thread boundary 时，先跑 `codex-autonomy decide --json`，只有它判定需要人工时才问你。
 - `.codex/environments/environment.toml`：Windows setup 与 `verify` / `smoke` / `review` actions。
 - `.codex/config.toml`：repo 级兜底配置，给新 turn 提供 `approval_policy = "never"`、`sandbox_mode = "workspace-write"`、`model = "gpt-5.4"`、`model_reasoning_effort = "xhigh"`、`service_tier = "fast"`。
-- `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
+- `autonomy/goals.json`、`autonomy/proposals.json`、`autonomy/slices.json`、`autonomy/tasks.json`、`autonomy/state.json`、`autonomy/settings.json`、`autonomy/results.json`、`autonomy/blockers.json`：自治真源。
 - `autonomy/verification.json`：goal 级 closeout gate；体检、安全、健壮性类 goal 只有在 required verification axis 清零后才能真正完成。
+- `autonomy/context/repo-map.json`：`scan` 生成的项目结构、命令、入口和热点摘要，供 agent 快速定向；它是辅助地图，不替代源码核验。
 - `autonomy/results.json` 是线程摘要时间、summary kind/reason、goal transition 元数据的 canonical source；`state.json` 里的同名时间字段只保留兼容回退意义。
+- `autonomy/decision-policy.json`：repo 级边界策略，定义哪些路径和场景可以自动继续、哪些验证失败可重试一次、哪些必须问人，以及 1 分钟 burst / 15 分钟正常 / 30 分钟安全退避的默认语义。
 - `autonomy/journal.md`：每次 run 只追加一条记录。
+- `scripts/codex-autonomy.ps1`：repo-local CLI 入口。自动化和 heartbeat 优先通过它运行 `codex-autonomy ...`，避免 `workspace-write` sandbox 只能访问全局 npm shim 时失败。
 - `scripts/verify.ps1`：唯一验收门。
-- `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
+- `scripts/review.ps1`：基础效果检查门，会校验控制面一致性；通常通过 `codex-autonomy review` 调用。项目级更深的效果检查可以追加到 `scripts/review.local.ps1`。
 
 ## 运行模型
 
-仓库当前支持 `goal / proposal / task` 三层数据，以及 `sprint / cruise` 两种运行模式，再配合 `review / report` 两个收口动作。
+仓库当前支持 `goal / proposal / slice / task` 四层数据，以及 `sprint / cruise` 两种运行模式，再配合 `review / report` 两个收口动作。
 
 - `goal`：目标本体，先进入 `awaiting_confirmation`，确认后进入 `approved` / `active`。
 - `proposal`：Planner 对当前 goal 生成的首版任务提案。
+- `slice`：一个可演示、可验证的能力片段，用来把长期 goal 拆成更清楚的交付边界。
 - `task`：真正被 worker 执行的最小工作单元。
 - `cruise cadence`：稳态巡航频率，指 Planner / Worker / Reviewer 在后台按固定周期醒来检查是否有可推进项。
 - `sprint heartbeat`：冲刺 runner 的唤醒间隔，不是任务时长。它只决定多久再醒一次，不代表一轮必须跑满这么久。
+- `entry-lease + self-rescheduling heartbeat`：官方同线程 heartbeat 的快速续跑模式。每轮先查 `status` / 锁状态；确认当前绑定线程可执行且空闲后，先把同一个 heartbeat 临时设为 30 分钟 entry lease，再开始 repo 写入或长验证；如果这一轮干净完成、工作树干净、没有 blocker / review_pending / needs_confirmation，且 `status` 仍显示有明确 next task，就把同一个 heartbeat 设为 1 分钟后继续。它不是常驻 1 分钟轮询，也不会创建第二条 heartbeat。
 - `kickoff`：goal 刚确认或需要立即推进时的立刻启动动作。kickoff 会先跑一轮，不等下一次 cadence / heartbeat。
 - `safe follow-up`：仍然属于已批准 goal 边界内的后续优化项。它会自动并入下一轮，不需要把线程当成审批门。
 
@@ -139,15 +161,28 @@ Reporter 的策略是“成功汇总、异常即时回线程”。
 
 ## Automation 说明
 
-`emit-automation-prompts` 会输出五类 prompt：
+`emit-automation-prompts --json` 会优先输出 automation surface，再输出角色 prompt：
 
+- `official_thread_automation`
+- `external_relay_scheduler`
 - Planner
 - Worker
 - Reviewer
 - Reporter
 - Sprint runner
 
-Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
+其中：
+
+- `official_thread_automation` 是官方同线程 heartbeat 主路，直接给 app 的 `automation_update(kind="heartbeat", destination="thread")` 使用。
+- `external_relay_scheduler` 是跨线程 / 外部调度 fallback，给 `Task Scheduler -> relay -> 绑定线程` 这条链路使用。
+- `official_thread_automation` 默认包含 entry-lease + self-rescheduling burst 策略：开工前先把同一个 heartbeat 临时调到 30 分钟，避免 1 分钟节拍在长验证期间反复唤醒；干净成功且仍有 ready next task 时，下一轮再用 1 分钟快速续跑；不满足条件时退回正常 sprint cadence、安全退避或暂停。1 分钟 burst 只作为短促 fast-follow，不作为多个项目的长期常驻节拍。
+- 安装或升级后的目标仓应该先跑一次 `scripts/setup.windows.ps1`，它会尽力准备 `.codex/tools/codex-autonomy` 本地 CLI 缓存；这样官方 thread heartbeat 在 `workspace-write` 下也能优先走仓库内入口。
+- Sprint runner 的默认工作方式仍然是有预算地连续闭环推进，遇到安全的 follow-up 直接接着跑，遇到重大决策才停下来写 blocker。
+- `codex-autonomy status` 现在会把“可唤醒”与“可执行”拆开表达：`ready_for_automation` 代表调度层可以安全唤醒并做一轮有界下一步，`ready_for_execution` 代表这一轮可以真正进入执行闭环。
+- `goal_supply_state` / `next_automation_step` 会明确告诉 heartbeat 或 relay runner：这轮应该执行 `execute_bounded_loop`、只做 `plan_or_rebalance`、创建 `create_successor_goal`，停在 `await_confirmation`，还是直接 `idle` / `manual_triage`。
+- `decision_event` / `decision_outcome` / `decision_next_action` / `decision_heartbeat` 是通用边界判定结果。绑定线程或 heartbeat 在把问题抛给你之前，应该先运行 `codex-autonomy decide --json`；只有结果是 `ask_human` 或 `reject_or_rewrite` 时才停止并问你，其余安全场景按建议继续、修复一次或退避。
+- `create_successor_goal` 默认关闭。只有 repo 在 `autonomy/decision-policy.json` 写入明确长期 charter，并开启 `auto_successor_goal.enabled` / `auto_approve_minimal_successor` 后，绑定线程才可以在每个干净完成边界自动创建并批准一个最小 successor goal；策略里的连续次数和每日次数仍作为安全节流，CLI 写入口也会强制复核绑定线程和 `status` / `decide` gate。
+- 如果多文件控制面写入被中断，`autonomy/operations/pending.json` 会阻止下一轮 heartbeat 继续推进，直到 `codex-autonomy status` / `doctor` 明确暴露，或重新运行原命令完成恢复。
 
 关于模型字段要注意一件事：
 
@@ -155,20 +190,31 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - 所以 repo 里的 `.codex/config.toml` 是兜底配置，负责给当前项目和新 turn 提供稳定默认值。
 - 也就是说，automation 侧能配置时用 automation 配置，不能持久化时靠 repo `.codex/config.toml` 托底。
 
-已知限制（基于当前 Windows Codex App 实测）：
+已知边界（基于当前 Windows Codex App 实测）：
 
-- `heartbeat + MINUTELY` 当前属于已知不可靠路径：调度器可能只推进下一次触发时间，但不实际向线程投递执行。
-- 这类行为发生时，常见表现是“时间在滚动，但没有真正跑起来”；因此不要把它当成唯一可靠的持续推进机制。
-- 需要稳定后台调度时，优先使用 `cron + HOURLY`，或改用外部调度器触发有界执行。
+- 从 26.415 开始，官方 thread automation 才是同线程持续推进的首选路径；它保留线程上下文，适合 repo-local autonomy 的 bounded loop。
+- 更早的 Windows 实测里，旧的 `heartbeat + MINUTELY` 路径曾出现“时间在滚动，但没有真正投递执行”的现象。这个结论只覆盖旧路径，不应笼统套用到 26.415 的官方 thread automation。
+- 在 2026-04-17 重启 Codex App 后做的同线程 live 复验里，重新创建的官方 heartbeat 已经能在这台机器上再次唤醒已绑定线程并产出新 turn。更早那次“时间前进但没实际投递”的现象，应视为 stale runtime 条件下的旧样本，而不是 26.415 的默认结论。
+- 当前线程不是绑定线程，或者必须从 app 外部唤醒时，再使用 relay / 外部调度器作为 fallback bridge。
 - 这个源码仓现在附带了一组外部调度测试脚本：`scripts/run-codex-relay-scheduled-test.ps1` 和 `scripts/register-codex-relay-scheduled-test.ps1`，用于通过公开 relay CLI 走 `Task Scheduler -> relay -> 绑定线程`，不依赖私有 Codex 存储。
 - 这条 relay runner 现在会把每次调用明确标记成“外部调度唤醒”，要求目标线程先检查 `codex-autonomy status`，且只有 `thread_binding_state=bound_to_current` 时才允许推进一次 bounded loop；否则按 mismatch/不可运行状态收口并停止。
+- 如果下一次唤醒发现主仓库留下了可恢复的 closeout diff，`status` 会明确提示先运行 `codex-autonomy review`；外部调度 runner 也会先补跑一次 `scripts/verify.ps1 + codex-autonomy review` 做自愈，再重新检查是否可继续。
+- 这组 relay scheduled runner 的默认组合现在是 `TimeoutSec=300`、`StatusPollAttempts=22`、`StatusPollIntervalSec=15`，并默认开启 `RecoverOnTimeout`；目标是优先等到同轮收口，超时时也直接走 recover，而不是过早把单轮 bounded loop 放掉。
+- 对 `timed_out + active turn` 这类长回合，scheduled runner 不会在任务进程里同步阻塞等待 `relay_dispatch_recover` 收尾；它会先记录可恢复状态并退出，下一轮启动前先检查上一条 dispatch 是否仍在运行，避免重复向同一绑定线程投递新消息。
 - 这组 scheduled runner 现在默认把日志写到 `%CODEX_HOME%`；如果没有该环境变量，则回退到 `%USERPROFILE%\\.codex\\scheduled-runs\\<repo-name>` 或 `%USERPROFILE%\\.codex\\scheduled-relay-runs\\<repo-name>`，避免外部调度产物把目标仓库弄脏。
+- 默认用 in-app browser 验收未登录的本地/公开页面；只有登录态页面才切到当前浏览器桥或其他 live browser 路径。
 
 近期验证结论（2026-04-16）：
 
 - 已在真实 Windows Codex App 绑定线程上跑通 `长回合 -> relay_send_wait 超时 -> relay_dispatch_status 收口成功 -> 后续短消息继续成功` 这条恢复链。
 - 同一轮里，绑定线程完成了一次 verify closeout，并把当前 active goal 标记为 completed。
-- 因当前受限环境无法注册 Windows `Task Scheduler` 任务，且 runner 里额外拉起 app-server 会触发 `spawn EPERM`，这次会话没有在系统调度层完成最终验收；已验证的是 relay 入口、绑定线程执行和超时恢复语义。
+- 在受限验证环境里，系统调度器唤醒本身可能仍是未完全覆盖的层；把外部调度视为生产可用前，需要单独验证 OS scheduler 注册和 app-server 子进程启动。
+
+近期验证结论（2026-04-17）：
+
+- 在重启 Codex App 之后，针对一条真实的已绑定项目线程重做了一轮官方 heartbeat live acceptance。
+- 重建后的 heartbeat 能在已绑定项目线程内再次产出新 turn，并保持同线程持续推进，这符合 26.415 的官方使用模型。
+- 结论是：当工作持续留在已绑定项目线程里时，这台机器现在优先走官方 thread automation；relay / 外部调度器继续保留给跨线程、跨项目或 app 外部唤醒场景。
 
 ## 新项目线程怎么接
 
@@ -179,6 +225,8 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 - `直接做这个目标`
 - `继续当前目标`
 - `汇报当前情况`
+
+没有项目根目录的 Chats 更适合 research / planning / 讨论，不适合安装 repo-local autonomy 控制面。真正的安装和持续推进应放在项目线程里完成。
 
 全局 router skill 的工作方式是：
 
@@ -193,8 +241,10 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 
 - `汇报当前情况` 优先以 `codex-autonomy status` 为准，不把先前 `doctor` 的观察混成当前阻塞原因。
 - `确认提案` 必须走 `codex-autonomy approve-proposal --goal-id <goalId>`，不能只口头确认。
+- 当自然语言已经明确表达“确认提案并继续”“确认后自己往下做”“直接开始自治”时，router 应该自动把它翻译成 `approve-proposal -> status -> official heartbeat -> bounded kickoff` 这条主路。
 - `用冲刺模式推进这个目标` 和 `继续当前目标` 在 sprint 目标上必须收口到 repo-local `$autonomy-sprint` 的单轮闭环，而不是直接跳过控制面去改业务代码。
 - `用巡航模式推进这个目标` 先切到 `cruise`，再按当前 ready 状态给出下一步；不要把 cruise 偷偷改成自由发挥式 sprint。
+- 对 `manual_triage` / blocker 场景，如果用户只是从已有 blocker 选项里做选择，或明确要求收窄到 checklist/manual/doc lane，应优先走 `codex-autonomy unblock <task-id>` 加一轮 bounded plan/sprint，而不是让用户重新描述工具链。
 
 这意味着：
 
@@ -284,16 +334,20 @@ Sprint runner 的默认工作方式是有预算地连续闭环推进，遇到安
 ## 运行边界
 
 - 产品源码仓库和活跃目标仓库是两件事。这个仓库维护产品源码，安装后才把控制面落到目标仓库。
-- `install` 的 `automation_ready` 只表示环境前置条件基本齐全；目标仓库仍然需要 `report_thread_id` 和可推进 goal/task，`status` 才会变成 `ready_for_automation=true`。如果当前线程身份可用但还没绑定，优先在该线程里运行 `codex-autonomy bind-thread`；如果当前线程身份不可用，则显式提供 `--report-thread-id`。
+- `install` 的 `automation_ready` 只表示环境前置条件基本齐全；目标仓库仍然需要 `report_thread_id` 和可推进的下一步，`status` 才会进入可唤醒态。如果当前线程身份可用但还没绑定，优先在该线程里运行 `codex-autonomy bind-thread`；如果当前线程身份不可用，则显式提供 `--report-thread-id`。
 - `status` 现在会额外给出 `automation_state`。常见值包括：
   - `ready`：有可推进项，且运行时检查通过
   - `idle_completed`：已批准工作已经完成，当前只是空闲，不是异常
   - `idle_no_work`：当前没有 active/approved/proposal work
   - `blocked` / `review_pending` / `paused` / `needs_confirmation`：需要先处理对应原因
+- `ready_for_automation=true` 只表示调度层可以安全唤醒并做一轮有界下一步；它可能仍然只是 `plan_or_rebalance` 或 `await_confirmation`，不一定直接进入业务代码执行。
+- `ready_for_execution=true` 才表示下一轮可以真正进入 `plan/work/review` 的执行闭环。
+- `goal_supply_state` 用来区分这轮是在继续 `active_goal`、拾取 `approved_goal_available`、停在 `awaiting_confirmation`、进入 `successor_goal_available`、已经 `completed_only`、当前 `empty`，还是需要 `manual_triage`。
+- `next_automation_step` 会明确告诉 runner 这轮该做 `execute_bounded_loop`、`plan_or_rebalance`、`await_confirmation`、`idle` 或 `manual_triage`。
 - 自动提交只允许进入 `codex/autonomy`，不会自动 `push`、`PR`、`merge` 或 `deploy`。
 - 当前受控 commit helper 只会 stage 自治控制面 allowlist：`autonomy/*`、`AGENTS.md`、`.agents/skills/*`、`.codex/*`、`scripts/*`；混入其他路径会直接拒绝提交。
 - 非 Git 目录允许 `bootstrap`，但 `status` 不会给出可运行 automation 的结论。
-- `ready_for_automation=false` 常见原因包括：没有 active goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用、目标仍在等待首次确认。
+- `ready_for_automation=false` 常见原因包括：没有 active/approved goal、存在 blocker、仓库 dirty、background worktree 缺失或 dirty、Codex app 未运行、cycle lock 正在占用。目标仍在等待首次确认时，更常见的是 `ready_for_automation=true` 但 `ready_for_execution=false`，同时 `goal_supply_state=awaiting_confirmation`。
 - `upgrade_state=managed_advisory_drift` 不是阻断。它表示 repo-specific 或 live state 文件和最新产品模板不同，但当前仍可继续跑；如果你确认这些差异就是新的本地基线，可以执行 `codex-autonomy rebaseline-managed --target <repo>` 把它登记为新 baseline。
 
 ## 许可证

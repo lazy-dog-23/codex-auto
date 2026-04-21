@@ -6,11 +6,13 @@ import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import { describe, expect, it } from "vitest";
 
 import { blockersSchema } from "../src/schemas/blockers.schema.js";
+import { decisionPolicySchema } from "../src/schemas/decision-policy.schema.js";
 import { goalsSchema } from "../src/schemas/goals.schema.js";
 import { installSchema } from "../src/schemas/install.schema.js";
 import { proposalsSchema } from "../src/schemas/proposals.schema.js";
 import { resultsSchema } from "../src/schemas/results.schema.js";
 import { settingsSchema } from "../src/schemas/settings.schema.js";
+import { slicesSchema } from "../src/schemas/slices.schema.js";
 import { stateSchema } from "../src/schemas/state.schema.js";
 import { tasksSchema } from "../src/schemas/tasks.schema.js";
 import { verificationSchema } from "../src/schemas/verification.schema.js";
@@ -73,6 +75,14 @@ describe("schema fixtures", () => {
     expect(validate.errors).toBeNull();
   });
 
+  it("accepts the sample slices document", () => {
+    const validate = createValidator(slicesSchema);
+    const data = readJsonFixture("slices.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
   it("accepts the sample settings document", () => {
     const validate = createValidator(settingsSchema);
     const data = readJsonFixture("settings.sample.json");
@@ -105,6 +115,14 @@ describe("schema fixtures", () => {
     expect(validate.errors).toBeNull();
   });
 
+  it("accepts the sample decision policy document", () => {
+    const validate = createValidator(decisionPolicySchema);
+    const data = readJsonFixture("decision-policy.sample.json");
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
+  });
+
   it("rejects a tasks document with a missing required field", () => {
     const validate = createValidator(tasksSchema);
     const data = readJsonFixture<{ tasks: Array<Record<string, unknown>> }>("tasks.sample.json");
@@ -113,5 +131,20 @@ describe("schema fixtures", () => {
 
     expect(validate(data)).toBe(false);
     expect(validate.errors?.some((error) => error.instancePath.includes("/tasks/0"))).toBe(true);
+  });
+
+  it("accepts old tasks without slice_id and new quick tasks with slice_id", () => {
+    const validate = createValidator(tasksSchema);
+    const data = readJsonFixture<{ tasks: Array<Record<string, unknown>> }>("tasks.sample.json");
+
+    data.tasks.push({
+      ...data.tasks[0],
+      id: "task-quick",
+      slice_id: "slice-goal-a-quick",
+      source: "quick",
+    });
+
+    expect(validate(data)).toBe(true);
+    expect(validate.errors).toBeNull();
   });
 });

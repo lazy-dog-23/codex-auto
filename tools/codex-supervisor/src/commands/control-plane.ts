@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 
 import type {
   InstallDocument,
@@ -6,6 +7,8 @@ import type {
   AutonomySettings,
   AutonomyState,
   BlockersDocument,
+  ControlPlanePendingOperation,
+  DecisionPolicyDocument,
   GoalRecord,
   GoalsDocument,
   ProposedTask,
@@ -13,14 +16,15 @@ import type {
   RepoPaths,
   ResultEntry,
   RunMode,
+  SlicesDocument,
   TasksDocument,
   VerificationDocument,
 } from "../contracts/autonomy.js";
 import {
   DEFAULT_AUTONOMY_BRANCH,
 } from "../contracts/autonomy.js";
-import { loadJsonFile, writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
-import { createDefaultAutonomySettings } from "../shared/policy.js";
+import { loadJsonFile, pathExists, writeJsonAtomic, writeTextFileAtomic } from "../infra/fs.js";
+import { createDefaultAutonomySettings, createDefaultDecisionPolicyDocument } from "../shared/policy.js";
 import { PRODUCT_VERSION } from "../shared/product.js";
 
 function emptyResultEntry(): ResultEntry {
@@ -55,6 +59,13 @@ export function createDefaultProposalsDocument(): ProposalsDocument {
   };
 }
 
+export function createDefaultSlicesDocument(): SlicesDocument {
+  return {
+    version: 1,
+    slices: [],
+  };
+}
+
 export function createDefaultSettingsDocument(): AutonomySettings {
   return createDefaultAutonomySettings();
 }
@@ -77,6 +88,10 @@ export function createDefaultVerificationDocument(): VerificationDocument {
     policy: "strong_template",
     axes: [],
   };
+}
+
+export function createDefaultDecisionPolicy(): DecisionPolicyDocument {
+  return createDefaultDecisionPolicyDocument();
 }
 
 export function createDefaultResultsDocument(): AutonomyResults {
@@ -188,14 +203,23 @@ export function buildProposalFromTasks(input: {
   goalId: string;
   summary: string;
   tasks: ProposedTask[];
+  slices?: ProposalsDocument["proposals"][number]["slices"];
   now: string;
 }): ProposalsDocument["proposals"][number] {
   return {
     goal_id: input.goalId,
     status: "awaiting_confirmation",
     summary: input.summary.trim(),
+    slices: input.slices?.map((slice) => ({
+      id: slice.id,
+      title: slice.title,
+      objective: slice.objective,
+      acceptance: [...slice.acceptance],
+      file_hints: [...slice.file_hints],
+    })),
     tasks: input.tasks.map((task) => ({
       id: task.id,
+      slice_id: task.slice_id ?? null,
       title: task.title,
       priority: task.priority,
       depends_on: [...task.depends_on],
@@ -213,6 +237,10 @@ export async function loadGoalsDocument(paths: RepoPaths): Promise<GoalsDocument
 
 export async function loadProposalsDocument(paths: RepoPaths): Promise<ProposalsDocument> {
   return loadOptionalJson(paths.proposalsFile, createDefaultProposalsDocument);
+}
+
+export async function loadSlicesDocument(paths: RepoPaths): Promise<SlicesDocument> {
+  return loadOptionalJson(paths.slicesFile, createDefaultSlicesDocument);
 }
 
 export async function loadTasksDocument(paths: RepoPaths): Promise<TasksDocument> {
@@ -239,6 +267,100 @@ export async function loadVerificationDocument(paths: RepoPaths): Promise<Verifi
   return loadOptionalJson(paths.verificationFile, createDefaultVerificationDocument);
 }
 
+export async function loadDecisionPolicyDocument(paths: RepoPaths): Promise<DecisionPolicyDocument> {
+  return loadOptionalJson(paths.decisionPolicyFile, createDefaultDecisionPolicy);
+}
+
+export async function loadPendingOperation(paths: RepoPaths): Promise<ControlPlanePendingOperation | null> {
+  if (!(await pathExists(paths.pendingOperationFile))) {
+    return null;
+  }
+
+  return validatePendingOperation(await loadJsonFile<unknown>(paths.pendingOperationFile));
+}
+
+export async function writePendingOperation(paths: RepoPaths, operation: ControlPlanePendingOperation): Promise<void> {
+  await writeJsonAtomic(paths.pendingOperationFile, operation);
+}
+
+export async function clearPendingOperation(paths: RepoPaths): Promise<void> {
+  await rm(paths.pendingOperationFile, { force: true });
+}
+
+function validatePendingOperation(value: unknown): ControlPlanePendingOperation {
+  const operation = requireRecord(value, "pending control-plane operation");
+  if (operation.version !== 1) {
+    throw new Error("Invalid pending control-plane operation: version must be 1.");
+  }
+  if (operation.kind !== "create_successor_goal" && operation.kind !== "quick") {
+    throw new Error("Invalid pending control-plane operation: kind must be create_successor_goal or quick.");
+  }
+
+  for (const key of ["id", "created_at", "updated_at", "command", "goal_id"] as const) {
+    requireString(operation[key], `pending control-plane operation ${key}`);
+  }
+  if (operation.kind === "create_successor_goal") {
+    requireString(operation.source_goal_id, "pending control-plane operation source_goal_id");
+    if (operation.command !== "codex-autonomy create-successor-goal") {
+      throw new Error("Invalid pending control-plane operation: command must be codex-autonomy create-successor-goal.");
+    }
+  } else {
+    if (operation.source_goal_id !== null) {
+      throw new Error("Invalid pending control-plane operation: quick source_goal_id must be null.");
+    }
+    if (operation.command !== "codex-autonomy quick") {
+      throw new Error("Invalid pending control-plane operation: command must be codex-autonomy quick.");
+    }
+    if (operation.auto_approved !== true) {
+      throw new Error("Invalid pending control-plane operation: quick auto_approved must be true.");
+    }
+  }
+  if (typeof operation.auto_approved !== "boolean") {
+    throw new Error("Invalid pending control-plane operation: auto_approved must be a boolean.");
+  }
+  requireStringArray(operation.task_ids, "pending control-plane operation task_ids");
+  requireStringArray(operation.expected_paths, "pending control-plane operation expected_paths");
+
+  const payload = requireRecord(operation.payload, "pending control-plane operation payload");
+  for (const key of ["goals", "proposals", "state", "results", "journal_entry"] as const) {
+    requireRecord(payload[key], `pending control-plane operation payload.${key}`);
+  }
+  if (operation.kind === "quick" || operation.auto_approved) {
+    requireRecord(payload.tasks, "pending control-plane operation payload.tasks");
+    requireRecord(payload.verification, "pending control-plane operation payload.verification");
+  }
+  if (operation.kind === "quick") {
+    requireRecord(payload.slices, "pending control-plane operation payload.slices");
+  }
+  if (payload.slices !== null && payload.slices !== undefined) {
+    requireRecord(payload.slices, "pending control-plane operation payload.slices");
+  }
+  if (payload.active_goal_id !== null && typeof payload.active_goal_id !== "string") {
+    throw new Error("Invalid pending control-plane operation: payload.active_goal_id must be a string or null.");
+  }
+
+  return operation as unknown as ControlPlanePendingOperation;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid ${label}: expected object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, label: string): void {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Invalid ${label}: expected non-empty string.`);
+  }
+}
+
+function requireStringArray(value: unknown, label: string): void {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) {
+    throw new Error(`Invalid ${label}: expected string array.`);
+  }
+}
+
 export async function persistGoalMirror(paths: RepoPaths, goal: GoalRecord | null): Promise<void> {
   await writeTextFileAtomic(paths.goalFile, formatGoalMarkdown(goal));
 }
@@ -249,6 +371,10 @@ export async function writeGoalsDocument(paths: RepoPaths, document: GoalsDocume
 
 export async function writeProposalsDocument(paths: RepoPaths, document: ProposalsDocument): Promise<void> {
   await writeJsonAtomic(paths.proposalsFile, document);
+}
+
+export async function writeSlicesDocument(paths: RepoPaths, document: SlicesDocument): Promise<void> {
+  await writeJsonAtomic(paths.slicesFile, document);
 }
 
 export async function writeStateDocument(paths: RepoPaths, document: AutonomyState): Promise<void> {

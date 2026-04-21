@@ -13,6 +13,7 @@ import {
   type PlanningWindowOptions,
   type PlanningWindowResult,
   type ProposalMaterializationResult,
+  type SliceRecord,
   type TaskRecord,
   type TaskStatus,
   type UnblockRecoveryResult,
@@ -496,6 +497,7 @@ export function materializeProposal(
   state: AutonomyState,
   goalId: string,
   now: string,
+  existingSlices: readonly SliceRecord[] = [],
 ): ProposalMaterializationResult {
   const goal = goals.find((entry) => entry.id === goalId);
   if (!goal) {
@@ -507,9 +509,11 @@ export function materializeProposal(
     throw new Error(`Awaiting proposal not found for goal ${goalId}`);
   }
 
+  const defaultSliceId = buildDefaultSliceId(goalId);
   const materializedTasks = proposal.tasks.map((task) => ({
     id: task.id,
     goal_id: goalId,
+    slice_id: task.slice_id ?? defaultSliceId,
     title: task.title,
     status: "queued" as const,
     priority: task.priority,
@@ -529,6 +533,12 @@ export function materializeProposal(
   const mergedTasks = [
     ...existingTasks.filter((task) => !(task.goal_id === goalId && taskIds.has(task.id))),
     ...materializedTasks,
+  ];
+  const materializedSlices = materializeProposalSlices(proposal, materializedTasks, goalId, now);
+  const sliceIds = new Set(materializedSlices.map((slice) => slice.id));
+  const mergedSlices = [
+    ...existingSlices.filter((slice) => !(slice.goal_id === goalId && sliceIds.has(slice.id))),
+    ...materializedSlices,
   ];
 
   const existingActiveGoal = goals.find((entry) => entry.status === "active");
@@ -569,16 +579,56 @@ export function materializeProposal(
 
   return {
     tasks: mergedTasks,
+    slices: mergedSlices,
     goals: updatedGoals,
     proposals: updatedProposals,
     state: nextState,
   };
 }
 
+function materializeProposalSlices(
+  proposal: GoalProposal,
+  materializedTasks: readonly TaskRecord[],
+  goalId: string,
+  now: string,
+): SliceRecord[] {
+  const proposedSlices = proposal.slices ?? [];
+  const proposedSliceById = new Map(proposedSlices.map((slice) => [slice.id, slice]));
+  const sliceIds = new Set(materializedTasks.map((task) => task.slice_id ?? buildDefaultSliceId(goalId)));
+  if (sliceIds.size === 0) {
+    sliceIds.add(buildDefaultSliceId(goalId));
+  }
+
+  return [...sliceIds].map((sliceId) => {
+    const proposedSlice = proposedSliceById.get(sliceId);
+    const taskIds = materializedTasks
+      .filter((task) => (task.slice_id ?? buildDefaultSliceId(goalId)) === sliceId)
+      .map((task) => task.id);
+
+    return {
+      id: sliceId,
+      goal_id: goalId,
+      title: proposedSlice?.title ?? "Default implementation slice",
+      objective: proposedSlice?.objective ?? proposal.summary,
+      status: "planned" as const,
+      acceptance: proposedSlice?.acceptance ? dedupeNonEmpty(proposedSlice.acceptance) : [],
+      file_hints: proposedSlice?.file_hints ? dedupeNonEmpty(proposedSlice.file_hints) : [],
+      task_ids: taskIds,
+      created_at: now,
+      updated_at: now,
+      completed_at: null,
+    };
+  });
+}
+
 function buildFollowupTaskId(seed: FollowupSeed): string {
   const sourcePart = seed.source_task_id ? slugify(seed.source_task_id) : "goal";
   const titlePart = slugify(seed.title);
   return `followup-${sourcePart}-${titlePart}`;
+}
+
+function buildDefaultSliceId(goalId: string): string {
+  return `slice-${slugify(goalId)}-default`;
 }
 
 function slugify(value: string): string {

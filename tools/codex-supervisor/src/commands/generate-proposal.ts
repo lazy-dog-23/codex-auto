@@ -57,6 +57,7 @@ export async function runGenerateProposal(
     const proposal = buildProposalFromTasks({
       goalId: targetGoal.id,
       summary,
+      slices: proposalPlan.slices,
       tasks,
       now,
     });

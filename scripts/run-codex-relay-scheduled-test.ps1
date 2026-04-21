@@ -7,12 +7,12 @@ param(
     [ValidateSet('status-only', 'bounded-loop')]
     [string]$Mode = 'bounded-loop',
     [ValidateRange(1, 3600)]
-    [int]$TimeoutSec = 45,
+    [int]$TimeoutSec = 300,
     [ValidateRange(1, 60)]
-    [int]$StatusPollAttempts = 6,
+    [int]$StatusPollAttempts = 22,
     [ValidateRange(1, 300)]
-    [int]$StatusPollIntervalSec = 10,
-    [switch]$RecoverOnTimeout,
+    [int]$StatusPollIntervalSec = 15,
+    [switch]$RecoverOnTimeout = $true,
     [switch]$PreviewOnly
 )
 
@@ -94,7 +94,10 @@ function New-RelayPrompt {
 只返回这些字段：
 - SCHEDULED_RELAY_MARKER=STATUS_ONLY_OK
 - ready_for_automation
+- ready_for_execution
 - automation_state
+- goal_supply_state
+- next_automation_step
 - next_automation_reason
 - current_goal
 - current_task
@@ -117,10 +120,25 @@ function New-RelayPrompt {
 
 先运行 `codex-autonomy status`。
 
-如果 `ready_for_automation=false`，原样汇报 `next_automation_reason` 并停止。
+如果 `ready_for_automation=false`，先判断是不是“可恢复的 closeout 脏改动”：
+- 如果 `next_automation_reason` 或 warning 明确要求运行 `codex-autonomy review` 来收口当前 repo diff，
+  先根据当前 dirty diff、最近 journal/result 和当前 task，补跑这次 closeout 真正需要的最小验证门；至少要运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1`，
+  再运行 `codex-autonomy review`，
+  然后重新运行 `codex-autonomy status`。
+- 如果重新检查后仍然 `ready_for_automation=false`，原样汇报新的 `next_automation_reason` 并停止。
+- 如果一开始就不是这种可恢复 closeout diff，原样汇报 `next_automation_reason` 并停止。
+
 如果 `thread_binding_state` 不是 `bound_to_current`，明确报告 mismatch 并停止。
 
-如果允许继续，只推进当前已批准目标的一次有界 sprint 闭环：
+如果 `next_automation_step=await_confirmation`，不要执行实现、不要 approve proposal，原样汇报 `goal_supply_state` 和 `next_automation_reason` 后停止。
+
+如果 `next_automation_step=plan_or_rebalance`，只在 repo-local 控制面内做一次有界 planning/rebalance，随后重新运行一次 `codex-autonomy status`；只有在新的状态里 `ready_for_execution=true` 时，才允许继续后面的 bounded loop。
+
+如果允许继续，再运行 `codex-autonomy prepare-worktree`。
+
+如果 `prepare-worktree` 失败，原样汇报失败原因并停止。
+
+如果 `next_automation_step=execute_bounded_loop`，只推进当前 active goal 或下一条 approved goal 的一次有界 sprint 闭环：
 - 最多处理一个 task
 - 遵守仓库 `AGENTS.md` 和 repo-local autonomy skills
 - 必要时命中 verify / review gate
@@ -130,7 +148,10 @@ function New-RelayPrompt {
 结束时请返回：
 - SCHEDULED_RELAY_MARKER=BOUNDED_LOOP_OK
 - ready_for_automation
+- ready_for_execution
 - automation_state
+- goal_supply_state
+- next_automation_step
 - report_thread_id
 - current_thread_id
 - thread_binding_state
@@ -197,6 +218,48 @@ function Write-Summary {
     }) | Set-Content -LiteralPath $Path -Encoding utf8NoBOM
 }
 
+function Get-MostRecentDispatchId {
+    param(
+        [Parameter(Mandatory)][string]$LogDir,
+        [Parameter(Mandatory)][string]$TargetThreadId,
+        [Parameter(Mandatory)][string]$CurrentRunDir
+    )
+
+    if (-not (Test-Path -LiteralPath $LogDir)) {
+        return $null
+    }
+
+    $runDirs = Get-ChildItem -LiteralPath $LogDir -Directory |
+        Sort-Object Name -Descending |
+        Where-Object { $_.FullName -ne $CurrentRunDir }
+
+    foreach ($dir in $runDirs) {
+        $metadataPath = Join-Path $dir.FullName 'metadata.json'
+        if (-not (Test-Path -LiteralPath $metadataPath)) {
+            continue
+        }
+
+        try {
+            $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json -Depth 20
+        } catch {
+            continue
+        }
+
+        $summary = Get-OptionalPropertyValue -InputObject $metadata -Name 'summary'
+        $threadId = [string](Get-OptionalPropertyValue -InputObject $summary -Name 'target_thread_id' -Default '')
+        $dispatchId = [string](Get-OptionalPropertyValue -InputObject $summary -Name 'dispatch_id' -Default '')
+        if ($threadId -and $dispatchId -and $threadId -eq $TargetThreadId) {
+            return [pscustomobject]@{
+                DispatchId = $dispatchId
+                RunDir = $dir.FullName
+                Outcome = [string](Get-OptionalPropertyValue -InputObject $summary -Name 'outcome' -Default '')
+            }
+        }
+    }
+
+    return $null
+}
+
 $resolvedTargetRepoRoot = Resolve-AbsolutePath -Path $TargetRepoRoot
 $resolvedRelayRepoRoot = Resolve-AbsolutePath -Path $RelayRepoRoot
 
@@ -241,13 +304,6 @@ $metadata = [ordered]@{
     preview_only = [bool]$PreviewOnly
 }
 
-$dispatchResult = Invoke-RelayCli -RelayRoot $resolvedRelayRepoRoot -CommandName 'relay_dispatch_async' -Payload @{
-    projectId = $resolvedTargetRepoRoot
-    threadId = $TargetThreadId
-    message = $prompt
-    timeoutSec = $TimeoutSec
-} -RunDir $runDir
-
 $summary = [ordered]@{
     mode = $Mode
     target_thread_id = $TargetThreadId
@@ -259,7 +315,51 @@ $summary = [ordered]@{
     detail = ''
 }
 
-if ($dispatchResult.Payload.ok) {
+$dispatchResult = $null
+$previousDispatch = Get-MostRecentDispatchId -LogDir $resolvedLogDir -TargetThreadId $TargetThreadId -CurrentRunDir $runDir
+if ($previousDispatch) {
+    $previousStatusResult = Invoke-RelayCli -RelayRoot $resolvedRelayRepoRoot -CommandName 'relay_dispatch_status' -Payload @{
+        dispatchId = $previousDispatch.DispatchId
+    } -RunDir $runDir
+
+    if ($previousStatusResult.Payload.ok) {
+        $previousStatusPayload = $previousStatusResult.Payload.payload
+        $previousDispatchStatus = [string](Get-OptionalPropertyValue -InputObject $previousStatusPayload -Name 'dispatchStatus' -Default 'unknown')
+        $previousDispatchLeaseActive = [bool](Get-OptionalPropertyValue -InputObject $previousStatusPayload -Name 'dispatchLeaseActive' -Default $false)
+        $previousThreadLeaseActive = [bool](Get-OptionalPropertyValue -InputObject $previousStatusPayload -Name 'threadLeaseActive' -Default $false)
+        $previousRecoverySuggested = [string](Get-OptionalPropertyValue -InputObject $previousStatusPayload -Name 'recoverySuggested' -Default '')
+
+        if ($previousDispatchStatus -eq 'running' -or (($previousDispatchStatus -eq 'timed_out') -and ($previousDispatchLeaseActive -or $previousThreadLeaseActive))) {
+            $summary.dispatch_id = $previousDispatch.DispatchId
+            $summary.outcome = 'prior_dispatch_still_active'
+            $detailParts = @(
+                "dispatch_status=$previousDispatchStatus"
+                "prior_run_dir=$($previousDispatch.RunDir)"
+            )
+            if ($previousDispatchLeaseActive) {
+                $detailParts += 'dispatch_lease_active=true'
+            }
+            if ($previousThreadLeaseActive) {
+                $detailParts += 'thread_lease_active=true'
+            }
+            if ($previousRecoverySuggested) {
+                $detailParts += "recovery=$previousRecoverySuggested"
+            }
+            $summary.detail = ($detailParts -join '; ')
+        }
+    }
+}
+
+if ($summary.outcome -eq '') {
+    $dispatchResult = Invoke-RelayCli -RelayRoot $resolvedRelayRepoRoot -CommandName 'relay_dispatch_async' -Payload @{
+        projectId = $resolvedTargetRepoRoot
+        threadId = $TargetThreadId
+        message = $prompt
+        timeoutSec = $TimeoutSec
+    } -RunDir $runDir
+}
+
+if ($summary.outcome -eq '' -and $dispatchResult.Payload.ok) {
     $dispatchPayload = $dispatchResult.Payload.payload
     $dispatchId = [string](Get-OptionalPropertyValue -InputObject $dispatchPayload -Name 'dispatchId' -Default '')
     $summary.dispatch_id = $dispatchId
@@ -282,6 +382,8 @@ if ($dispatchResult.Payload.ok) {
         $statusErrorCode = [string](Get-OptionalPropertyValue -InputObject $statusPayload -Name 'errorCode' -Default '')
         $statusErrorMessage = [string](Get-OptionalPropertyValue -InputObject $statusPayload -Name 'errorMessage' -Default '')
         $recoverySuggested = [string](Get-OptionalPropertyValue -InputObject $statusPayload -Name 'recoverySuggested' -Default '')
+        $statusDispatchLeaseActive = [bool](Get-OptionalPropertyValue -InputObject $statusPayload -Name 'dispatchLeaseActive' -Default $false)
+        $statusThreadLeaseActive = [bool](Get-OptionalPropertyValue -InputObject $statusPayload -Name 'threadLeaseActive' -Default $false)
 
         $summary.dispatch_id = $statusDispatchId
         $detailParts = @("dispatch_status=$statusDispatchStatus")
@@ -290,6 +392,12 @@ if ($dispatchResult.Payload.ok) {
         }
         if ($recoverySuggested) {
             $detailParts += "recovery=$recoverySuggested"
+        }
+        if ($statusDispatchLeaseActive) {
+            $detailParts += 'dispatch_lease_active=true'
+        }
+        if ($statusThreadLeaseActive) {
+            $detailParts += 'thread_lease_active=true'
         }
         $summary.detail = ($detailParts -join '; ')
 
@@ -314,8 +422,9 @@ if ($dispatchResult.Payload.ok) {
         if ($statusDispatchStatus -eq 'timed_out') {
             $summary.outcome = 'timeout_pending'
             $summary.relay_code = if ($statusErrorCode) { $statusErrorCode } else { 'turn_timeout' }
+            $summary.recovery_dispatch_id = $dispatchId
 
-            if ($RecoverOnTimeout) {
+            if ($RecoverOnTimeout -and -not $statusDispatchLeaseActive -and -not $statusThreadLeaseActive) {
                 $recoverResult = Invoke-RelayCli -RelayRoot $resolvedRelayRepoRoot -CommandName 'relay_dispatch_recover' -Payload @{
                     dispatchId = $dispatchId
                 } -RunDir $runDir
@@ -326,6 +435,8 @@ if ($dispatchResult.Payload.ok) {
                     $recoverAction = [string](Get-OptionalPropertyValue -InputObject $recoverPayload -Name 'recoveryAction' -Default 'unknown')
                     $recoverReply = Get-OptionalPropertyValue -InputObject $recoverPayload -Name 'replyText' -Default ''
                     $recoverDispatchStatus = [string](Get-OptionalPropertyValue -InputObject $recoverPayload -Name 'dispatchStatus' -Default 'unknown')
+                    $recoverErrorCode = [string](Get-OptionalPropertyValue -InputObject $recoverPayload -Name 'errorCode' -Default '')
+                    $recoverErrorMessage = [string](Get-OptionalPropertyValue -InputObject $recoverPayload -Name 'errorMessage' -Default '')
                     $summary.recovery_dispatch_id = $recoverDispatchId
                     $summary.detail = "recovery_action=$recoverAction"
                     if (-not [string]::IsNullOrWhiteSpace([string]$recoverReply)) {
@@ -333,8 +444,16 @@ if ($dispatchResult.Payload.ok) {
                     }
                     if ($recoverDispatchStatus -eq 'succeeded') {
                         $summary.outcome = 'succeeded_after_recover'
+                    } elseif ($recoverDispatchStatus -eq 'failed') {
+                        $summary.outcome = 'failed'
+                        $summary.relay_code = if ($recoverErrorCode) { $recoverErrorCode } else { 'target_turn_failed' }
+                        if ($recoverErrorMessage) {
+                            $summary.detail = $recoverErrorMessage
+                        }
                     }
                 }
+            } elseif ($statusDispatchLeaseActive -or $statusThreadLeaseActive) {
+                $summary.detail = ($detailParts + 'recovery_deferred=active_turn') -join '; '
             }
             break
         }
@@ -343,7 +462,7 @@ if ($dispatchResult.Payload.ok) {
     if ($summary.outcome -eq 'dispatched_async') {
         $summary.outcome = 'running_after_status_poll'
     }
-} else {
+} elseif ($summary.outcome -eq '') {
     $summary.relay_code = [string]$dispatchResult.Payload.relayCode
     $summary.detail = [string]$dispatchResult.Payload.message
     $summary.outcome = 'failed'

@@ -44,6 +44,7 @@ export const tasksSchema = {
       properties: {
         id: { type: "string", minLength: 1 },
         goal_id: { type: "string", minLength: 1 },
+        slice_id: { type: ["string", "null"], minLength: 1 },
         title: { type: "string", minLength: 1 },
         status: { type: "string", enum: [...TASK_STATUSES] },
         priority: { type: "string", enum: [...TASK_PRIORITIES] },

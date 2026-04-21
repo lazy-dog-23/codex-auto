@@ -13,6 +13,7 @@ import type {
   ProposalsDocument,
   ReviewStatus,
   RunMode,
+  SliceRecord,
   TasksDocument,
 } from "../contracts/autonomy.js";
 
@@ -26,6 +27,11 @@ export {
   DEFAULT_AUTONOMY_BRANCH,
   DEFAULT_BACKGROUND_BRANCH,
   DEFAULT_SPRINT_HEARTBEAT_MINUTES,
+  DECISION_EVENTS,
+  DECISION_HEARTBEATS,
+  DECISION_NEXT_ACTIONS,
+  DECISION_OUTCOMES,
+  GOAL_SOURCES,
   GOAL_STATUSES,
   INSTALL_SOURCES,
   LAST_RESULTS,
@@ -35,6 +41,7 @@ export {
   RESULT_STATES,
   REVIEW_STATUSES,
   RUN_MODES,
+  SLICE_STATUSES,
   STALE_LOCK_AGE_MINUTES,
   TASK_PRIORITIES,
   TASK_PRIORITY_WEIGHT,
@@ -58,9 +65,16 @@ export type {
   ContinuationDecision,
   CruiseCadence,
   CycleStatus,
+  DecisionAdvice,
+  DecisionEvent,
+  DecisionHeartbeat,
+  DecisionNextAction,
+  DecisionOutcome,
+  DecisionPolicyDocument,
   DoctorCheck,
   DoctorResult,
   GoalProposal,
+  GoalSource,
   GoalStatus,
   GoalsDocument,
   GoalRecord,
@@ -69,6 +83,7 @@ export type {
   LastResult,
   LockRecord,
   ProposedTask,
+  ProposedSlice,
   ProposalsDocument,
   RepoPaths,
   ReportSurface,
@@ -77,6 +92,9 @@ export type {
   ReviewStatus,
   RunMode,
   StatusSummary,
+  SliceRecord,
+  SlicesDocument,
+  SliceStatus,
   VerificationAxis,
   VerificationAxisStatus,
   VerificationDocument,
@@ -195,6 +213,7 @@ export interface GoalTransitionResult {
 
 export interface ProposalMaterializationResult {
   tasks: TaskRecord[];
+  slices: SliceRecord[];
   state: AutonomyState;
   goals: GoalRecord[];
   proposals: GoalProposal[];

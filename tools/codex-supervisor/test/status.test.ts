@@ -10,11 +10,13 @@ import type {
   AutonomyResults,
   AutonomyState,
   BlockersDocument,
+  DecisionPolicyDocument,
   GoalsDocument,
   TasksDocument,
   VerificationDocument,
 } from "../src/contracts/autonomy.js";
 import { buildStatusSummary, runStatusCommand } from "../src/commands/status.js";
+import { createDefaultDecisionPolicyDocument } from "../src/shared/policy.js";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(testDir, "fixtures");
@@ -71,6 +73,9 @@ describe("status command", () => {
     expect(summary.latest_summary_reason).toBe("Heartbeat summary sent to the thread and Inbox.");
     expect(summary.has_recorded_run).toBe(true);
     expect(summary.results_scope_note).toBeNull();
+    expect(summary.goal_supply_state).toBe("active_goal");
+    expect(summary.next_automation_step).toBe("manual_triage");
+    expect(summary.ready_for_execution).toBe(false);
     expect(summary.automation_state).toBe("blocked");
     expect(summary.auto_continue_state).toBe("stopped");
     expect(summary.closeout_policy).toBeNull();
@@ -83,11 +88,20 @@ describe("status command", () => {
     expect(summary.remaining_ready).toBe(1);
     expect(summary.last_followup_summary).toBe("Add a regression check for unblock flow.");
     expect(summary.next_automation_reason).toContain("open blocker");
+    expect(summary.recommended_automation_surface).toBe("external_relay_scheduler");
+    expect(summary.recommended_automation_prompt).toBe("external_relay_scheduler");
+    expect(summary.recommended_automation_reason).toContain("external relay scheduler fallback");
+    expect(summary.decision_event).toBe("unknown_context");
+    expect(summary.decision_outcome).toBe("ask_human");
+    expect(summary.decision_next_action).toBe("manual_triage");
+    expect(summary.decision_heartbeat).toBe("safe_backoff_30m");
     expect(summary.message).toContain("ready_for_automation=no");
     expect(summary.message).toContain("auto_continue_state=stopped");
     expect(summary.message).toContain("verification_pending=0");
     expect(summary.message).toContain("summary_kind=thread_summary");
     expect(summary.message).toContain("next_automation_reason=There is 1 open blocker(s).");
+    expect(summary.message).toContain("recommended_automation_surface=external_relay_scheduler");
+    expect(summary.message).toContain("decision_outcome=ask_human");
   });
 
   it("surfaces verification closeout gaps even when task execution is otherwise done", () => {
@@ -182,6 +196,14 @@ describe("status command", () => {
       },
       undefined,
       verificationDoc,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+      },
     );
 
     expect(summary.closeout_policy).toBe("strong_template");
@@ -189,8 +211,13 @@ describe("status command", () => {
     expect(summary.verification_passed).toBe(0);
     expect(summary.verification_pending).toBe(1);
     expect(summary.completion_blocked_by_verification).toBe(true);
-    expect(summary.automation_state).toBe("blocked");
-    expect(summary.next_automation_reason).toContain("Verification closeout is still pending");
+    expect(summary.goal_supply_state).toBe("active_goal");
+    expect(summary.next_automation_step).toBe("plan_or_rebalance");
+    expect(summary.ready_for_execution).toBe(false);
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.automation_state).toBe("ready");
+    expect(summary.next_automation_reason).toContain("Ready for planning only");
+    expect(summary.next_automation_reason).toContain("verification closeout");
   });
 
   it("reports ready_for_automation when the repo is idle and there is active work", () => {
@@ -265,6 +292,16 @@ describe("status command", () => {
         commit: { status: "passed", goal_id: "goal-42", task_id: "task-ready", summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-42/task-ready): Ready task", review_status: null },
         reporter: { status: "sent", goal_id: "goal-42", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
       },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+      },
     );
 
     expect(summary.ready_for_automation).toBe(true);
@@ -272,13 +309,23 @@ describe("status command", () => {
     expect(summary.current_goal_id).toBe("goal-42");
     expect(summary.report_thread_id).toBe("thread-99");
     expect(summary.sprint_active).toBe(true);
+    expect(summary.goal_supply_state).toBe("active_goal");
+    expect(summary.next_automation_step).toBe("execute_bounded_loop");
+    expect(summary.ready_for_execution).toBe(true);
     expect(summary.automation_state).toBe("ready");
     expect(summary.results_summary?.worker_result).toBe("completed task-ready");
     expect(summary.auto_continue_state).toBe("running");
-    expect(summary.continuation_reason).toBe("Ready for automation: active or planning work is available.");
+    expect(summary.continuation_reason).toBe("Ready for execution: active task work is available.");
     expect(summary.next_task_id).toBe("task-ready");
     expect(summary.remaining_ready).toBe(1);
-    expect(summary.next_automation_reason).toBe("Ready for automation: active or planning work is available.");
+    expect(summary.next_automation_reason).toBe("Ready for execution: active task work is available.");
+    expect(summary.recommended_automation_surface).toBe("thread_automation");
+    expect(summary.recommended_automation_prompt).toBe("official_thread_automation");
+    expect(summary.recommended_automation_reason).toContain("official Codex thread automations");
+    expect(summary.decision_event).toBe("none");
+    expect(summary.decision_outcome).toBe("auto_continue");
+    expect(summary.decision_next_action).toBe("continue_bounded_loop");
+    expect(summary.decision_heartbeat).toBe("burst_1m");
   });
 
   it("requires report_thread_id before automation can run", () => {
@@ -358,9 +405,167 @@ describe("status command", () => {
     expect(summary.ready_for_automation).toBe(false);
     expect(summary.next_automation_ready).toBe(false);
     expect(summary.thread_binding_state).toBe("unbound_current_unavailable");
+    expect(summary.goal_supply_state).toBe("active_goal");
+    expect(summary.next_automation_step).toBe("manual_triage");
+    expect(summary.ready_for_execution).toBe(false);
     expect(summary.next_automation_reason).toBe(
       "Current thread identity is unavailable in this environment. Run codex-autonomy bind-thread --report-thread-id <id> before automation can run.",
     );
+    expect(summary.recommended_automation_surface).toBe("manual_only");
+    expect(summary.recommended_automation_prompt).toBeNull();
+  });
+
+  it("treats awaiting_confirmation queues as automation-safe but non-executable", () => {
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-awaiting",
+            title: "Awaiting goal",
+            objective: "Wait for confirmation",
+            success_criteria: ["confirmed"],
+            constraints: [],
+            out_of_scope: [],
+            status: "awaiting_confirmation",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: null,
+            completed_at: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: null,
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "planned",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "planned", goal_id: "goal-awaiting", task_id: null, summary: "proposal pending", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+      },
+    );
+
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.ready_for_execution).toBe(false);
+    expect(summary.goal_supply_state).toBe("awaiting_confirmation");
+    expect(summary.next_automation_step).toBe("await_confirmation");
+    expect(summary.auto_continue_state).toBe("stopped");
+    expect(summary.automation_state).toBe("ready");
+    expect(summary.next_automation_reason).toContain("awaiting confirmation");
+    expect(summary.recommended_automation_surface).toBe("thread_automation");
+    expect(summary.decision_event).toBe("proposal_boundary");
+    expect(summary.decision_outcome).toBe("ask_human");
+    expect(summary.decision_next_action).toBe("pause_or_ask");
+  });
+
+  it("treats approved but inactive goals as execution-ready next work", () => {
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-approved",
+            title: "Approved goal",
+            objective: "Activate on the next loop",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "approved",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: null,
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "planned",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "planned", goal_id: "goal-approved", task_id: null, summary: "approved goal waiting for activation", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+      },
+    );
+
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.ready_for_execution).toBe(true);
+    expect(summary.goal_supply_state).toBe("approved_goal_available");
+    expect(summary.next_automation_step).toBe("execute_bounded_loop");
+    expect(summary.next_automation_reason).toBe("Ready for execution: an approved goal is available for bounded continuation.");
+    expect(summary.recommended_automation_surface).toBe("thread_automation");
   });
 
   it("marks completed goal queues as idle_completed instead of generic blocked", () => {
@@ -401,7 +606,7 @@ describe("status command", () => {
         open_blocker_count: 0,
         report_thread_id: "thread-99",
         autonomy_branch: "codex/autonomy",
-        sprint_active: false,
+        sprint_active: true,
         paused: false,
         pause_reason: null,
       },
@@ -420,8 +625,469 @@ describe("status command", () => {
     );
 
     expect(summary.ready_for_automation).toBe(false);
+    expect(summary.goal_supply_state).toBe("completed_only");
+    expect(summary.next_automation_step).toBe("idle");
+    expect(summary.ready_for_execution).toBe(false);
     expect(summary.automation_state).toBe("idle_completed");
     expect(summary.next_automation_reason).toBe("All approved goal work is complete. Automation is idle until a new goal or proposal is created.");
+  });
+
+  it("surfaces an authorized successor goal boundary after all work is completed", () => {
+    const policy: DecisionPolicyDocument = {
+      ...createDefaultDecisionPolicyDocument(),
+      auto_continue: {
+        ...createDefaultDecisionPolicyDocument().auto_continue,
+        auto_successor_goal: {
+          ...createDefaultDecisionPolicyDocument().auto_continue.auto_successor_goal,
+          enabled: true,
+          auto_approve_minimal_successor: true,
+          objective: "Keep improving the repository through small verified slices.",
+        },
+      },
+    };
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-done",
+            title: "Completed Goal",
+            objective: "Finished work",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "completed",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: null,
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-done", task_id: null, summary: "done", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-done", task_id: null, summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-done", task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-done/task): Done", review_status: null },
+        reporter: { status: "sent", goal_id: "goal-done", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+        decisionPolicy: policy,
+      },
+    );
+
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.ready_for_execution).toBe(false);
+    expect(summary.goal_supply_state).toBe("successor_goal_available");
+    expect(summary.next_automation_step).toBe("create_successor_goal");
+    expect(summary.successor_goal_available).toBe(true);
+    expect(summary.successor_goal_auto_approve).toBe(true);
+    expect(summary.recommended_automation_surface).toBe("thread_automation");
+    expect(summary.decision_event).toBe("successor_goal_boundary");
+    expect(summary.decision_outcome).toBe("auto_continue");
+    expect(summary.decision_next_action).toBe("create_successor_goal");
+  });
+
+  it("surfaces an authorized successor goal boundary even after the sprint runner completed", () => {
+    const policy: DecisionPolicyDocument = {
+      ...createDefaultDecisionPolicyDocument(),
+      auto_continue: {
+        ...createDefaultDecisionPolicyDocument().auto_continue,
+        auto_successor_goal: {
+          ...createDefaultDecisionPolicyDocument().auto_continue.auto_successor_goal,
+          enabled: true,
+          auto_approve_minimal_successor: true,
+          objective: "Keep improving the repository through small verified slices.",
+        },
+      },
+    };
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-done",
+            title: "Completed Goal",
+            objective: "Finished work",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "completed",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: null,
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: false,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-done", task_id: null, summary: "done", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-done", task_id: null, summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-done", task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-done/task): Done", review_status: null },
+        reporter: { status: "sent", goal_id: "goal-done", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+        decisionPolicy: policy,
+      },
+    );
+
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.ready_for_execution).toBe(false);
+    expect(summary.automation_state).toBe("ready");
+    expect(summary.goal_supply_state).toBe("successor_goal_available");
+    expect(summary.next_automation_step).toBe("create_successor_goal");
+    expect(summary.decision_outcome).toBe("auto_continue");
+    expect(summary.decision_next_action).toBe("create_successor_goal");
+  });
+
+  it("treats a stale completed current goal pointer as a recoverable successor boundary", () => {
+    const policy: DecisionPolicyDocument = {
+      ...createDefaultDecisionPolicyDocument(),
+      auto_continue: {
+        ...createDefaultDecisionPolicyDocument().auto_continue,
+        auto_successor_goal: {
+          ...createDefaultDecisionPolicyDocument().auto_continue.auto_successor_goal,
+          enabled: true,
+          auto_approve_minimal_successor: true,
+          objective: "Keep improving the repository through small verified slices.",
+        },
+      },
+    };
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-done",
+            title: "Completed Goal",
+            objective: "Finished work",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "completed",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: "goal-done",
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: false,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-done", task_id: null, summary: "done", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-done", task_id: null, summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-done", task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-done/task): Done", review_status: null },
+        reporter: { status: "sent", goal_id: "goal-done", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+        decisionPolicy: policy,
+      },
+    );
+
+    expect(summary.current_goal_id).toBeNull();
+    expect(summary.warnings?.map((warning) => warning.code)).toContain("completed_current_goal_id_stale");
+    expect(summary.ready_for_automation).toBe(true);
+    expect(summary.ready_for_execution).toBe(false);
+    expect(summary.automation_state).toBe("ready");
+    expect(summary.goal_supply_state).toBe("successor_goal_available");
+    expect(summary.next_automation_step).toBe("create_successor_goal");
+    expect(summary.decision_outcome).toBe("auto_continue");
+    expect(summary.decision_next_action).toBe("create_successor_goal");
+  });
+
+  it("keeps successor goal creation blocked when the operator explicitly paused automation", () => {
+    const policy: DecisionPolicyDocument = {
+      ...createDefaultDecisionPolicyDocument(),
+      auto_continue: {
+        ...createDefaultDecisionPolicyDocument().auto_continue,
+        auto_successor_goal: {
+          ...createDefaultDecisionPolicyDocument().auto_continue.auto_successor_goal,
+          enabled: true,
+          auto_approve_minimal_successor: true,
+          objective: "Keep improving the repository through small verified slices.",
+        },
+      },
+    };
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-done",
+            title: "Completed Goal",
+            objective: "Finished work",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "completed",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: null,
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: false,
+        paused: true,
+        pause_reason: "Paused by operator.",
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "passed", goal_id: "goal-done", task_id: null, summary: "done", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        review: { status: "passed", goal_id: "goal-done", task_id: null, summary: "passed", happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: "passed" },
+        commit: { status: "passed", goal_id: "goal-done", task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: "abc123", message: "autonomy(goal-done/task): Done", review_status: null },
+        reporter: { status: "sent", goal_id: "goal-done", task_id: null, summary: "sent", happened_at: null, sent_at: "2026-04-13T01:00:00Z", verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+        decisionPolicy: policy,
+      },
+    );
+
+    expect(summary.successor_goal_available).toBe(true);
+    expect(summary.ready_for_automation).toBe(false);
+    expect(summary.next_automation_step).toBe("idle");
+    expect(summary.next_automation_reason).toContain("Paused by operator");
+    expect(summary.decision_outcome).not.toBe("auto_continue");
+  });
+
+  it("blocks successor generation when completed goals still have unfinished tasks", () => {
+    const policy: DecisionPolicyDocument = {
+      ...createDefaultDecisionPolicyDocument(),
+      auto_continue: {
+        ...createDefaultDecisionPolicyDocument().auto_continue,
+        auto_successor_goal: {
+          ...createDefaultDecisionPolicyDocument().auto_continue.auto_successor_goal,
+          enabled: true,
+          auto_approve_minimal_successor: true,
+          objective: "Keep improving the repository through small verified slices.",
+        },
+      },
+    };
+    const summary = buildStatusSummary(
+      {
+        version: 1,
+        tasks: [
+          {
+            id: "task-leftover",
+            goal_id: "goal-done",
+            title: "Leftover task",
+            status: "queued",
+            priority: "P1",
+            depends_on: [],
+            acceptance: [],
+            file_hints: [],
+            retry_count: 0,
+            last_error: null,
+            updated_at: "2026-01-06T00:00:00Z",
+            commit_hash: null,
+            review_status: "not_reviewed",
+            source: "proposal",
+            source_task_id: null,
+          },
+        ],
+      },
+      {
+        version: 1,
+        goals: [
+          {
+            id: "goal-done",
+            title: "Completed Goal",
+            objective: "Finished work",
+            success_criteria: ["done"],
+            constraints: [],
+            out_of_scope: [],
+            status: "completed",
+            run_mode: "sprint",
+            created_at: "2026-01-05T00:00:00Z",
+            approved_at: "2026-01-05T00:10:00Z",
+            completed_at: "2026-01-06T00:00:00Z",
+          },
+        ],
+      },
+      {
+        version: 1,
+        current_goal_id: null,
+        current_task_id: null,
+        cycle_status: "idle",
+        run_mode: null,
+        last_planner_run_at: null,
+        last_worker_run_at: null,
+        last_result: "passed",
+        consecutive_worker_failures: 0,
+        needs_human_review: false,
+        open_blocker_count: 0,
+        report_thread_id: "thread-99",
+        autonomy_branch: "codex/autonomy",
+        sprint_active: true,
+        paused: false,
+        pause_reason: null,
+      },
+      {
+        version: 1,
+        blockers: [],
+      },
+      {
+        version: 1,
+        planner: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        worker: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        review: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+        reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
+      },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+        decisionPolicy: policy,
+      },
+    );
+
+    expect(summary.successor_goal_available).toBe(false);
+    expect(summary.ready_for_automation).toBe(false);
+    expect(summary.next_automation_reason).toContain("unfinished task");
+    expect(summary.decision_outcome).not.toBe("auto_continue");
   });
 
   it("recovers the active goal when state.current_goal_id is missing", () => {
@@ -496,6 +1162,16 @@ describe("status command", () => {
         commit: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
         reporter: { status: "not_run", goal_id: null, task_id: null, summary: null, happened_at: null, sent_at: null, verify_summary: null, hash: null, message: null, review_status: null },
       },
+      undefined,
+      undefined,
+      {
+        threadBindingContext: {
+          currentThreadId: "thread-99",
+          currentThreadSource: "env",
+          bindingState: "bound_to_current",
+          bindingHint: null,
+        },
+      },
     );
 
     expect(summary.current_goal_id).toBe("goal-42");
@@ -520,8 +1196,10 @@ describe("status command", () => {
     expect(summary.results_summary?.planner_summary).toBe("Planned the next ready window.");
     expect(summary.results_summary?.commit_result).toBe("autonomy(goal-alpha/task-b): Wire status report");
     expect(summary.next_automation_reason).toContain("Current workspace is not a Git repository");
+    expect(summary.recommended_automation_surface).toBe("external_relay_scheduler");
     expect(summary.message).toContain("commit=abc123");
-    expect(summary.message).toContain("next_automation_reason=Current workspace is not a Git repository");
+    expect(summary.message).toContain("next_automation_reason=");
+    expect(summary.message).toContain("Current workspace is not a Git repository");
   });
 
   it("runStatusCommand keeps recovered active goals eligible for automation checks", async () => {

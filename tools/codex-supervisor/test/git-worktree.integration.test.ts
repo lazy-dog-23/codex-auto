@@ -215,7 +215,7 @@ describe("git/worktree integration", () => {
     expect(backgroundJournal).toContain("allowlisted sync marker");
   });
 
-  it("treats repo guidance files as allowlisted runtime drift and syncs them without making them commit-eligible", async () => {
+  it("treats repo guidance files as allowlisted runtime drift, syncs them, and makes them closeout-commit eligible", async () => {
     const workspace = await makeTempWorkspace();
     const externalHome = await makeTempWorkspace();
     const gitHome = join(externalHome, "git-home");
@@ -252,15 +252,21 @@ describe("git/worktree integration", () => {
 
     const gateWithoutCodeDiff = await inspectAutonomyCommitGate(workspace);
     expect(gateWithoutCodeDiff.blockedPaths).toEqual([]);
-    expect(gateWithoutCodeDiff.ignoredPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
-    expect(gateWithoutCodeDiff.hasDiff).toBe(false);
-    expect(gateWithoutCodeDiff.reason).toBe("no_diff");
+    expect(gateWithoutCodeDiff.allowedPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
+    expect(gateWithoutCodeDiff.ignoredPaths).toEqual([]);
+    expect(gateWithoutCodeDiff.hasDiff).toBe(true);
+    expect(gateWithoutCodeDiff.commitReady).toBe(true);
+    expect(gateWithoutCodeDiff.reason).toBe("dirty_worktree");
 
     await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- commit with ambient runtime drift -->\n", "utf8");
     const gateWithCodeDiff = await inspectAutonomyCommitGate(workspace);
     expect(gateWithCodeDiff.commitReady).toBe(true);
-    expect(gateWithCodeDiff.allowedPaths).toContain("autonomy/journal.md");
-    expect(gateWithCodeDiff.ignoredPaths).toEqual(expect.arrayContaining(["AGENTS.override.md", "TEAM_GUIDE.md"]));
+    expect(gateWithCodeDiff.allowedPaths).toEqual(expect.arrayContaining([
+      "AGENTS.override.md",
+      "TEAM_GUIDE.md",
+      "autonomy/journal.md",
+    ]));
+    expect(gateWithCodeDiff.ignoredPaths).toEqual([]);
     expect(gateWithCodeDiff.blockedPaths).toEqual([]);
   });
 
@@ -531,7 +537,7 @@ describe("git/worktree integration", () => {
     expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
   });
 
-  it("refuses to create autonomy commits when non-allowlisted changes are present", async () => {
+  it("creates autonomy commits when repo files change alongside autonomy state", async () => {
     const workspace = await makeTempWorkspace();
     const gitHome = join(workspace, ".git-home");
     const gitConfigGlobal = join(gitHome, "gitconfig");
@@ -553,33 +559,27 @@ describe("git/worktree integration", () => {
     runGit(workspace, ["switch", "-c", DEFAULT_AUTONOMY_BRANCH]);
 
     await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- allowlisted change -->\n", "utf8");
-    await appendFile(join(workspace, "README.md"), "\n<!-- blocked change -->\n", "utf8");
+    await appendFile(join(workspace, "README.md"), "\n<!-- repo scope change -->\n", "utf8");
 
-    const headBefore = runGit(workspace, ["rev-parse", "HEAD"]);
     const gate = await inspectAutonomyCommitGate(workspace);
     expect(gate.reason).toBe("dirty_worktree");
-    expect(gate.ok).toBe(false);
-    expect(gate.commitReady).toBe(false);
-    expect(gate.allowedPaths).toContain("autonomy/journal.md");
-    expect(gate.blockedPaths).toContain("README.md");
-    expect(gate.blockedStatusLines.some((line) => line.includes("README.md"))).toBe(true);
+    expect(gate.ok).toBe(true);
+    expect(gate.commitReady).toBe(true);
+    expect(gate.allowedPaths).toEqual(expect.arrayContaining(["autonomy/journal.md", "README.md"]));
+    expect(gate.blockedPaths).toEqual([]);
 
-    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-2/task-1): blocked");
-    expect(commitResult.ok).toBe(false);
-    expect(commitResult.committed).toBe(false);
-    expect(commitResult.stageResult).toBeNull();
-    expect(commitResult.commitResult).toBeNull();
-    expect(commitResult.message).toContain("non-allowlisted changes");
-    expect(commitResult.message).toContain("README.md");
-    expect(commitResult.message).toContain("autonomy/");
-
-    const headAfter = runGit(workspace, ["rev-parse", "HEAD"]);
-    expect(headAfter).toBe(headBefore);
+    const commitResult = await createAutonomyCommit(workspace, "autonomy(goal-2/task-1): commit repo change");
+    expect(commitResult.ok).toBe(true);
+    expect(commitResult.committed).toBe(true);
+    expect(commitResult.commitHash).toBeTruthy();
+    expect(commitResult.message).toContain("Committed");
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
   });
 
-  it("runs review gating and blocks dirty or branch-drift states before review.ps1", async () => {
+  it("uses review as the controlled closeout gate for repo-scope diffs and still blocks branch drift", async () => {
     const workspace = await makeTempWorkspace();
-    const gitHome = join(workspace, ".git-home");
+    const externalHome = await makeTempWorkspace();
+    const gitHome = join(externalHome, "git-home");
     const gitConfigGlobal = join(gitHome, "gitconfig");
     await mkdir(gitHome, { recursive: true });
     await writeFile(gitConfigGlobal, "", "utf8");
@@ -607,6 +607,22 @@ describe("git/worktree integration", () => {
     expect(cleanReview.commit_skipped_reason).toBe("no_diff");
     expect(cleanReview.issues).toHaveLength(0);
     expect(cleanReview.review_script.exitCode).toBe(0);
+    expect(cleanReview.closeout_commit.committed).toBe(false);
+    expect(cleanReview.background_prepare.attempted).toBe(false);
+
+    await appendFile(join(workspace, "TEAM_GUIDE.md"), "\n<!-- review repo guidance gate -->\n", "utf8");
+    const guidanceReview = await runReviewCommand(workspace);
+    expect(guidanceReview.ok).toBe(true);
+    expect(guidanceReview.dirty).toBe(true);
+    expect(guidanceReview.hasDiff).toBe(true);
+    expect(guidanceReview.commit_ready).toBe(true);
+    expect(guidanceReview.commit_skipped_reason).toBeNull();
+    expect(guidanceReview.issues).toHaveLength(0);
+    expect(guidanceReview.closeout_commit.attempted).toBe(true);
+    expect(guidanceReview.closeout_commit.committed).toBe(true);
+    expect(guidanceReview.background_prepare.attempted).toBe(true);
+    expect(guidanceReview.background_prepare.ok).toBe(true);
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
 
     await appendFile(join(workspace, "autonomy", "journal.md"), "\n<!-- review allowlisted gate -->\n", "utf8");
     const dirtyReview = await runReviewCommand(workspace);
@@ -615,19 +631,23 @@ describe("git/worktree integration", () => {
     expect(dirtyReview.commit_ready).toBe(true);
     expect(dirtyReview.commit_skipped_reason).toBeNull();
     expect(dirtyReview.issues).toHaveLength(0);
+    expect(dirtyReview.closeout_commit.attempted).toBe(true);
+    expect(dirtyReview.closeout_commit.committed).toBe(true);
+    expect(dirtyReview.closeout_commit.hash).toBeTruthy();
+    expect(dirtyReview.closeout_commit.message).toContain("autonomy(");
+    expect(dirtyReview.background_prepare.attempted).toBe(true);
+    expect(dirtyReview.background_prepare.ok).toBe(true);
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
 
-    runGit(workspace, ["add", "-A"]);
-    runGit(workspace, ["commit", "-m", "stabilize before blocked-scope test"]);
-
-    await appendFile(join(workspace, "README.md"), "\n<!-- review blocked gate -->\n", "utf8");
-    const blockedReview = await runReviewCommand(workspace);
-    expect(blockedReview.ok).toBe(false);
-    expect(blockedReview.commit_ready).toBe(false);
-    expect(blockedReview.commit_skipped_reason).toBe("non_allowlisted_changes");
-    expect(blockedReview.issues.some((issue) => issue.code === "non_allowlisted_changes")).toBe(true);
-
-    runGit(workspace, ["add", "-A"]);
-    runGit(workspace, ["commit", "-m", "stabilize before drift test"]);
+    await appendFile(join(workspace, "README.md"), "\n<!-- review repo scope gate -->\n", "utf8");
+    const repoScopeReview = await runReviewCommand(workspace);
+    expect(repoScopeReview.ok).toBe(true);
+    expect(repoScopeReview.commit_ready).toBe(true);
+    expect(repoScopeReview.commit_skipped_reason).toBeNull();
+    expect(repoScopeReview.issues).toHaveLength(0);
+    expect(repoScopeReview.closeout_commit.committed).toBe(true);
+    expect(repoScopeReview.background_prepare.ok).toBe(true);
+    expect(runGit(workspace, ["status", "--porcelain=v1"])).toBe("");
     runGit(workspace, ["switch", "-c", "feature/manual"]);
 
     const driftReview = await runReviewCommand(workspace);
@@ -635,7 +655,7 @@ describe("git/worktree integration", () => {
     expect(driftReview.commit_ready).toBe(false);
     expect(driftReview.commit_skipped_reason).toBe("branch_drift");
     expect(driftReview.issues.some((issue) => issue.code === "branch_drift")).toBe(true);
-  }, 10000);
+  }, 20000);
 
   it("fails review when the control plane points to a missing current goal", async () => {
     const workspace = await makeTempWorkspace();
